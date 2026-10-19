@@ -28,6 +28,7 @@ pnpm check          # typecheck + test
 pnpm fixtures       # 重新生成夹具的 .zstd 兄弟文件
 pnpm dev:server     # 在 .tmp/dev-data 起服务端（127.0.0.1:8787）
 pnpm dev:dsh        # 起隔离的 DSH 开发实例（默认端口 3090）
+pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md）
 ```
 
 夹具由官方 `@deepseek-ai/dsh-session` 校验器验证（`packages/shared` 的 devDependencies，版本与 DSH 对齐）。
