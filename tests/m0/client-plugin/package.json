@@ -1,0 +1,26 @@
+{
+  "name": "dsh-session-sync-m0-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "M0 实验：在客户端暴露 sessions.refresh()，验证免整页刷新的列表刷新。",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}

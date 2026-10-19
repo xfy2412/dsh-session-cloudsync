@@ -1,0 +1,3 @@
+- insert:
+    - id: session-sync-m0-client
+      name: dsh-session-sync-m0-client

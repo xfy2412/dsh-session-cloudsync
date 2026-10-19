@@ -1,0 +1,8 @@
+{
+  "name": "dsh-session-sync-m0",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "M0 实验插件：外部写入会话 + attachSession，验证免重启可见。",
+  "main": "index.js"
+}

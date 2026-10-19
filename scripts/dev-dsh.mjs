@@ -28,11 +28,12 @@ const overlay = join(base, 'overlay.yml')
 /**
  * 解析 `--key value` 参数。
  * @param {readonly string[]} argv - 参数列表。
- * @returns {{ port: number, credentials?: string }}
+ * @returns {{ port: number, credentials?: string, patches: string[] }}
  */
 function parseArgs(argv) {
   let port = 3090
   let credentials
+  const patches = []
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--port') {
@@ -41,10 +42,13 @@ function parseArgs(argv) {
     } else if (argument === '--credentials') {
       credentials = argv[index + 1]
       index += 1
+    } else if (argument === '--patch') {
+      patches.push(argv[index + 1])
+      index += 1
     }
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`端口非法：${String(port)}`)
-  return { port, ...credentials === undefined ? {} : { credentials } }
+  return { port, patches, ...credentials === undefined ? {} : { credentials } }
 }
 
 /**
@@ -59,7 +63,7 @@ function assertInsideTmp(path) {
   }
 }
 
-const { port, credentials } = parseArgs(process.argv.slice(2))
+const { port, credentials, patches } = parseArgs(process.argv.slice(2))
 
 assertInsideTmp(base)
 mkdirSync(home, { recursive: true })
@@ -86,7 +90,19 @@ writeFileSync(
 const env = { ...process.env, DSH_HOME: home }
 for (const key of ['DSH_SESSION_ID', 'DSH_SHELL', 'DSH_PROFILE', 'DSH_PROFILE_DIR', 'DSH_WEB_URL']) delete env[key]
 
-const args = ['--profile', 'web', '--patch', overlay, '--no-open', '--port', String(port)]
+const extraPatches = patches.map((path) => {
+  assertInsideTmp(path)
+  if (!existsSync(path)) throw new Error(`附加 patch 不存在：${path}`)
+  return resolve(path)
+})
+
+const args = [
+  '--profile', 'web',
+  '--patch', overlay,
+  ...extraPatches.flatMap((path) => ['--patch', path]),
+  '--no-open',
+  '--port', String(port),
+]
 console.log(`DSH_HOME=${home}`)
 console.log(`默认工作区：${join(documents, 'deepseek-harness', 'default-workspace')}`)
 console.log(`启动：dsh ${args.join(' ')}`)
