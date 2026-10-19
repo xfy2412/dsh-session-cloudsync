@@ -1,0 +1,250 @@
+/**
+ * 管理台单页（无构建、无框架、无外部资源）。
+ *
+ * 页面只调用 `/admin/*`；认证靠服务端下发的 HttpOnly cookie，页面本身不存 token。
+ *
+ * @module @dsh-session-sync/server/admin-page
+ */
+
+/** 管理台 HTML。 */
+export const ADMIN_PAGE = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-session-sync 管理台</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: #14161a; color: #e6e8eb;
+         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 14px; margin: 0 0 12px; color: #9aa4b2; font-weight: 600; }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: #1c1f24; border: 1px solid #2a2f36; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .metric { background: #1c1f24; border: 1px solid #2a2f36; border-radius: 10px; padding: 14px; }
+  .metric .k { color: #7d8694; font-size: 12px; }
+  .metric .v { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #262b33; }
+  th { color: #7d8694; font-weight: 600; }
+  code { color: #8ab4f8; font-size: 12px; }
+  button { background: #2d6cdf; color: #fff; border: 0; border-radius: 6px;
+           padding: 7px 12px; cursor: pointer; font: inherit; }
+  button.secondary { background: #333a44; }
+  button.danger { background: #b4453c; }
+  input { background: #0f1115; color: #e6e8eb; border: 1px solid #333a44;
+          border-radius: 6px; padding: 7px 10px; font: inherit; width: 240px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .muted { color: #7d8694; }
+  .ok { color: #58c98a; } .bad { color: #e06c75; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #333a44; color: #cfd6df; }
+  .tag.deleted { background: #4a2a2a; color: #e6a5a0; }
+  #login { max-width: 420px; margin: 12vh auto; }
+  #app { display: none; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="login" class="card">
+  <h2>登录管理台</h2>
+  <p class="muted">用初始化时设置的管理密码登录。</p>
+  <div class="row"><input id="password" type="password" placeholder="管理密码" autocomplete="current-password"></div>
+  <div class="row"><button id="loginButton">登录</button><span id="loginError" class="bad"></span></div>
+</div>
+
+<div id="app">
+  <div class="top">
+    <h1>dsh-session-sync 管理台</h1>
+    <div class="row" style="margin:0">
+      <span id="version" class="muted"></span>
+      <button id="refresh" class="secondary">刷新</button>
+      <button id="logout" class="secondary">退出</button>
+    </div>
+  </div>
+
+  <div class="grid" id="metrics"></div>
+
+  <div class="card">
+    <h2>存储配额</h2>
+    <div class="row">
+      <input id="quotaGb" type="number" min="1" step="1" style="width:120px">
+      <span class="muted">GiB</span>
+      <button id="saveQuota">保存</button>
+      <span id="quotaResult" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>设备</h2>
+    <div class="row">
+      <input id="deviceLabel" placeholder="设备标签，例如 PC-1">
+      <button id="createDevice">签发 token</button>
+      <span id="deviceResult" class="muted"></span>
+    </div>
+    <table>
+      <thead><tr><th>设备 id</th><th>标签</th><th>创建</th><th>最后在线</th><th></th></tr></thead>
+      <tbody id="devices"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>会话</h2>
+    <table>
+      <thead><tr><th>会话 id</th><th>格式</th><th>帧数</th><th>最后序号</th><th>更新时间</th><th>租约</th><th>状态</th></tr></thead>
+      <tbody id="sessions"></tbody>
+    </table>
+    <p id="sessionsEmpty" class="muted hidden">还没有同步过会话。</p>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id)
+const time = (value) => value === null || value === undefined ? '—' : new Date(value).toLocaleString()
+
+async function api(path, options = {}) {
+  const response = await fetch(path, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...options })
+  if (response.status === 401) { showLogin(); throw new Error('unauthorized') }
+  const body = await response.json()
+  if (!response.ok) throw new Error(body?.error?.message ?? '请求失败')
+  return body.value
+}
+
+function showLogin() { $('login').style.display = 'block'; $('app').style.display = 'none' }
+function showApp() { $('login').style.display = 'none'; $('app').style.display = 'block' }
+
+function cell(row, text, className) {
+  const td = document.createElement('td')
+  td.textContent = text
+  if (className !== undefined) td.className = className
+  row.appendChild(td)
+  return td
+}
+
+function renderMetrics(overview) {
+  $('quotaGb').value = String(Math.round(overview.maxBytes / 1024 / 1024 / 1024))
+  const items = [
+    ['设备', overview.devices],
+    ['会话', overview.sessions],
+    ['已删除', overview.deletedSessions],
+    ['已用存储', (overview.usedBytes / 1024 / 1024).toFixed(1) + ' MB'],
+    ['配额', (overview.maxBytes / 1024 / 1024 / 1024).toFixed(0) + ' GB'],
+    ['revision', overview.revision],
+  ]
+  $('metrics').replaceChildren(...items.map(([k, v]) => {
+    const box = document.createElement('div')
+    box.className = 'metric'
+    const key = document.createElement('div')
+    key.className = 'k'
+    key.textContent = k
+    const value = document.createElement('div')
+    value.className = 'v'
+    value.textContent = String(v)
+    box.append(key, value)
+    return box
+  }))
+  $('version').textContent = 'v' + overview.version + ' · protocol ' + overview.protocol
+}
+
+function renderDevices(devices) {
+  const body = $('devices')
+  body.replaceChildren(...devices.map((device) => {
+    const row = document.createElement('tr')
+    cell(row, device.deviceId)
+    cell(row, device.label)
+    cell(row, time(device.createdAt))
+    cell(row, time(device.lastSeenAt))
+    const action = cell(row, '')
+    const button = document.createElement('button')
+    button.className = 'danger'
+    button.textContent = '吊销'
+    button.onclick = async () => {
+      if (!confirm('吊销后该设备 token 立即失效，确定？')) return
+      await api('/admin/devices/' + device.deviceId, { method: 'DELETE' })
+      await refresh()
+    }
+    action.appendChild(button)
+    return row
+  }))
+  if (devices.length === 0) {
+    const row = document.createElement('tr')
+    cell(row, '还没有设备', 'muted')
+    row.lastChild.colSpan = 5
+    body.appendChild(row)
+  }
+}
+
+function renderSessions(sessions) {
+  const body = $('sessions')
+  body.replaceChildren(...sessions.map((session) => {
+    const row = document.createElement('tr')
+    cell(row, session.sessionId)
+    cell(row, 'v' + session.formatVersion)
+    cell(row, String(session.frameCount))
+    cell(row, String(session.lastSeq))
+    cell(row, time(session.updatedAt))
+    cell(row, session.lease === null ? '—' : session.lease.deviceId + ' 至 ' + time(session.lease.leaseUntil))
+    const status = cell(row, '')
+    const tag = document.createElement('span')
+    tag.className = session.deletedAt === null ? 'tag' : 'tag deleted'
+    tag.textContent = session.deletedAt === null ? '正常' : '已删除'
+    status.appendChild(tag)
+    return row
+  }))
+  $('sessionsEmpty').classList.toggle('hidden', sessions.length > 0)
+}
+
+async function refresh() {
+  const [overview, devices, sessions] = await Promise.all([
+    api('/admin/overview'),
+    api('/admin/devices'),
+    api('/admin/sessions'),
+  ])
+  showApp()
+  renderMetrics(overview)
+  renderDevices(devices)
+  renderSessions(sessions)
+}
+
+$('loginButton').onclick = async () => {
+  $('loginError').textContent = ''
+  const response = await fetch('/admin/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: $('password').value }),
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    $('loginError').textContent = payload?.error?.message ?? '登录失败'
+    return
+  }
+  $('password').value = ''
+  await refresh()
+}
+$('password').addEventListener('keydown', (event) => { if (event.key === 'Enter') $('loginButton').click() })
+$('logout').onclick = async () => { await fetch('/admin/logout', { method: 'POST' }); showLogin() }
+$('saveQuota').onclick = async () => {
+  $('quotaResult').textContent = ''
+  const gib = Number($('quotaGb').value)
+  if (!Number.isFinite(gib) || gib < 1) { $('quotaResult').textContent = '至少 1 GiB'; return }
+  try {
+    await api('/admin/quota', { method: 'POST', body: JSON.stringify({ maxBytes: Math.round(gib * 1024 * 1024 * 1024) }) })
+    $('quotaResult').textContent = '已保存'
+    await refresh()
+  } catch (error) { $('quotaResult').textContent = error.message }
+}
+$('refresh').onclick = () => refresh().catch(() => {})
+$('createDevice').onclick = async () => {
+  const label = $('deviceLabel').value.trim() || 'device'
+  const created = await api('/admin/devices', { method: 'POST', body: JSON.stringify({ label }) })
+  $('deviceResult').textContent = 'token（只显示一次）：' + created.token
+  $('deviceLabel').value = ''
+  await refresh()
+}
+
+refresh().catch(() => showLogin())
+setInterval(() => { if ($('app').style.display !== 'none') refresh().catch(() => {}) }, 5000)
+</script>
+</body>
+</html>`

@@ -1,33 +1,18 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
-import { createDevice, createHttpServer } from '../src/http.ts'
+import { createDevice } from '../src/http.ts'
 import { ensureSetupToken, openDatabase } from '../src/db.ts'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
 
-/**
- * 在操作系统分配的端口上启动服务。
- * @param db - 已打开的数据库。
- * @param dataDir - 服务端数据目录。
- * @param options - 额外的服务端选项（配额等）。
- * @returns 基地址与关闭函数。
- */
-async function listen(db, dataDir, options = {}) {
-  const server = createHttpServer({ db, dataDir, ...options })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address()
-  const port = typeof address === 'object' && address !== null ? address.port : 0
-  return {
-    base: `http://127.0.0.1:${port}`,
-    close: () => new Promise((resolve) => server.close(resolve)),
-  }
-}
+import { listenServer } from './listen.mjs'
+
 
 test('健康检查不需要 token，并报告协议版本', async () => {
   const temp = createTempHome('server-health')
   try {
     const db = openDatabase(temp.dataDir)
-    const { base, close } = await listen(db, temp.dataDir)
+    const { base, close } = await listenServer(db, temp.dataDir)
     try {
       const response = await fetch(`${base}/v1/health`)
       assert.equal(response.status, 200)
@@ -49,7 +34,7 @@ test('设备管理必须带 setup token', async () => {
   try {
     const db = openDatabase(temp.dataDir)
     const setup = ensureSetupToken(db)
-    const { base, close } = await listen(db, temp.dataDir)
+    const { base, close } = await listenServer(db, temp.dataDir)
     try {
       const denied = await fetch(`${base}/v1/devices`, { method: 'POST', body: '{"label":"x"}' })
       assert.equal(denied.status, 401)
@@ -98,7 +83,7 @@ test('未知路径返回 JSON 404，而不是空响应', async () => {
   const temp = createTempHome('server-404')
   try {
     const db = openDatabase(temp.dataDir)
-    const { base, close } = await listen(db, temp.dataDir)
+    const { base, close } = await listenServer(db, temp.dataDir)
     try {
       const response = await fetch(`${base}/v1/nope`)
       assert.equal(response.status, 404)
@@ -136,7 +121,7 @@ test('blob 上传、去重、HEAD/GET 与配额 507', async () => {
   try {
     const db = openDatabase(temp.dataDir)
     const device = createDevice(db, 'blob-device')
-    const { base, close } = await listen(db, temp.dataDir, { maxBytes: 300, maxBlobBytes: 200 })
+    const { base, close } = await listenServer(db, temp.dataDir, { maxBytes: 300, maxBlobBytes: 200 })
     try {
       const auth = { authorization: `Bearer ${device.token}` }
       const body = Buffer.from('a'.repeat(100))

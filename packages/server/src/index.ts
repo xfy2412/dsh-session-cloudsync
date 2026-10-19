@@ -9,8 +9,8 @@
  */
 import { chmodSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createDevice, createHttpServer, listDevices, revokeDevice, DEFAULT_MAX_BYTES } from './http.ts'
-import { ensureSetupToken, openDatabase } from './db.ts'
+import { createDevice, createHttpServer, listDevices, mintOnboardingCode, revokeDevice, DEFAULT_MAX_BYTES } from './http.ts'
+import { clearAdminPassword, ensureSetupToken, isAdminInitialized, openDatabase, readMaxBytes } from './db.ts'
 
 interface Parsed {
   command: string
@@ -22,10 +22,12 @@ function usage(): never {
   console.error(`dsh-session-sync-server <命令> [选项]
 
 命令：
-  serve                      启动 HTTP API
+  serve                      启动 HTTP API 与管理台
   token add <标签>            签发一个设备 token（只打印一次）
   token list                 列出存活设备
   token revoke <deviceId>    吊销某个设备 token
+  admin status               查看初始化状态与配额
+  admin reset                忘记管理密码时重置（重启 serve 后重新初始化）
 
 选项：
   --data-dir <目录>           数据目录（默认 .tmp/dev-data）
@@ -89,6 +91,23 @@ async function main(parsed: Parsed): Promise<void> {
       usage()
     }
 
+    if (parsed.command === 'admin') {
+      const action = parsed.positionals[0]
+      if (action === 'status') {
+        console.log(JSON.stringify({
+          initialized: isAdminInitialized(db),
+          maxBytes: readMaxBytes(db, DEFAULT_MAX_BYTES),
+        }, null, 2))
+        return
+      }
+      if (action === 'reset') {
+        clearAdminPassword(db)
+        console.log('已清除管理密码。重启 serve 后会在控制台打印新的初始化密钥。')
+        return
+      }
+      usage()
+    }
+
     if (parsed.command === 'serve') {
       const host = parsed.flags.get('host') ?? '127.0.0.1'
       const port = Number(parsed.flags.get('port') ?? '8787')
@@ -102,12 +121,22 @@ async function main(parsed: Parsed): Promise<void> {
       } catch {
         // Windows 可能不支持改 mode；文件本身已经写出。
       }
-      const server = createHttpServer({ db, dataDir, maxBytes })
+      const initialized = isAdminInitialized(db)
+      const onboardingCode = initialized ? undefined : mintOnboardingCode()
+      const server = createHttpServer({ db, dataDir, maxBytes, ...onboardingCode === undefined ? {} : { onboardingCode } })
       server.listen(port, host, () => {
         const address = server.address()
         const actualPort = typeof address === 'object' && address !== null ? address.port : port
         console.log(`dsh-session-sync-server 已监听 http://${host}:${actualPort}`)
-        if (setup.created) console.log(`setup token（也写在 ${join(dataDir, 'setup-token')}）：${setup.token}`)
+        console.log(`setup token 文件：${join(dataDir, 'setup-token')}（设备 CLI 用）`)
+        if (!initialized) {
+          console.log('')
+          console.log(`首次启动，请打开 http://${host}:${actualPort}/admin 完成初始化`)
+          console.log(`初始化密钥：${onboardingCode}`)
+          console.log('（10 分钟内有效；未完成初始化时每次启动都会重新生成）')
+        } else {
+          console.log(`管理台：http://${host}:${actualPort}/admin（用管理密码登录）`)
+        }
       })
       const stop = (): void => {
         server.close(() => {

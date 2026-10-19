@@ -6,29 +6,15 @@ import { fileURLToPath } from 'node:url'
 import { zstdDecompressSync } from 'node:zlib'
 import { splitFrames, splitRows } from '../../shared/src/frames.ts'
 import { sealFrame, sessionKeyOf } from '../../shared/src/sealed-frame.ts'
-import { createDevice, createHttpServer } from '../src/http.ts'
+import { createDevice } from '../src/http.ts'
 import { openDatabase } from '../src/db.ts'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixtures = join(here, '..', '..', '..', 'tests', 'fixtures', 'sessions')
 
-/**
- * 起一个测试服务。
- * @param db - 已打开的数据库。
- * @param dataDir - 数据目录。
- * @returns 基地址与关闭函数。
- */
-async function listen(db, dataDir) {
-  const server = createHttpServer({ db, dataDir })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address()
-  const port = typeof address === 'object' && address !== null ? address.port : 0
-  return {
-    base: `http://127.0.0.1:${port}`,
-    close: () => new Promise((resolve) => server.close(resolve)),
-  }
-}
+import { listenServer } from './listen.mjs'
+
 
 /**
  * 发一个 JSON 请求。
@@ -69,7 +55,7 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
     const db = openDatabase(temp.dataDir)
     const deviceA = createDevice(db, 'A')
     const deviceB = createDevice(db, 'B')
-    const { base, close } = await listen(db, temp.dataDir)
+    const { base, close } = await listenServer(db, temp.dataDir)
     try {
       const sessionId = 'session-sync-test'
       const key = sessionKeyOf(Buffer.alloc(32, 5), sessionId)
@@ -185,7 +171,7 @@ test('append 拒绝未上传的 blob、非法请求与错误的 X-Device-Id', as
   try {
     const db = openDatabase(temp.dataDir)
     const device = createDevice(db, 'A')
-    const { base, close } = await listen(db, temp.dataDir)
+    const { base, close } = await listenServer(db, temp.dataDir)
     try {
       const sessionId = 'session-sync-errors'
       const key = sessionKeyOf(Buffer.alloc(32, 6), sessionId)

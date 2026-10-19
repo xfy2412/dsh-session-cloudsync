@@ -17,6 +17,7 @@ export const ERROR_STATUS: Readonly<Record<SyncErrorCode, number>> = {
   'lease-held': 409,
   gone: 410,
   quota: 507,
+  'rate-limited': 429,
 }
 
 /**

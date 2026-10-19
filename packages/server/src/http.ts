@@ -7,21 +7,40 @@
  *
  * @module @dsh-session-sync/server/http
  */
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { API_PREFIX, PROTOCOL_VERSION, errorBody, type DeviceRef } from '../../shared/src/protocol.ts'
+import { PROTOCOL_VERSION, errorBody, type DeviceRef } from '../../shared/src/protocol.ts'
 import { SyncError, statusOf } from '../../shared/src/wire.ts'
+import { deriveMasterKey, newSalt } from '../../shared/src/crypto.ts'
+import { ADMIN_PAGE } from './admin-page.ts'
+import { SETUP_PAGE } from './setup-page.ts'
 import { hasBlob, putBlob, readBlob } from './blobs.ts'
-import { DEFAULT_DATASET, blobRecord, readMeta, recordBlob, usedBlobBytes, type ServerDb } from './db.ts'
+import {
+  DEFAULT_DATASET,
+  adminPassword,
+  blobRecord,
+  isAdminInitialized,
+  markAdminInitialized,
+  readMaxBytes,
+  readMeta,
+  recordBlob,
+  readRevision,
+  setAdminPassword,
+  usedBlobBytes,
+  writeMaxBytes,
+  type ServerDb,
+} from './db.ts'
 import {
   MAX_APPEND_BODY_BYTES,
   acquireLease,
+  adminSessions,
   appendFrames,
   deleteSession,
   getManifest,
   listChanges,
   listFrames,
   releaseLease,
+  sessionCounts,
 } from './sessions.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 
@@ -41,6 +60,8 @@ export interface ServerOptions {
   readonly version?: string
   readonly maxBytes?: number
   readonly maxBlobBytes?: number
+  /** 未初始化时打印到控制台的初始化密钥（由 serve 生成）。 */
+  readonly onboardingCode?: string
 }
 
 interface DeviceRow {
@@ -238,6 +259,100 @@ const DELETE_PATH = /^\/v1\/sessions\/([^/]+)\/delete$/u
 const MANIFEST_PATH = /^\/v1\/sessions\/([^/]+)\/manifest$/u
 const FRAMES_PATH = /^\/v1\/sessions\/([^/]+)\/frames$/u
 const CURSOR_PATH = /^\/v1\/cursor$/u
+const ADMIN_DEVICE_PATH = /^\/admin\/devices\/([0-9a-f]+)$/u
+
+/** 管理台会话 cookie 名。 */
+const ADMIN_COOKIE = 'dsh_sync_admin'
+
+/** 初始化向导的短期会话 cookie 名。 */
+const SETUP_COOKIE = 'dsh_sync_setup'
+
+/** 管理台会话有效期。 */
+const ADMIN_TTL_MS = 12 * 60 * 60 * 1000
+
+/** 初始化向导会话有效期。 */
+const SETUP_TTL_MS = 15 * 60 * 1000
+
+/** 初始化密钥有效期。 */
+const ONBOARDING_TTL_MS = 10 * 60 * 1000
+
+/** 初始化密钥字符表：去掉容易混淆的 0/O/1/I。 */
+const ONBOARDING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+/** 配额下限与上限。 */
+const MIN_MAX_BYTES = 16 * 1024 * 1024
+const MAX_MAX_BYTES = 1024 * 1024 * 1024 * 1024
+
+/**
+ * 生成一个 8 位初始化密钥（展示时分成两段）。
+ * @returns 形如 `ABCD-EFGH` 的字符串。
+ */
+export function mintOnboardingCode(): string {
+  const bytes = randomBytes(8)
+  let raw = ''
+  for (const byte of bytes) raw += ONBOARDING_ALPHABET[byte % ONBOARDING_ALPHABET.length]
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`
+}
+
+/**
+ * 归一化初始化密钥（去掉分隔符、转大写）。
+ * @param raw - 用户输入或生成的密钥。
+ * @returns 归一化后的字符串。
+ */
+function normalizeOnboardingCode(raw: string): string {
+  return raw.toUpperCase().replace(/[^A-Z0-9]/gu, '')
+}
+
+/**
+ * 校验管理密码规则：≥6 位，字母/数字/特殊字符至少两类。
+ * @param password - 用户输入的密码。
+ * @returns 不合法时的说明，合法时为 undefined。
+ */
+export function validateAdminPassword(password: unknown): string | undefined {
+  if (typeof password !== 'string') return '密码不能为空'
+  if (password.length < 6) return '密码至少 6 位'
+  if (password.length > 128) return '密码不能超过 128 位'
+  const classes = [/[A-Za-z]/u, /[0-9]/u, /[^A-Za-z0-9]/u].filter((pattern) => pattern.test(password)).length
+  if (classes < 2) return '密码需要包含字母、数字、特殊字符中的至少两类'
+  return undefined
+}
+
+/**
+ * 读取一个 cookie。
+ * @param req - 收到的请求。
+ * @param name - cookie 名。
+ * @returns 值或 undefined。
+ */
+function cookieValue(req: IncomingMessage, name: string): string | undefined {
+  const header = req.headers.cookie
+  if (typeof header !== 'string') return undefined
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=')
+    if (separator === -1) continue
+    if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim()
+  }
+  return undefined
+}
+
+/**
+ * 写管理台会话 cookie。
+ * @param res - 响应。
+ * @param token - 会话 token。
+ * @param maxAgeSeconds - 有效期秒数；0 表示清除。
+ */
+function writeAdminCookie(res: ServerResponse, token: string, maxAgeSeconds: number): void {
+  res.appendHeader('set-cookie', `${ADMIN_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}`)
+}
+
+/**
+ * 写初始化向导会话 cookie。
+ * @param res - 响应。
+ * @param token - 会话 token。
+ * @param maxAgeSeconds - 有效期秒数；0 表示清除。
+ */
+function writeSetupCookie(res: ServerResponse, token: string, maxAgeSeconds: number): void {
+  res.appendHeader('set-cookie', `${SETUP_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/setup; Max-Age=${maxAgeSeconds}`)
+}
 
 /**
  * 创建一个设备 token。
@@ -293,8 +408,98 @@ export function revokeDevice(db: ServerDb, deviceId: string): boolean {
 export function createHttpServer(options: ServerOptions): Server {
   const { db } = options
   const version = options.version ?? SERVER_VERSION
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
   const maxBlobBytes = options.maxBlobBytes ?? DEFAULT_MAX_BLOB_BYTES
+  const defaultMaxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
+  const effectiveMaxBytes = (): number => readMaxBytes(db, defaultMaxBytes)
+  const adminSessionsByKey = new Map<string, number>()
+  const setupSessionsByKey = new Map<string, number>()
+  const attemptsByKey = new Map<string, { count: number; resetAt: number }>()
+  const onboarding = {
+    codeHash: options.onboardingCode === undefined ? undefined : hashToken(normalizeOnboardingCode(options.onboardingCode)),
+    expiresAt: Date.now() + ONBOARDING_TTL_MS,
+  }
+
+  /**
+   * 要求管理台 cookie 会话有效。
+   * @param req - 收到的请求。
+   * @throws 未登录或已过期时抛出 `unauthorized`。
+   */
+  function requireAdmin(req: IncomingMessage): void {
+    const token = cookieValue(req, ADMIN_COOKIE)
+    if (token === undefined) throw new SyncError('unauthorized', '需要登录管理台')
+    const key = hashToken(token)
+    const expiresAt = adminSessionsByKey.get(key)
+    if (expiresAt === undefined || expiresAt <= Date.now()) {
+      adminSessionsByKey.delete(key)
+      throw new SyncError('unauthorized', '管理台会话已过期')
+    }
+  }
+
+  /**
+   * 要求初始化向导会话有效。
+   * @param req - 收到的请求。
+   * @throws 未验证密钥或会话过期时抛出 `unauthorized`。
+   */
+  function requireSetup(req: IncomingMessage): void {
+    const token = cookieValue(req, SETUP_COOKIE)
+    if (token === undefined) throw new SyncError('unauthorized', '请先验证初始化密钥')
+    const key = hashToken(token)
+    const expiresAt = setupSessionsByKey.get(key)
+    if (expiresAt === undefined || expiresAt <= Date.now()) {
+      setupSessionsByKey.delete(key)
+      throw new SyncError('unauthorized', '初始化会话已过期，请重新验证密钥')
+    }
+  }
+
+  /**
+   * 下发一个正式管理台会话。
+   * @param res - 响应。
+   * @returns 过期时间。
+   */
+  function issueAdminSession(res: ServerResponse): number {
+    const token = randomBytes(32).toString('base64url')
+    const expiresAt = Date.now() + ADMIN_TTL_MS
+    adminSessionsByKey.set(hashToken(token), expiresAt)
+    writeAdminCookie(res, token, Math.floor(ADMIN_TTL_MS / 1000))
+    return expiresAt
+  }
+
+  /**
+   * 记录一次可能失败的尝试，超过阈值时拒绝。
+   * @param key - 限速键（IP + 场景）。
+   * @throws 超过 10 次/10 分钟时抛出 `rate-limited`。
+   */
+  function guardAttempts(key: string): void {
+    const now = Date.now()
+    const entry = attemptsByKey.get(key)
+    if (entry === undefined || entry.resetAt <= now) {
+      attemptsByKey.set(key, { count: 0, resetAt: now + 10 * 60 * 1000 })
+      return
+    }
+    if (entry.count >= 10) throw new SyncError('rate-limited', '尝试过于频繁，请稍后再试')
+  }
+
+  /**
+   * 记录一次失败。
+   * @param key - 限速键。
+   */
+  function noteFailure(key: string): void {
+    const entry = attemptsByKey.get(key)
+    if (entry !== undefined) entry.count += 1
+  }
+
+  /**
+   * 校验管理密码。
+   * @param submitted - 用户输入。
+   * @returns 匹配时为 true。
+   */
+  function passwordMatches(submitted: string): boolean {
+    const stored = adminPassword(db)
+    if (stored === undefined || submitted.length === 0) return false
+    const derived = deriveMasterKey(submitted, Buffer.from(stored.salt, 'hex'))
+    const actual = Buffer.from(stored.hash, 'hex')
+    return derived.length === actual.length && timingSafeEqual(derived, actual)
+  }
 
   const routes: Array<{ method: string; path: RegExp; handler: Handler }> = [
     {
@@ -356,8 +561,9 @@ export function createHttpServer(options: ServerOptions): Server {
         const existing = blobRecord(db, sha256)
         if (existing !== undefined) return json(res, 200, { ok: true, value: { sha256, bytes: existing.bytes, dedup: true } })
         const used = usedBlobBytes(db)
-        if (used + bytes.length > maxBytes) {
-          throw new SyncError('quota', `存储超额：已用 ${used} 字节，上限 ${maxBytes} 字节`)
+        const limit = effectiveMaxBytes()
+        if (used + bytes.length > limit) {
+          throw new SyncError('quota', `存储超额：已用 ${used} 字节，上限 ${limit} 字节`)
         }
         const stored = await putBlob(options.dataDir, bytes)
         recordBlob(db, stored.sha256, stored.bytes, kind)
@@ -472,6 +678,199 @@ export function createHttpServer(options: ServerOptions): Server {
       },
     },
     {
+      method: 'POST',
+      path: /^\/admin\/login$/u,
+      handler: async (req, res) => {
+        if (!isAdminInitialized(db)) throw new SyncError('conflict', '请先完成初始化')
+        const ip = req.socket.remoteAddress ?? 'unknown'
+        guardAttempts(`login:${ip}`)
+        const body = await readJson(req)
+        const password = typeof body.password === 'string' ? body.password : ''
+        if (!passwordMatches(password)) {
+          noteFailure(`login:${ip}`)
+          throw new SyncError('unauthorized', '密码不正确')
+        }
+        attemptsByKey.delete(`login:${ip}`)
+        return json(res, 200, { ok: true, value: { expiresAt: issueAdminSession(res) } })
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/admin\/logout$/u,
+      handler: async (req, res) => {
+        const token = cookieValue(req, ADMIN_COOKIE)
+        if (token !== undefined) adminSessionsByKey.delete(hashToken(token))
+        writeAdminCookie(res, '', 0)
+        return json(res, 200, { ok: true, value: { loggedOut: true } })
+      },
+    },
+    {
+      method: 'GET',
+      path: /^\/setup\/state$/u,
+      handler: async (_req, res) => {
+        return json(res, 200, {
+          ok: true,
+          value: {
+            initialized: isAdminInitialized(db),
+            hasPassword: adminPassword(db) !== undefined,
+            hasQuota: readMeta(db, 'max_bytes') !== undefined,
+            devices: listDevices(db).length,
+          },
+        })
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/setup\/verify$/u,
+      handler: async (req, res) => {
+        if (isAdminInitialized(db)) throw new SyncError('conflict', '已经完成初始化')
+        const ip = req.socket.remoteAddress ?? 'unknown'
+        guardAttempts(`verify:${ip}`)
+        if (onboarding.codeHash === undefined || Date.now() > onboarding.expiresAt) {
+          throw new SyncError('unauthorized', '初始化密钥已过期，请重启服务')
+        }
+        const body = await readJson(req)
+        const submitted = normalizeOnboardingCode(typeof body.code === 'string' ? body.code : '')
+        const actual = Buffer.from(hashToken(submitted), 'hex')
+        const expected = Buffer.from(onboarding.codeHash, 'hex')
+        if (submitted.length === 0 || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+          noteFailure(`verify:${ip}`)
+          throw new SyncError('unauthorized', '初始化密钥不正确')
+        }
+        attemptsByKey.delete(`verify:${ip}`)
+        const token = randomBytes(32).toString('base64url')
+        const expiresAt = Date.now() + SETUP_TTL_MS
+        setupSessionsByKey.set(hashToken(token), expiresAt)
+        writeSetupCookie(res, token, Math.floor(SETUP_TTL_MS / 1000))
+        return json(res, 200, { ok: true, value: { expiresAt } })
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/setup\/password$/u,
+      handler: async (req, res) => {
+        requireSetup(req)
+        if (isAdminInitialized(db)) throw new SyncError('conflict', '已经完成初始化')
+        const body = await readJson(req)
+        const problem = validateAdminPassword(body.password)
+        if (problem !== undefined) throw new SyncError('bad-request', problem)
+        const salt = newSalt()
+        setAdminPassword(db, deriveMasterKey(String(body.password), salt).toString('hex'), salt.toString('hex'))
+        return json(res, 200, { ok: true, value: { passwordSet: true } })
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/setup\/quota$/u,
+      handler: async (req, res) => {
+        requireSetup(req)
+        if (isAdminInitialized(db)) throw new SyncError('conflict', '已经完成初始化')
+        const body = await readJson(req)
+        if (!Number.isSafeInteger(body.maxBytes)) throw new SyncError('bad-request', '配额必须是整数')
+        const maxBytes = Number(body.maxBytes)
+        if (maxBytes < MIN_MAX_BYTES || maxBytes > MAX_MAX_BYTES) throw new SyncError('bad-request', '配额超出允许范围')
+        writeMaxBytes(db, maxBytes)
+        return json(res, 200, { ok: true, value: { maxBytes } })
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/setup\/device$/u,
+      handler: async (req, res) => {
+        requireSetup(req)
+        if (isAdminInitialized(db)) throw new SyncError('conflict', '已经完成初始化')
+        const body = await readJson(req)
+        const label = typeof body.label === 'string' && body.label.trim() !== '' ? body.label.trim() : 'device'
+        return json(res, 201, { ok: true, value: createDevice(db, label) })
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/setup\/complete$/u,
+      handler: async (req, res) => {
+        requireSetup(req)
+        if (isAdminInitialized(db)) throw new SyncError('conflict', '已经完成初始化')
+        if (adminPassword(db) === undefined) throw new SyncError('conflict', '请先设置密码')
+        markAdminInitialized(db)
+        onboarding.expiresAt = 0
+        setupSessionsByKey.clear()
+        writeSetupCookie(res, '', 0)
+        return json(res, 200, { ok: true, value: { redirect: '/admin', expiresAt: issueAdminSession(res) } })
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/admin\/quota$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const body = await readJson(req)
+        if (!Number.isSafeInteger(body.maxBytes)) throw new SyncError('bad-request', '配额必须是整数')
+        const maxBytes = Number(body.maxBytes)
+        if (maxBytes < MIN_MAX_BYTES || maxBytes > MAX_MAX_BYTES) throw new SyncError('bad-request', '配额超出允许范围')
+        writeMaxBytes(db, maxBytes)
+        return json(res, 200, { ok: true, value: { maxBytes } })
+      },
+    },
+    {
+      method: 'GET',
+      path: /^\/admin\/overview$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const counts = sessionCounts(db)
+        return json(res, 200, {
+          ok: true,
+          value: {
+            version,
+            protocol: PROTOCOL_VERSION,
+            revision: readRevision(db),
+            devices: listDevices(db).length,
+            sessions: counts.total,
+            deletedSessions: counts.deleted,
+            usedBytes: usedBlobBytes(db),
+            maxBytes: effectiveMaxBytes(),
+          },
+        })
+      },
+    },
+    {
+      method: 'GET',
+      path: /^\/admin\/devices$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        return json(res, 200, { ok: true, value: listDevices(db) })
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/admin\/devices$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const body = await readJson(req)
+        const label = typeof body.label === 'string' && body.label.trim() !== '' ? body.label.trim() : 'device'
+        return json(res, 201, { ok: true, value: createDevice(db, label) })
+      },
+    },
+    {
+      method: 'DELETE',
+      path: ADMIN_DEVICE_PATH,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const match = ADMIN_DEVICE_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
+        if (match === null) return json(res, 404, errorBody('not-found', '没有这个设备'))
+        return revokeDevice(db, match[1]!)
+          ? json(res, 200, { ok: true, value: { deviceId: match[1], revoked: true } })
+          : json(res, 404, errorBody('not-found', '没有这个设备'))
+      },
+    },
+    {
+      method: 'GET',
+      path: /^\/admin\/sessions$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        return json(res, 200, { ok: true, value: adminSessions(db) })
+      },
+    },
+    {
       method: 'GET',
       path: /^\/v1\/me$/,
       handler: async (req, res) => {
@@ -485,8 +884,29 @@ export function createHttpServer(options: ServerOptions): Server {
 
   return createServer((req, res) => {
     const path = new URL(req.url ?? '/', 'http://localhost').pathname
-    if (!path.startsWith(API_PREFIX)) {
-      json(res, 404, errorBody('not-found', `没有 ${req.method ?? 'GET'} ${path} 这条路由`))
+    if (path === '/' && req.method === 'GET') {
+      res.writeHead(302, { location: '/admin' })
+      res.end()
+      return
+    }
+    if ((path === '/admin' || path === '/admin/') && req.method === 'GET') {
+      if (!isAdminInitialized(db)) {
+        res.writeHead(302, { location: '/setup' })
+        res.end()
+        return
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(ADMIN_PAGE)
+      return
+    }
+    if ((path === '/setup' || path === '/setup/') && req.method === 'GET') {
+      if (isAdminInitialized(db)) {
+        res.writeHead(302, { location: '/admin' })
+        res.end()
+        return
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(SETUP_PAGE)
       return
     }
     const route = routes.find((candidate) => candidate.method === req.method && candidate.path.test(path))

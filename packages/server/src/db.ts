@@ -143,6 +143,74 @@ export function ensureSetupToken(db: ServerDb): { token: string; created: boolea
 }
 
 /**
+ * 管理台是否已完成初始化（向导走完）。
+ * @param db - 已打开的数据库。
+ * @returns 已初始化时为 true。
+ */
+export function isAdminInitialized(db: ServerDb): boolean {
+  return readMeta(db, 'admin_initialized') === 'true'
+}
+
+/**
+ * 标记管理台初始化完成。
+ * @param db - 已打开的数据库。
+ */
+export function markAdminInitialized(db: ServerDb): void {
+  writeMeta(db, 'admin_initialized', 'true')
+}
+
+/**
+ * 读取管理台密码的哈希与盐。
+ * @param db - 已打开的数据库。
+ * @returns 十六进制哈希与盐，或 undefined。
+ */
+export function adminPassword(db: ServerDb): { hash: string; salt: string } | undefined {
+  const hash = readMeta(db, 'admin_password_hash')
+  const salt = readMeta(db, 'admin_password_salt')
+  return hash === undefined || salt === undefined ? undefined : { hash, salt }
+}
+
+/**
+ * 写入管理台密码的哈希与盐（不改变初始化状态）。
+ * @param db - 已打开的数据库。
+ * @param hash - 十六进制哈希。
+ * @param salt - 十六进制盐。
+ */
+export function setAdminPassword(db: ServerDb, hash: string, salt: string): void {
+  writeMeta(db, 'admin_password_hash', hash)
+  writeMeta(db, 'admin_password_salt', salt)
+}
+
+/**
+ * 清除管理台密码，并回到未初始化状态。
+ * @param db - 已打开的数据库。
+ */
+export function clearAdminPassword(db: ServerDb): void {
+  db.handle.prepare("DELETE FROM meta WHERE key IN ('admin_password_hash', 'admin_password_salt', 'admin_initialized')").run()
+}
+
+/**
+ * 读取生效的存储配额。
+ * @param db - 已打开的数据库。
+ * @param fallback - 没有配置时的默认值。
+ * @returns 配额字节数。
+ */
+export function readMaxBytes(db: ServerDb, fallback: number): number {
+  const value = readMeta(db, 'max_bytes')
+  const parsed = Number(value)
+  return value !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+/**
+ * 写入存储配额。
+ * @param db - 已打开的数据库。
+ * @param maxBytes - 配额字节数。
+ */
+export function writeMaxBytes(db: ServerDb, maxBytes: number): void {
+  writeMeta(db, 'max_bytes', String(maxBytes))
+}
+
+/**
  * 读取当前全局 revision。
  * @param db - 已打开的数据库。
  * @returns 当前值；未初始化时为 0。

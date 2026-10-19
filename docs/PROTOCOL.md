@@ -1,7 +1,7 @@
 # 协议
 
-> 状态：M2 服务端已实现 `/v1/health`、设备 token、`/v1/blobs`、租约、append、墓碑、cursor、manifest/帧引用读取。
-> 管理台 API 见文末（未实现）。
+> 状态：M2 服务端已实现 `/v1/health`、设备 token、`/v1/blobs`、租约、append、墓碑、cursor、manifest/帧引用读取；
+> 管理台（cookie 会话 + 只读页面）已实现。
 
 ## 认证
 
@@ -13,9 +13,24 @@
 
 ### 管理台（`/admin/*`）
 
-- 浏览器用 setup token 登录：`POST /admin/login { setupToken }` → 服务端下发 **HttpOnly、SameSite=Strict** 的会话 cookie；
-- `POST /admin/logout` 注销；会话只存在内存/服务端表，带过期时间；
+- 首次启动通过 `/setup` 向导设置管理密码（服务端控制台打印 8 位初始化密钥，10 分钟有效、单次使用）；
+- 之后浏览器用密码登录：`POST /admin/login { password }` → 服务端下发 **HttpOnly、SameSite=Strict** 会话 cookie；
+- `POST /admin/logout` 注销；会话存在服务端内存，带过期时间；
 - 管理台 API 不接受 bearer token，设备 API 不接受 cookie，两套认证互不复用。
+
+### 初始化向导（`/setup/*`，仅未初始化时可用）
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/setup` | 初始化向导页面 |
+| GET | `/setup/state` | `{initialized, hasPassword, hasQuota, devices}` |
+| POST | `/setup/verify` | `{code}` → 15 分钟 setup cookie；错误次数受限（10 次/10 分钟） |
+| POST | `/setup/password` | 设置管理密码（≥6 位，字母/数字/特殊字符至少两类） |
+| POST | `/setup/quota` | 设置配额（字节，16 MiB–1 TiB） |
+| POST | `/setup/device` | 可选：创建第一台设备 |
+| POST | `/setup/complete` | 完成初始化，升级为管理台会话 |
+
+初始化完成后 `/setup` 跳转 `/admin`，向导接口返回 `409`。
 
 ## 设备端点
 
@@ -90,24 +105,26 @@
 6. 服务端不解析内容；只校验哈希、序号区间与大小。
 7. 配额按唯一 blob 字节总和计算；超限返回 `507`。
 
-## 管理台端点（`/admin/*`）
+## 管理台端点（`/admin/*`，已实现）
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| POST | `/admin/login` | `{ setupToken }` → 会话 cookie |
+| GET | `/admin` | 管理台单页（登录后使用） |
+| POST | `/admin/login` | `{ password }` → HttpOnly、SameSite=Strict cookie |
 | POST | `/admin/logout` | 注销当前会话 |
-| GET | `/admin/overview` | 设备数、会话数、用量/配额、revision |
-| GET | `/admin/devices` | 设备列表（最后在线、用量） |
-| POST | `/admin/devices` | 签发设备 token |
+| GET | `/admin/overview` | 设备数、会话数、用量/配额、revision、版本 |
+| POST | `/admin/quota` | `{ maxBytes }` 修改存储配额 |
+| GET | `/admin/devices` | 设备列表（最后在线） |
+| POST | `/admin/devices` | 签发设备 token（只返回一次） |
 | DELETE | `/admin/devices/:id` | 吊销设备 token |
 | GET | `/admin/sessions` | 会话元数据列表（id/代际/帧数/最后更新/租约/墓碑） |
 
-首版管理台不提供内容读取；会话预览（需要“允许服务器解密”）是 P2。
+首版管理台不提供内容读取；会话预览（需要“允许服务器解密”）是 P2。根路径 `/` 会重定向到 `/admin`。
 
 ## 错误码
 
-`unauthorized` · `bad-request` · `not-found` · `conflict` · `diverged` · `lease-held` · `gone` · `quota`
+`unauthorized` · `bad-request` · `not-found` · `conflict` · `diverged` · `lease-held` · `gone` · `quota` · `rate-limited`
 
-HTTP 映射固定为：`401 · 400 · 404 · 409 · 409 · 409 · 410 · 507`（`packages/shared/src/wire.ts`）。
+HTTP 映射固定为：`401 · 400 · 404 · 409 · 409 · 409 · 410 · 507 · 429`（`packages/shared/src/wire.ts`）。
 
 失败响应统一为 `{ "ok": false, "error": { "code": ..., "message": ... } }`。

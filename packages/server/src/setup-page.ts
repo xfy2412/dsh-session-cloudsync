@@ -1,0 +1,204 @@
+/**
+ * 首次启动初始化向导（单页、无构建、无外部资源）。
+ *
+ * 步骤：初始化密钥 → 设置密码 → 设置配额 → 第一台设备（可跳过）→ 完成。
+ *
+ * @module @dsh-session-sync/server/setup-page
+ */
+
+/** 初始化向导 HTML。 */
+export const SETUP_PAGE = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>初始化 dsh-session-sync</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: #14161a; color: #e6e8eb;
+         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .card { max-width: 560px; margin: 8vh auto; background: #1c1f24; border: 1px solid #2a2f36;
+          border-radius: 12px; padding: 24px; }
+  .steps { display: flex; gap: 8px; margin-bottom: 20px; }
+  .dot { height: 4px; flex: 1; background: #2a2f36; border-radius: 2px; }
+  .dot.active { background: #2d6cdf; }
+  label { display: block; color: #9aa4b2; margin: 10px 0 4px; }
+  input, select { width: 100%; background: #0f1115; color: #e6e8eb; border: 1px solid #333a44;
+                  border-radius: 6px; padding: 9px 10px; font: inherit; }
+  button { background: #2d6cdf; color: #fff; border: 0; border-radius: 6px;
+           padding: 9px 16px; cursor: pointer; font: inherit; margin-top: 14px; }
+  button.secondary { background: #333a44; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .muted { color: #7d8694; font-size: 13px; }
+  .bad { color: #e06c75; min-height: 20px; }
+  .ok { color: #58c98a; }
+  code { color: #8ab4f8; word-break: break-all; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>初始化 dsh-session-sync</h1>
+  <p class="muted">首次使用需要设置管理密码、存储配额，并可选地创建第一台设备。</p>
+  <div class="steps">
+    <div class="dot active" data-step="1"></div>
+    <div class="dot" data-step="2"></div>
+    <div class="dot" data-step="3"></div>
+    <div class="dot" data-step="4"></div>
+  </div>
+
+  <div id="step1">
+    <h2>1. 输入初始化密钥</h2>
+    <p class="muted">密钥打印在启动服务的控制台里，形如 <code>ABCD-EFGH</code>，10 分钟内有效。</p>
+    <label for="code">初始化密钥</label>
+    <input id="code" autocomplete="off" placeholder="ABCD-EFGH">
+    <div id="error1" class="bad"></div>
+    <button id="verify">继续</button>
+  </div>
+
+  <div id="step2" class="hidden">
+    <h2>2. 设置管理密码</h2>
+    <p class="muted">至少 6 位，且字母、数字、特殊字符中至少占两类。</p>
+    <label for="password">密码</label>
+    <input id="password" type="password" autocomplete="new-password">
+    <label for="confirm">再输一次</label>
+    <input id="confirm" type="password" autocomplete="new-password">
+    <div id="error2" class="bad"></div>
+    <button id="savePassword">继续</button>
+  </div>
+
+  <div id="step3" class="hidden">
+    <h2>3. 设置存储配额</h2>
+    <p class="muted">按已上传密文的唯一字节计算；之后可以在管理台修改。</p>
+    <label for="quotaPreset">选择</label>
+    <select id="quotaPreset">
+      <option value="1">1 GiB</option>
+      <option value="5">5 GiB</option>
+      <option value="10" selected>10 GiB（默认）</option>
+      <option value="50">50 GiB</option>
+      <option value="custom">自定义（GB）</option>
+    </select>
+    <input id="quotaCustom" class="hidden" type="number" min="1" step="1" placeholder="自定义 GiB">
+    <div id="error3" class="bad"></div>
+    <button id="saveQuota">继续</button>
+  </div>
+
+  <div id="step4" class="hidden">
+    <h2>4. 第一台设备（可跳过）</h2>
+    <p class="muted">给要同步的设备起个名字，生成一个 token；token 只显示一次。</p>
+    <label for="deviceLabel">设备标签</label>
+    <input id="deviceLabel" placeholder="例如 PC-1">
+    <div id="error4" class="bad"></div>
+    <div class="row">
+      <button id="createDevice">创建设备</button>
+      <button id="skipDevice" class="secondary">跳过</button>
+    </div>
+    <div id="deviceToken" class="hidden">
+      <p class="ok">设备已创建，token（只显示一次）：</p>
+      <code id="tokenValue"></code>
+    </div>
+    <div id="finishWrap" class="hidden">
+      <button id="finish">完成初始化</button>
+    </div>
+  </div>
+
+  <div id="done" class="hidden">
+    <h2>初始化完成</h2>
+    <p class="ok">管理台已经可以使用。</p>
+    <button id="goAdmin">进入管理台</button>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id)
+let step = 1
+
+function mark(index) {
+  for (const dot of document.querySelectorAll('.dot')) {
+    dot.classList.toggle('active', Number(dot.dataset.step) <= index)
+  }
+}
+function showStep(index) {
+  step = index
+  for (const name of ['1', '2', '3', '4']) $('step' + name).classList.toggle('hidden', name !== String(index))
+  mark(index)
+}
+async function post(path, body) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload?.error?.message ?? '请求失败')
+  return payload.value
+}
+
+$('verify').onclick = async () => {
+  $('error1').textContent = ''
+  try {
+    await post('/setup/verify', { code: $('code').value })
+    showStep(2)
+  } catch (error) { $('error1').textContent = error.message }
+}
+
+$('savePassword').onclick = async () => {
+  $('error2').textContent = ''
+  if ($('password').value !== $('confirm').value) { $('error2').textContent = '两次输入不一致'; return }
+  try {
+    await post('/setup/password', { password: $('password').value })
+    showStep(3)
+  } catch (error) { $('error2').textContent = error.message }
+}
+
+$('quotaPreset').onchange = () => {
+  $('quotaCustom').classList.toggle('hidden', $('quotaPreset').value !== 'custom')
+}
+$('saveQuota').onclick = async () => {
+  $('error3').textContent = ''
+  const preset = $('quotaPreset').value
+  const gib = preset === 'custom' ? Number($('quotaCustom').value) : Number(preset)
+  if (!Number.isFinite(gib) || gib < 1) { $('error3').textContent = '配额至少 1 GiB'; return }
+  try {
+    await post('/setup/quota', { maxBytes: Math.round(gib * 1024 * 1024 * 1024) })
+    showStep(4)
+  } catch (error) { $('error3').textContent = error.message }
+}
+
+$('createDevice').onclick = async () => {
+  $('error4').textContent = ''
+  try {
+    const created = await post('/setup/device', { label: $('deviceLabel').value })
+    $('tokenValue').textContent = created.token
+    $('deviceToken').classList.remove('hidden')
+    $('finishWrap').classList.remove('hidden')
+    $('createDevice').disabled = true
+  } catch (error) { $('error4').textContent = error.message }
+}
+$('skipDevice').onclick = () => {
+  $('deviceToken').classList.add('hidden')
+  $('finishWrap').classList.remove('hidden')
+  $('skipDevice').disabled = true
+}
+$('finish').onclick = async () => {
+  $('error4').textContent = ''
+  try {
+    await post('/setup/complete', {})
+    showStep(0)
+    for (const name of ['1', '2', '3', '4']) $('step' + name).classList.add('hidden')
+    $('done').classList.remove('hidden')
+    mark(4)
+  } catch (error) { $('error4').textContent = error.message }
+}
+$('goAdmin').onclick = () => { location.href = '/admin' }
+
+fetch('/setup/state').then((response) => response.json()).then((payload) => {
+  if (payload?.value?.initialized === true) location.href = '/admin'
+}).catch(() => {})
+</script>
+</body>
+</html>`

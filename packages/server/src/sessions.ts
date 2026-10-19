@@ -312,6 +312,73 @@ export function listFrames(db: ServerDb, sessionId: string, from: number, limit:
   return { frames: manifest.frames.slice(from, from + limit), total: manifest.frames.length, revision: row.revision }
 }
 
+/**
+ * 管理台用的会话行（含租约）。
+ */
+export interface AdminSession {
+  readonly sessionId: string
+  readonly createdAt: number
+  readonly formatVersion: number
+  readonly frameCount: number
+  readonly lastSeq: number
+  readonly headChainHash: string
+  readonly revision: number
+  readonly updatedAt: number
+  readonly deletedAt: number | null
+  readonly lease: { readonly deviceId: string; readonly leaseUntil: number } | null
+}
+
+/**
+ * 列出管理台用的会话元数据。
+ * @param db - 已打开的数据库。
+ * @param limit - 最大条数。
+ * @returns 按更新时间倒序的会话。
+ */
+export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
+  const rows = db.handle
+    .prepare(`SELECT s.session_id, s.created_at, s.format_version, s.frame_count, s.last_seq, s.head_chain_hash,
+                     s.revision, s.updated_at, s.deleted_at, l.device_id AS lease_device, l.lease_until AS lease_until
+              FROM sessions s LEFT JOIN leases l ON l.dataset = s.dataset AND l.session_id = s.session_id
+              WHERE s.dataset = ? ORDER BY s.updated_at DESC LIMIT ?`)
+    .all(DEFAULT_DATASET, limit) as unknown as Array<{
+      session_id: string
+      created_at: number
+      format_version: number
+      frame_count: number
+      last_seq: number
+      head_chain_hash: string
+      revision: number
+      updated_at: number
+      deleted_at: number | null
+      lease_device: string | null
+      lease_until: number | null
+    }>
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    createdAt: row.created_at,
+    formatVersion: row.format_version,
+    frameCount: row.frame_count,
+    lastSeq: row.last_seq,
+    headChainHash: row.head_chain_hash,
+    revision: row.revision,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
+    lease: row.lease_device === null || row.lease_until === null ? null : { deviceId: row.lease_device, leaseUntil: row.lease_until },
+  }))
+}
+
+/**
+ * 统计会话总数与已删除数。
+ * @param db - 已打开的数据库。
+ * @returns 计数。
+ */
+export function sessionCounts(db: ServerDb): { total: number; deleted: number } {
+  const row = db.handle
+    .prepare('SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END), 0) AS deleted FROM sessions WHERE dataset = ?')
+    .get(DEFAULT_DATASET) as { total?: number; deleted?: number } | undefined
+  return { total: Number(row?.total ?? 0), deleted: Number(row?.deleted ?? 0) }
+}
+
 /** cursor 返回的会话摘要。 */
 export interface SessionChange {
   readonly sessionId: string

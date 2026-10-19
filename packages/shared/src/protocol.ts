@@ -64,6 +64,7 @@ export type SyncErrorCode =
   | 'lease-held'
   | 'gone'
   | 'quota'
+  | 'rate-limited'
 
 /** 统一的失败响应体。 */
 export interface SyncErrorBody {
