@@ -5,6 +5,11 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="LICENSES/AGPL-3.0-only.txt"><img src="https://img.shields.io/badge/server-AGPL--3.0-blue.svg" alt="server: AGPL-3.0"></a>
+  <a href="LICENSES/MIT.txt"><img src="https://img.shields.io/badge/plugin%20%2F%20shared-MIT-green.svg" alt="plugin/shared: MIT"></a>
+</p>
+
 # dsh-session-sync
 
 给 DeepSeek Harness（DSH）做的**会话云同步**：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。
@@ -62,3 +67,12 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 - [docs/DESIGN.md](docs/DESIGN.md)：范围、数据分层、并发与加密的取舍。
 - [docs/PROTOCOL.md](docs/PROTOCOL.md)：服务端端点与不变量。
 - [tests/README.md](tests/README.md)：临时 home 与夹具约定。
+
+## 许可证
+
+本仓库按目录拆分许可：
+
+- **`packages/server/**`：AGPL-3.0-only**（[全文](LICENSES/AGPL-3.0-only.txt)）。对外提供修改后的服务端时，需按 AGPL §13 向使用者提供对应源码；个人自部署、仅自己使用不受影响。
+- **`packages/plugin/**`、`packages/shared/**` 及其余部分：MIT**（[全文](LICENSES/MIT.txt)）。
+
+根目录的 [LICENSE](LICENSE) 是拆分范围的简短说明；各 package 目录下也各有一份对应全文。

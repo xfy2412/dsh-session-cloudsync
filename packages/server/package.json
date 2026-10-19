@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Self-hosted sync server for dsh-session-sync (no runtime dependencies).",
+  "license": "AGPL-3.0-only",
   "bin": {
     "dsh-session-sync-server": "./src/index.ts"
   },

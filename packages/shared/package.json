@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "插件与服务端共用的帧、加密与协议原语。",
+  "license": "MIT",
   "exports": {
     ".": "./src/index.ts"
   },

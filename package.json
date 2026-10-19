@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "DSH 会话云同步：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。",
+  "license": "SEE LICENSE IN LICENSE",
   "engines": {
     "node": ">=24"
   },
@@ -21,4 +22,3 @@
     "typescript": "^7.0.2"
   }
 }
-

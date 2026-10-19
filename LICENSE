@@ -1,0 +1,20 @@
+本仓库按目录拆分许可（split licensing）：
+
+- `packages/server/**`：GNU Affero General Public License v3.0 only（AGPL-3.0-only）。
+  全文见 `LICENSES/AGPL-3.0-only.txt`。
+- `packages/plugin/**`、`packages/shared/**`，以及文档、脚本等其余部分：MIT License。
+  全文见 `LICENSES/MIT.txt`。
+
+如果你修改服务端并通过网络向公众提供服务，AGPL §13 要求你向使用者提供修改版的
+对应源代码；个人自部署、仅自己使用不受影响。
+
+SPDX-License-Identifier: AGPL-3.0-only (packages/server) / MIT (everything else)
+
+---
+
+This repository is split-licensed:
+
+- `packages/server/**`: GNU Affero General Public License v3.0 only (AGPL-3.0-only),
+  see `LICENSES/AGPL-3.0-only.txt`.
+- `packages/plugin/**`, `packages/shared/**`, and the rest of this repository: MIT License,
+  see `LICENSES/MIT.txt`.

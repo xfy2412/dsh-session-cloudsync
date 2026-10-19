@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "DSH 会话云同步插件：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。",
+  "license": "MIT",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -13,7 +14,8 @@
   "files": [
     "lib/**/*.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -31,9 +33,15 @@
     "@deepseek-ai/dsh-session-projection": ">=0.2.1-rc.1 <0.2.2-0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": true },
-    "@deepseek-ai/dsh-session": { "optional": true },
-    "@deepseek-ai/dsh-session-projection": { "optional": true }
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session-projection": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "~3.18.4",
