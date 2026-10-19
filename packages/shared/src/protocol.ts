@@ -30,25 +30,18 @@ export interface DeviceRef {
 }
 
 /** 会话日志链上的一帧（不可变）。 */
-export interface FrameRef {
-  /** 密文的小写十六进制 SHA-256。 */
-  readonly sha256: string
-  /** 帧内第一条事件的序号（含）。 */
-  readonly seqFrom: number
-  /** 帧内最后一条事件的序号（含）。 */
-  readonly seqTo: number
-  /** 密文字节数。 */
-  readonly bytes: number
-}
+export type { SealedFrameRef } from './sealed-frame.ts'
 
 /** 服务端保存的单个会话元数据。 */
 export interface SessionManifest {
   readonly sessionId: string
   /** 日志写入时的 DSH 会话格式代际。 */
   readonly formatVersion: number
-  /** 写入帧链的最高事件序号。 */
+  /** 会话创建时间（用于区分同 id 的不同生命周期）。 */
+  readonly createdAt: number
+  /** 写入帧链的最高事件序号；只有 header 帧时为 -1。 */
   readonly lastSeq: number
-  readonly frames: readonly FrameRef[]
+  readonly frames: readonly import('./sealed-frame.ts').SealedFrameRef[]
   readonly updatedAt: number
   /** 软删除时存在。 */
   readonly deletedAt?: number

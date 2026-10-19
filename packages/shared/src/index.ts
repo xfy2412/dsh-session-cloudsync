@@ -1,3 +1,5 @@
+export * from './chain.ts'
 export * from './crypto.ts'
 export * from './frames.ts'
 export * from './protocol.ts'
+export * from './sealed-frame.ts'
