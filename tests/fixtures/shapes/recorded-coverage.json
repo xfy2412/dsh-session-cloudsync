@@ -1,0 +1,709 @@
+{
+  "_note": "由隔离开发实例（临时 DSH home）录制的覆盖形状；只含类型/键名/计数，不含任何会话内容。",
+  "recordedAt": "2026-10-19",
+  "sessions": 6,
+  "events": 405,
+  "turns": 2,
+  "steps": 17,
+  "eventTypes": [
+    {
+      "type": "tool/call",
+      "count": 61
+    },
+    {
+      "type": "tool/result",
+      "count": 61
+    },
+    {
+      "type": "user/message",
+      "count": 51
+    },
+    {
+      "type": "agent/inbox/spliced",
+      "count": 28
+    },
+    {
+      "type": "session-log-deepseek/delivery-accepted",
+      "count": 26
+    },
+    {
+      "type": "step/start",
+      "count": 25
+    },
+    {
+      "type": "assistant/message",
+      "count": 25
+    },
+    {
+      "type": "step/end",
+      "count": 25
+    },
+    {
+      "type": "turn/start",
+      "count": 7
+    },
+    {
+      "type": "request/header",
+      "count": 7
+    },
+    {
+      "type": "session/title",
+      "count": 7
+    },
+    {
+      "type": "turn/end",
+      "count": 7
+    },
+    {
+      "type": "job/registered",
+      "count": 7
+    },
+    {
+      "type": "job/settled",
+      "count": 7
+    },
+    {
+      "type": "session",
+      "count": 6
+    },
+    {
+      "type": "sandbox/mode",
+      "count": 6
+    },
+    {
+      "type": "approval/policy",
+      "count": 6
+    },
+    {
+      "type": "system/message",
+      "count": 6
+    },
+    {
+      "type": "request/context",
+      "count": 6
+    },
+    {
+      "type": "subagent/descriptor",
+      "count": 5
+    },
+    {
+      "type": "subagent/catalog",
+      "count": 5
+    },
+    {
+      "type": "session/end-seed",
+      "count": 2
+    },
+    {
+      "type": "todo/write",
+      "count": 2
+    },
+    {
+      "type": "goal/change",
+      "count": 2
+    },
+    {
+      "type": "working-directory/change",
+      "count": 2
+    },
+    {
+      "type": "web/deepseek-search-llm-request",
+      "count": 2
+    },
+    {
+      "type": "tool-workflow/agent-start",
+      "count": 2
+    },
+    {
+      "type": "tool-workflow/agent-end",
+      "count": 2
+    },
+    {
+      "type": "permission/preset",
+      "count": 1
+    },
+    {
+      "type": "model/selection",
+      "count": 1
+    },
+    {
+      "type": "session/title-llm-request",
+      "count": 1
+    },
+    {
+      "type": "tool-workflow/run-start",
+      "count": 1
+    },
+    {
+      "type": "tool-workflow/run-end",
+      "count": 1
+    },
+    {
+      "type": "deliverables/presented",
+      "count": 1
+    },
+    {
+      "type": "workspace/changes",
+      "count": 1
+    }
+  ],
+  "surfaceOps": [
+    {
+      "op": "append",
+      "count": 143
+    }
+  ],
+  "tools": [
+    {
+      "name": "pwsh",
+      "calls": 7,
+      "argKeys": [
+        "command",
+        "description",
+        "run_in_background",
+        "timeoutMs"
+      ],
+      "results": 7,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 1279,
+      "errors": [
+        "object"
+      ],
+      "withMeta": 0,
+      "withSourceEventSeqs": 7
+    },
+    {
+      "name": "time_counter",
+      "calls": 7,
+      "argKeys": [
+        "action",
+        "depth",
+        "inject",
+        "name",
+        "note",
+        "toChildren",
+        "toParents"
+      ],
+      "results": 7,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 1687,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 7
+    },
+    {
+      "name": "time_countdown",
+      "calls": 4,
+      "argKeys": [
+        "action",
+        "in",
+        "name",
+        "note",
+        "onFire"
+      ],
+      "results": 4,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 868,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 4
+    },
+    {
+      "name": "send_message",
+      "calls": 3,
+      "argKeys": [
+        "agent_id",
+        "message"
+      ],
+      "results": 3,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 205,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 3
+    },
+    {
+      "name": "working_directory",
+      "calls": 3,
+      "argKeys": [
+        "cd"
+      ],
+      "results": 3,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 240,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 3
+    },
+    {
+      "name": "structured_output",
+      "calls": 2,
+      "argKeys": [
+        "category",
+        "tool"
+      ],
+      "results": 2,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 54,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 2
+    },
+    {
+      "name": "todo_write",
+      "calls": 2,
+      "argKeys": [
+        "todos"
+      ],
+      "results": 2,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 115,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 2
+    },
+    {
+      "name": "time_mode",
+      "calls": 2,
+      "argKeys": [
+        "mode"
+      ],
+      "results": 2,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 435,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 2
+    },
+    {
+      "name": "write",
+      "calls": 2,
+      "argKeys": [
+        "content",
+        "file_path"
+      ],
+      "results": 2,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 345,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 2
+    },
+    {
+      "name": "subagent",
+      "calls": 2,
+      "argKeys": [
+        "description",
+        "prompt"
+      ],
+      "results": 2,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 106,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 2
+    },
+    {
+      "name": "job_output",
+      "calls": 2,
+      "argKeys": [
+        "job_id"
+      ],
+      "results": 2,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 200,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 2
+    },
+    {
+      "name": "list_agents",
+      "calls": 2,
+      "argKeys": [
+        "scope"
+      ],
+      "results": 2,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 548,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 2
+    },
+    {
+      "name": "create_goal",
+      "calls": 1,
+      "argKeys": [
+        "max_goal_rounds",
+        "objective"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 443,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "get_goal",
+      "calls": 1,
+      "argKeys": [],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 443,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "ask_user_question",
+      "calls": 1,
+      "argKeys": [
+        "questions"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 136,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "subagent_fork",
+      "calls": 1,
+      "argKeys": [
+        "description",
+        "prompt"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 53,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "read",
+      "calls": 1,
+      "argKeys": [
+        "file_path"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 1016,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "glob",
+      "calls": 1,
+      "argKeys": [
+        "pattern"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 20,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "grep",
+      "calls": 1,
+      "argKeys": [
+        "pattern"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 68,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "web_search",
+      "calls": 1,
+      "argKeys": [
+        "queries"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 1044,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "schedule_create",
+      "calls": 1,
+      "argKeys": [
+        "after_seconds",
+        "prompt",
+        "title"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 356,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "skill",
+      "calls": 1,
+      "argKeys": [
+        "name"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 6994,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "job_list",
+      "calls": 1,
+      "argKeys": [],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 289,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "edit",
+      "calls": 1,
+      "argKeys": [
+        "file_path",
+        "new_string",
+        "old_string"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 147,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "web_fetch",
+      "calls": 1,
+      "argKeys": [
+        "url"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 20068,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "job_kill",
+      "calls": 1,
+      "argKeys": [
+        "job_id",
+        "reason"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 51,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "schedule_list",
+      "calls": 1,
+      "argKeys": [],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 358,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "workflow",
+      "calls": 1,
+      "argKeys": [
+        "meta",
+        "script"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 182,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "read_image",
+      "calls": 1,
+      "argKeys": [
+        "file_path"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "image",
+        "text"
+      ],
+      "resultTextBytes": 208,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "interrupt_agent",
+      "calls": 1,
+      "argKeys": [
+        "agent_id"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 66,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "schedule_update",
+      "calls": 1,
+      "argKeys": [
+        "id",
+        "prompt",
+        "title"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 339,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "schedule_delete",
+      "calls": 1,
+      "argKeys": [
+        "id"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 69,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "exit_plan_mode",
+      "calls": 1,
+      "argKeys": [
+        "plan"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 52,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "present",
+      "calls": 1,
+      "argKeys": [
+        "files"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 243,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    },
+    {
+      "name": "update_goal",
+      "calls": 1,
+      "argKeys": [
+        "action",
+        "goal_id",
+        "revision"
+      ],
+      "results": 1,
+      "resultContentKinds": [
+        "text"
+      ],
+      "resultTextBytes": 448,
+      "errors": [],
+      "withMeta": 0,
+      "withSourceEventSeqs": 1
+    }
+  ]
+}

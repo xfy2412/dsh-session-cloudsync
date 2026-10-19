@@ -1,0 +1,12 @@
+# Build artefacts and dependency trees are generated.
+node_modules/
+lib/
+dist/
+tsc-out/
+
+# Runtime/test scratch: every temporary DSH_HOME lives here (see tests/README.md).
+.tmp/
+
+# Local logs and coverage output.
+*.log
+coverage/

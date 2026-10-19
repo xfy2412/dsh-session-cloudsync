@@ -1,0 +1,13 @@
+{
+  "name": "@dsh-session-sync/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted sync server for dsh-session-sync (no runtime dependencies).",
+  "bin": {
+    "dsh-session-sync-server": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

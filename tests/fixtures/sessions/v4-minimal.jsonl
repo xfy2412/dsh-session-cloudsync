@@ -1,0 +1,11 @@
+{"type":"session","version":4,"id":"session-fixture-minimal","createdAt":1790000000000,"cwd":"D:\\fixture","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}
+{"type":"permission/preset","seq":0,"time":1790000000001,"data":{"preset":"workspace-write"}}
+{"type":"turn/start","seq":1,"time":1790000000002,"data":{"turn":1}}
+{"type":"step/start","seq":2,"time":1790000000003,"data":{"turn":1,"step":1}}
+{"type":"user/message","seq":3,"time":1790000000004,"data":{"content":[{"type":"text","text":"Synthetic fixture prompt."}],"source":{"kind":"user"},"role":"user","id":"fixture-user-1"},"surfaceOp":"append"}
+{"type":"assistant/message","seq":4,"time":1790000000005,"data":{"turn":1,"step":1,"usage":{"inputTokens":1,"outputTokens":1,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":2},"stream":[],"message":{"id":"fixture-assistant-1","role":"assistant","source":{"kind":"model","provider":"fixture","model":"fixture-model"},"content":[{"type":"text","text":"Fixture reply."},{"type":"tool-call","id":"call_fixture_1","name":"read","arguments":"{\"file_path\":\"FIXTURE.md\"}"}]}},"surfaceOp":"append"}
+{"type":"tool/call","seq":5,"time":1790000000006,"data":{"turn":1,"step":1,"callId":"call_fixture_1","name":"read","arguments":"{\"file_path\":\"FIXTURE.md\"}"}}
+{"type":"tool/result","seq":6,"time":1790000000007,"data":{"turn":1,"step":1,"message":{"id":"fixture-tool-1","role":"tool","source":{"kind":"tool","callId":"call_fixture_1"},"toolCallId":"call_fixture_1","isError":false,"content":[{"type":"text","text":"fixture contents"}]}},"sourceEventSeqs":[5],"surfaceOp":"append"}
+{"type":"step/end","seq":7,"time":1790000000008,"data":{"turn":1,"step":1}}
+{"type":"turn/end","seq":8,"time":1790000000009,"data":{"turn":1,"reason":{"kind":"completed"}}}
+{"type":"plugin:fixture/info","seq":9,"time":1790000000010,"data":{"note":"unknown ignorable record"},"ignorable":true}

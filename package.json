@@ -1,0 +1,22 @@
+{
+  "name": "dsh-session-sync",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 会话云同步：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test \"packages/**/tests/**/*.test.ts\" \"packages/**/tests/**/*.test.mjs\" \"tests/**/*.test.mjs\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "pnpm run typecheck && pnpm test",
+    "fixtures": "node tests/tools/make-fixtures.ts",
+    "dev:server": "node packages/server/src/index.ts serve --data-dir .tmp/dev-data --port 8787 --host 127.0.0.1",
+    "dev:dsh": "node scripts/dev-dsh.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2"
+  }
+}

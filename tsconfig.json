@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "packages/shared/src/**/*.ts",
+    "packages/shared/tests/**/*.ts",
+    "packages/server/src/**/*.ts",
+    "packages/server/tests/**/*.ts",
+    "packages/plugin/src/**/*.ts",
+    "packages/plugin/tests/**/*.ts"
+  ]
+}

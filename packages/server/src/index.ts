@@ -1,0 +1,130 @@
+#!/usr/bin/env node
+/**
+ * 自部署同步服务的命令行入口。
+ *
+ * `serve` 启动 HTTP API；`token add|list|revoke` 管理设备 token。
+ * setup token 在首次启动时打印一次，也可以从 `<data>/setup-token` 读取。
+ *
+ * @module @dsh-session-sync/server
+ */
+import { chmodSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { createDevice, createHttpServer, listDevices, revokeDevice } from './http.ts'
+import { ensureSetupToken, openDatabase } from './db.ts'
+
+interface Parsed {
+  command: string
+  positionals: string[]
+  flags: Map<string, string>
+}
+
+function usage(): never {
+  console.error(`dsh-session-sync-server <命令> [选项]
+
+命令：
+  serve                      启动 HTTP API
+  token add <标签>            签发一个设备 token（只打印一次）
+  token list                 列出存活设备
+  token revoke <deviceId>    吊销某个设备 token
+
+选项：
+  --data-dir <目录>           数据目录（默认 .tmp/dev-data）
+  --host <地址>               绑定地址（默认 127.0.0.1）
+  --port <端口>               监听端口（默认 8787）
+  --max-bytes <n>             存储上限（默认 10 GiB）
+`)
+  process.exit(2)
+}
+
+/**
+ * 把 argv 解析成命令、位置参数与 `--flag value` 对。
+ * @param argv - 脚本名之后的参数。
+ * @returns 解析结果。
+ */
+function parse(argv: readonly string[]): Parsed {
+  const positionals: string[] = []
+  const flags = new Map<string, string>()
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!
+    if (argument.startsWith('--')) {
+      const value = argv[index + 1]
+      if (value === undefined || value.startsWith('--')) usage()
+      flags.set(argument.slice(2), value)
+      index += 1
+    } else {
+      positionals.push(argument)
+    }
+  }
+  const command = positionals.shift()
+  if (command === undefined) usage()
+  return { command, positionals, flags }
+}
+
+/**
+ * 执行一条命令。
+ * @param parsed - 解析后的命令行。
+ */
+async function main(parsed: Parsed): Promise<void> {
+  const dataDir = parsed.flags.get('data-dir') ?? '.tmp/dev-data'
+  const db = openDatabase(dataDir)
+  try {
+    if (parsed.command === 'token') {
+      const action = parsed.positionals[0]
+      if (action === 'add') {
+        const label = parsed.positionals[1] ?? 'device'
+        const created = createDevice(db, label)
+        console.log(JSON.stringify(created, null, 2))
+        return
+      }
+      if (action === 'list') {
+        console.log(JSON.stringify(listDevices(db), null, 2))
+        return
+      }
+      if (action === 'revoke') {
+        const deviceId = parsed.positionals[1]
+        if (deviceId === undefined) usage()
+        console.log(revokeDevice(db, deviceId) ? '已吊销' : '没有这个设备')
+        return
+      }
+      usage()
+    }
+
+    if (parsed.command === 'serve') {
+      const host = parsed.flags.get('host') ?? '127.0.0.1'
+      const port = Number(parsed.flags.get('port') ?? '8787')
+      if (!Number.isInteger(port) || port < 0 || port > 65535) usage()
+      const setup = ensureSetupToken(db)
+      writeFileSync(join(dataDir, 'setup-token'), `${setup.token}\n`, { mode: 0o600 })
+      try {
+        chmodSync(join(dataDir, 'setup-token'), 0o600)
+      } catch {
+        // Windows 可能不支持改 mode；文件本身已经写出。
+      }
+      const server = createHttpServer({ db, dataDir })
+      server.listen(port, host, () => {
+        const address = server.address()
+        const actualPort = typeof address === 'object' && address !== null ? address.port : port
+        console.log(`dsh-session-sync-server 已监听 http://${host}:${actualPort}`)
+        if (setup.created) console.log(`setup token（也写在 ${join(dataDir, 'setup-token')}）：${setup.token}`)
+      })
+      const stop = (): void => {
+        server.close(() => {
+          db.close()
+          process.exit(0)
+        })
+      }
+      process.once('SIGINT', stop)
+      process.once('SIGTERM', stop)
+      return
+    }
+
+    usage()
+  } finally {
+    if (parsed.command !== 'serve') db.close()
+  }
+}
+
+void main(parse(process.argv.slice(2))).catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error))
+  process.exit(1)
+})
