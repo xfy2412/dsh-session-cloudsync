@@ -9,7 +9,7 @@
  */
 import { chmodSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createDevice, createHttpServer, listDevices, revokeDevice } from './http.ts'
+import { createDevice, createHttpServer, listDevices, revokeDevice, DEFAULT_MAX_BYTES } from './http.ts'
 import { ensureSetupToken, openDatabase } from './db.ts'
 
 interface Parsed {
@@ -92,7 +92,9 @@ async function main(parsed: Parsed): Promise<void> {
     if (parsed.command === 'serve') {
       const host = parsed.flags.get('host') ?? '127.0.0.1'
       const port = Number(parsed.flags.get('port') ?? '8787')
+      const maxBytes = Number(parsed.flags.get('max-bytes') ?? DEFAULT_MAX_BYTES)
       if (!Number.isInteger(port) || port < 0 || port > 65535) usage()
+      if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) usage()
       const setup = ensureSetupToken(db)
       writeFileSync(join(dataDir, 'setup-token'), `${setup.token}\n`, { mode: 0o600 })
       try {
@@ -100,7 +102,7 @@ async function main(parsed: Parsed): Promise<void> {
       } catch {
         // Windows 可能不支持改 mode；文件本身已经写出。
       }
-      const server = createHttpServer({ db, dataDir })
+      const server = createHttpServer({ db, dataDir, maxBytes })
       server.listen(port, host, () => {
         const address = server.address()
         const actualPort = typeof address === 'object' && address !== null ? address.port : port

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { createDevice, createHttpServer } from '../src/http.ts'
 import { ensureSetupToken, openDatabase } from '../src/db.ts'
@@ -8,10 +9,11 @@ import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
  * 在操作系统分配的端口上启动服务。
  * @param db - 已打开的数据库。
  * @param dataDir - 服务端数据目录。
+ * @param options - 额外的服务端选项（配额等）。
  * @returns 基地址与关闭函数。
  */
-async function listen(db, dataDir) {
-  const server = createHttpServer({ db, dataDir })
+async function listen(db, dataDir, options = {}) {
+  const server = createHttpServer({ db, dataDir, ...options })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   const port = typeof address === 'object' && address !== null ? address.port : 0
@@ -122,6 +124,60 @@ test('两次创建设备绝不会拿到同一个 token', () => {
       assert.notEqual(a.token, b.token)
       assert.notEqual(a.device.deviceId, b.device.deviceId)
     } finally {
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('blob 上传、去重、HEAD/GET 与配额 507', async () => {
+  const temp = createTempHome('server-blobs')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'blob-device')
+    const { base, close } = await listen(db, temp.dataDir, { maxBytes: 300, maxBlobBytes: 200 })
+    try {
+      const auth = { authorization: `Bearer ${device.token}` }
+      const body = Buffer.from('a'.repeat(100))
+      const sha = createHash('sha256').update(body).digest('hex')
+
+      const denied = await fetch(`${base}/v1/blobs`, { method: 'POST', body })
+      assert.equal(denied.status, 401)
+
+      const created = await fetch(`${base}/v1/blobs?kind=frame`, { method: 'POST', headers: auth, body })
+      assert.equal(created.status, 201)
+      const createdBody = await created.json()
+      assert.equal(createdBody.value.sha256, sha)
+      assert.equal(createdBody.value.dedup, false)
+
+      const again = await fetch(`${base}/v1/blobs?kind=frame`, { method: 'POST', headers: auth, body })
+      assert.equal(again.status, 200)
+      assert.equal((await again.json()).value.dedup, true)
+
+      const head = await fetch(`${base}/v1/blobs/${sha}`, { method: 'HEAD', headers: auth })
+      assert.equal(head.status, 200)
+      const missing = await fetch(`${base}/v1/blobs/${'0'.repeat(64)}`, { method: 'HEAD', headers: auth })
+      assert.equal(missing.status, 404)
+
+      const got = await fetch(`${base}/v1/blobs/${sha}`, { headers: auth })
+      assert.equal(got.status, 200)
+      assert.deepEqual(Buffer.from(await got.arrayBuffer()), body)
+
+      const tooBigForBlob = await fetch(`${base}/v1/blobs`, { method: 'POST', headers: auth, body: Buffer.alloc(250, 1) })
+      assert.equal(tooBigForBlob.status, 400)
+
+      const second = await fetch(`${base}/v1/blobs`, { method: 'POST', headers: auth, body: Buffer.alloc(150, 2) })
+      assert.equal(second.status, 201)
+
+      const overQuota = await fetch(`${base}/v1/blobs`, { method: 'POST', headers: auth, body: Buffer.alloc(100, 4) })
+      assert.equal(overQuota.status, 507)
+      assert.equal((await overQuota.json()).error.code, 'quota')
+
+      const badKind = await fetch(`${base}/v1/blobs?kind=nope`, { method: 'POST', headers: auth, body: Buffer.alloc(10, 3) })
+      assert.equal(badKind.status, 400)
+    } finally {
+      await close()
       db.close()
     }
   } finally {

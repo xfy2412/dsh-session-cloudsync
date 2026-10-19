@@ -1,9 +1,12 @@
 /**
  * SQLite 表结构与打开函数。
  *
- * 服务端把元数据放 SQLite，把内容（帧、附件）放 blob 目录。
+ * 服务端把元数据放 SQLite，把内容（封帧、附件）放 blob 目录。
  * `dataset` 是单租户接缝：本部署恒写 `'default'`，以后多租户部署可以按账号
  * 给行加键，而不用改端点。
+ *
+ * 会话 manifest 以**整份 JSON** 存在 `sessions.manifest_json`；服务端不解析
+ * 事件内容，只校验形状与哈希。`revision` 是全局单调计数器，供 cursor 增量。
  *
  * @module @dsh-session-sync/server/db
  */
@@ -14,6 +17,9 @@ import { DatabaseSync } from 'node:sqlite'
 
 /** 单用户部署写入的租户键。 */
 export const DEFAULT_DATASET = 'default'
+
+/** 当前库结构版本；结构有破坏性变化时递增。 */
+const SCHEMA_VERSION = 2
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -35,28 +41,17 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS sessions (
   dataset TEXT NOT NULL,
   session_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
   format_version INTEGER NOT NULL,
   last_seq INTEGER NOT NULL,
+  frame_count INTEGER NOT NULL,
+  head_chain_hash TEXT NOT NULL,
+  manifest_json TEXT NOT NULL,
+  manifest_digest TEXT NOT NULL,
+  revision INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
   PRIMARY KEY (dataset, session_id)
-);
-
-CREATE TABLE IF NOT EXISTS frames (
-  sha256 TEXT PRIMARY KEY,
-  bytes INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS session_frames (
-  dataset TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  ordinal INTEGER NOT NULL,
-  sha256 TEXT NOT NULL,
-  seq_from INTEGER NOT NULL,
-  seq_to INTEGER NOT NULL,
-  PRIMARY KEY (dataset, session_id, ordinal),
-  FOREIGN KEY (sha256) REFERENCES frames (sha256)
 );
 
 CREATE TABLE IF NOT EXISTS blobs (
@@ -77,9 +72,10 @@ CREATE TABLE IF NOT EXISTS leases (
 CREATE TABLE IF NOT EXISTS tombstones (
   dataset TEXT NOT NULL,
   session_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
   deleted_at INTEGER NOT NULL,
   deleted_by TEXT NOT NULL,
-  PRIMARY KEY (dataset, session_id)
+  PRIMARY KEY (dataset, session_id, created_at)
 );
 `
 
@@ -91,6 +87,8 @@ export interface ServerDb {
 
 /**
  * 打开（并初始化）服务端数据库。
+ *
+ * 结构版本落后时只重建会话/租约/墓碑相关表；设备与 blob 记录保留。
  * @param dataDir - 存放 `db.sqlite` 的目录。
  * @returns 已打开的数据库。
  */
@@ -99,6 +97,13 @@ export function openDatabase(dataDir: string): ServerDb {
   const handle = new DatabaseSync(join(dataDir, 'db.sqlite'))
   handle.exec('PRAGMA journal_mode = WAL')
   handle.exec('PRAGMA foreign_keys = ON')
+  const versionRow = handle.prepare('PRAGMA user_version').get() as { user_version?: number } | undefined
+  const version = Number(versionRow?.user_version ?? 0)
+  if (version < SCHEMA_VERSION) {
+    // M2 之前没有真实部署；旧结构直接重建（设备、blob、meta 不受影响）。
+    handle.exec('DROP TABLE IF EXISTS session_frames; DROP TABLE IF EXISTS frames; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS leases; DROP TABLE IF EXISTS tombstones;')
+    handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+  }
   handle.exec(SCHEMA)
   return { handle, close: () => handle.close() }
 }
@@ -135,4 +140,77 @@ export function ensureSetupToken(db: ServerDb): { token: string; created: boolea
   const token = randomBytes(32).toString('base64url')
   writeMeta(db, 'setup_token', token)
   return { token, created: true }
+}
+
+/**
+ * 读取当前全局 revision。
+ * @param db - 已打开的数据库。
+ * @returns 当前值；未初始化时为 0。
+ */
+export function readRevision(db: ServerDb): number {
+  return Number(readMeta(db, 'revision') ?? '0')
+}
+
+/**
+ * 把全局 revision 加一并返回新值。
+ * @param db - 已打开的数据库。
+ * @returns 新 revision。
+ */
+export function bumpRevision(db: ServerDb): number {
+  const row = db.handle
+    .prepare("INSERT INTO meta (key, value) VALUES ('revision', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(meta.value AS INTEGER) + 1 AS TEXT) RETURNING CAST(value AS INTEGER) AS revision")
+    .get() as { revision?: number } | undefined
+  return Number(row?.revision ?? 1)
+}
+
+/**
+ * 已占用的 blob 字节总数。
+ * @param db - 已打开的数据库。
+ * @returns 唯一 blob 的字节和。
+ */
+export function usedBlobBytes(db: ServerDb): number {
+  const row = db.handle.prepare('SELECT COALESCE(SUM(bytes), 0) AS total FROM blobs').get() as { total?: number } | undefined
+  return Number(row?.total ?? 0)
+}
+
+/**
+ * 在写事务里执行一个函数。
+ * @param db - 已打开的数据库。
+ * @param fn - 要执行的操作。
+ * @returns 操作结果。
+ */
+export function withTransaction<T>(db: ServerDb, fn: () => T): T {
+  db.handle.exec('BEGIN IMMEDIATE')
+  try {
+    const result = fn()
+    db.handle.exec('COMMIT')
+    return result
+  } catch (error) {
+    db.handle.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/**
+ * 查一个 blob 的登记行。
+ * @param db - 已打开的数据库。
+ * @param sha256 - 内容哈希。
+ * @returns 字节数与类别，或 undefined。
+ */
+export function blobRecord(db: ServerDb, sha256: string): { bytes: number; kind: string } | undefined {
+  const row = db.handle.prepare('SELECT bytes, kind FROM blobs WHERE sha256 = ?').get(sha256) as { bytes?: number; kind?: string } | undefined
+  return row === undefined ? undefined : { bytes: Number(row.bytes), kind: String(row.kind) }
+}
+
+/**
+ * 登记一个已存储的 blob。
+ * @param db - 已打开的数据库。
+ * @param sha256 - 内容哈希。
+ * @param bytes - 字节数。
+ * @param kind - 类别（frame / attachment）。
+ */
+export function recordBlob(db: ServerDb, sha256: string, bytes: number, kind: string): void {
+  db.handle
+    .prepare('INSERT OR IGNORE INTO blobs (sha256, bytes, kind, created_at) VALUES (?, ?, ?, ?)')
+    .run(sha256, bytes, kind, Date.now())
 }
