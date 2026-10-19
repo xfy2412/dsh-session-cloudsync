@@ -8,12 +8,11 @@
  * @module @dsh-session-sync/server/http
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { PROTOCOL_VERSION, errorBody, type DeviceRef } from '../../shared/src/protocol.ts'
 import { SyncError, statusOf } from '../../shared/src/wire.ts'
 import { deriveMasterKey, newSalt } from '../../shared/src/crypto.ts'
-import { ADMIN_PAGE } from './admin-page.ts'
-import { SETUP_PAGE } from './setup-page.ts'
 import { hasBlob, putBlob, readBlob } from './blobs.ts'
 import {
   DEFAULT_DATASET,
@@ -52,6 +51,41 @@ export const DEFAULT_MAX_BYTES = 10 * 1024 * 1024 * 1024
 
 /** 默认单个 blob 上限：32 MiB。 */
 export const DEFAULT_MAX_BLOB_BYTES = 32 * 1024 * 1024
+
+/**
+ * 读一个内置资源；缺失时返回 undefined（打包漏文件时仍能启动）。
+ * @param url - 资源路径。
+ * @returns 字节内容或 undefined。
+ */
+function readAsset(url: URL): Buffer | undefined {
+  try {
+    return readFileSync(url)
+  } catch {
+    return undefined
+  }
+}
+
+/** 页面用的深色 logo 与 favicon。 */
+const LOGO_SVG = readAsset(new URL('../../../assets/logo-dark.svg', import.meta.url))
+const FAVICON_SVG = readAsset(new URL('../../../assets/favicon.svg', import.meta.url))
+
+/**
+ * 读一个文本资源；缺失时给出明确错误。
+ * @param url - 资源路径。
+ * @param label - 报错用的名字。
+ * @returns 文本内容。
+ */
+function readText(url: URL, label: string): string {
+  try {
+    return readFileSync(url, 'utf8')
+  } catch {
+    throw new Error(`缺少页面文件：${label}`)
+  }
+}
+
+/** 管理台与初始化向导的单页（`packages/server/web/*.html`）。 */
+const ADMIN_PAGE = readText(new URL('../web/admin.html', import.meta.url), 'admin.html')
+const SETUP_PAGE = readText(new URL('../web/setup.html', import.meta.url), 'setup.html')
 
 /** {@link createHttpServer} 的选项。 */
 export interface ServerOptions {
@@ -907,6 +941,16 @@ export function createHttpServer(options: ServerOptions): Server {
       }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
       res.end(SETUP_PAGE)
+      return
+    }
+    if (path === '/logo.svg' && LOGO_SVG !== undefined) {
+      res.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=3600' })
+      res.end(LOGO_SVG)
+      return
+    }
+    if (path === '/favicon.svg' && FAVICON_SVG !== undefined) {
+      res.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=86400' })
+      res.end(FAVICON_SVG)
       return
     }
     const route = routes.find((candidate) => candidate.method === req.method && candidate.path.test(path))

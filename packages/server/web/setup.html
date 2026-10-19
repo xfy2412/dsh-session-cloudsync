@@ -1,17 +1,9 @@
-/**
- * 首次启动初始化向导（单页、无构建、无外部资源）。
- *
- * 步骤：初始化密钥 → 设置密码 → 设置配额 → 第一台设备（可跳过）→ 完成。
- *
- * @module @dsh-session-sync/server/setup-page
- */
-
-/** 初始化向导 HTML。 */
-export const SETUP_PAGE = `<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>初始化 dsh-session-sync</title>
 <style>
   :root { color-scheme: dark; }
@@ -42,6 +34,7 @@ export const SETUP_PAGE = `<!doctype html>
 </head>
 <body>
 <div class="card">
+  <img src="/logo.svg" width="36" height="36" alt="" style="margin-bottom:10px">
   <h1>初始化 dsh-session-sync</h1>
   <p class="muted">首次使用需要设置管理密码、存储配额，并可选地创建第一台设备。</p>
   <div class="steps">
@@ -201,4 +194,4 @@ fetch('/setup/state').then((response) => response.json()).then((payload) => {
 }).catch(() => {})
 </script>
 </body>
-</html>`
+</html>

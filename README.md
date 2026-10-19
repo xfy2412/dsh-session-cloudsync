@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="dsh-session-sync" width="96">
+  </picture>
+</p>
+
 # dsh-session-sync
 
 给 DeepSeek Harness（DSH）做的**会话云同步**：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。
