@@ -1,0 +1,14 @@
+{
+  "name": "dsh-session-sync-m3-probe",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "M3 探针：验证 SessionHandle 事件级读写在两个会话间无信息丢失。",
+  "main": "index.js",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

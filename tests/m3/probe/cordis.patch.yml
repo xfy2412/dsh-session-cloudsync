@@ -1,0 +1,3 @@
+- insert:
+    - id: session-sync-m3-probe
+      name: dsh-session-sync-m3-probe

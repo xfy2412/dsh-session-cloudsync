@@ -2,6 +2,8 @@
 
 > 状态：M2 服务端已实现 `/v1/health`、设备 token、`/v1/blobs`、租约、append、墓碑、cursor、manifest/帧引用读取；
 > 管理台（cookie 会话 + 只读页面）已实现。
+>
+> **M3 变更（设计已定，代码待落）**：同步单位由原始帧改为**连续事件批次**，`frames` 相关字段/端点将统一更名为 `batches`；差异见文末「M3 目标语义」。
 
 ## 认证
 
@@ -117,9 +119,21 @@
 | GET | `/admin/devices` | 设备列表（最后在线） |
 | POST | `/admin/devices` | 签发设备 token（只返回一次） |
 | DELETE | `/admin/devices/:id` | 吊销设备 token |
-| GET | `/admin/sessions` | 会话元数据列表（id/代际/帧数/最后更新/租约/墓碑） |
+| GET | `/admin/sessions` | 会话元数据列表（id/代际/批次数/最后更新/租约/墓碑） |
 
 首版管理台不提供内容读取；会话预览（需要“允许服务器解密”）是 P2。根路径 `/` 会重定向到 `/admin`。
+
+## M3 目标语义（事件批次）
+
+当前 `/v1` 实现仍按帧命名；M3 落地时统一改名为批次，语义变化：
+
+- `SealedFrameRef` → `SealedBatchRef`：`index / seqFrom / seqTo / count / chainHash / blobSha256`；
+- `chainHash` = 批次内事件的**规范 JSON**（键序稳定）sha256，不再依赖物理帧字节；
+- `frames?from&limit` → `batches?from&limit`，按批次引用分页；
+- append：`baseIndex + baseChainHash` 语义不变，提交的是“新增/替换的批次”；
+- manifest 摘要：`frameCount` → `batchCount`；header 元数据单独 sealed 上传（`formatVersion/createdAt/isSeeded/delegationDepth/agentPreset/inheritedEventCount`），`cwd` 不进 manifest；
+- 客户端对齐：manifest 的 `[seqFrom, seqTo]` 为权威；本地已有完整前缀不下载；跨界批次下载后校验重叠段，只追加缺的后半段；
+- 删除：协议不支持删除单个事件；已同步的脏内容用 fork + 墓碑。
 
 ## 错误码
 
