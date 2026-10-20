@@ -67,6 +67,8 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 
 会话头（`formatVersion`/`createdAt`/`isSeeded`/`delegationDepth`/`agentPreset`，以及 seeded 会话的 `inheritedEventCount`）作为单独的 **sealed header** 上传，manifest 只记哈希；`cwd` 不进入 manifest 明文，由设备在解密后映射为本地路径再 `create`。这样同一会话在不同设备上的链身份不受本地路径影响。
 
+开放尾（`tailOpen`/`safeThroughSeq`）、拉取崩溃恢复（apply journal / 启动 reconcile）与客户端防误操作（composer block / 列表拦截）见 [SYNC-SAFETY.md](./SYNC-SAFETY.md)。
+
 ## 删除、修复与分叉
 
 会话日志是 append-only，同步协议**没有删除单个事件**的语义：

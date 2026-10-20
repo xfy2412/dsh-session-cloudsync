@@ -15,7 +15,7 @@
 
 ## 实测：同 id、跨 home 的事件 round-trip
 
-1. 从 source home 读最大的非 seeded 会话（`session-9ce9156e-…`，261 事件）→ 写 `{header, events}`（461,351 字节）；
+1. 从 source home 读一条 **261 事件**的非 seeded 会话 → 写 `{header, events}`（461,351 字节）；
 2. 在第二个空 home 里用**相同 session id** `create` + 分批 `append(events)` + `flush`；
 3. 重新 `open(id,'read')` 读回，逐事件做键序稳定的 JSON 比较；
 4. 再用 `sessionQuery.readSession(id)` 冷读一次。
@@ -23,7 +23,7 @@
 结果：
 
 ```
-[m3-probe] import id=session-9ce9156e-… events=261 copied=261 equal=true
+[m3-probe] import id=<source-id> events=261 copied=261 equal=true
 [m3-probe] query.events=261 queryEqual=true firstDiff=none
 ```
 

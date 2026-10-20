@@ -14,7 +14,7 @@
 
 给 DeepSeek Harness（DSH）做的**会话云同步**：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。
 
-> **状态：脚手架**。`packages/shared` 的帧工具与加密原语、`packages/server` 的健康检查与设备 token、`packages/plugin` 的加载骨架已经可跑；同步引擎与 M0 实验尚未开始。
+> **状态：M1/M2 已完成，M3（事件批次推拉）进行中。** 帧工具/加密、服务端（含管理台与初始化）、M0 免重启 ingest 已经可跑；M3 的传输模型与持久化边界探针已定，插件同步层代码未开始。里程碑见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 支持版本
 
@@ -64,8 +64,10 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 
 ## 文档
 
+- [docs/ROADMAP.md](docs/ROADMAP.md)：M0–M4 里程碑、当前状态与文档地图。
 - [docs/DESIGN.md](docs/DESIGN.md)：范围、数据分层、并发与加密的取舍。
 - [docs/PROTOCOL.md](docs/PROTOCOL.md)：服务端端点与不变量。
+- [docs/SYNC-SAFETY.md](docs/SYNC-SAFETY.md)：开放尾与安全边界、拉取原子性、客户端防误操作。
 - [tests/README.md](tests/README.md)：临时 home 与夹具约定。
 
 ## 许可证

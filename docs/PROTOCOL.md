@@ -132,6 +132,7 @@
 - `frames?from&limit` → `batches?from&limit`，按批次引用分页；
 - append：`baseIndex + baseChainHash` 语义不变，提交的是“新增/替换的批次”；
 - manifest 摘要：`frameCount` → `batchCount`；header 元数据单独 sealed 上传（`formatVersion/createdAt/isSeeded/delegationDepth/agentPreset/inheritedEventCount`），`cwd` 不进 manifest；
+- 新增 `tailOpen: boolean` 与 `safeThroughSeq: number`：`tailOpen` 表示尾巴是否开放；`safeThroughSeq` 是最后一个闭合事件的 seq。读者只 apply `seqTo <= safeThroughSeq` 的批次，开放尾仅作备份，不写入本地可 resume 的会话；
 - 客户端对齐：manifest 的 `[seqFrom, seqTo]` 为权威；本地已有完整前缀不下载；跨界批次下载后校验重叠段，只追加缺的后半段；
 - 删除：协议不支持删除单个事件；已同步的脏内容用 fork + 墓碑。
 
