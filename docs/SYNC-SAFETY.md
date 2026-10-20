@@ -74,9 +74,9 @@ DSH 的 `append` 不是多事件事务：崩溃可能留下半个 turn；持久�
 3. `open(id,'write')` 或 `create(header)`；
 4. 尽量一次 `append` 整个 turn；太大才分批，journal 记 `nextSeq`；
 5. `flush()`；
-6. 更新同步状态与 journal；
-7. **最后才 `attachSession`**；
-8. 清除 journal。
+6. 清除 pending（事件已耐久）；
+7. **整轮 apply 完成后统一 `attachSession`**：子代理先、根最后；这样前端列表不会在闭包只同步一半时刷新；
+8. 挂载失败时 revision 不前进，下一轮会因本地已是最新而重试挂载。
 
 启动时对未完成 journal 做 reconcile：
 

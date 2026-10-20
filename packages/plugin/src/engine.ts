@@ -161,7 +161,10 @@ export interface PullDeps<Session> {
   readonly fetch?: typeof fetch
   /** 在第一次本地写入之前落盘 pending 记录。 */
   readonly beforeApply?: (sessionId: string, targetSeq: number) => Promise<void>
-  /** 本地追加、flush、attach 全部成功后清除 pending。 */
+  /**
+   * 本地追加/flush 完成后清除 pending。`pullOnce` 会把工作区挂载延后到
+   * 整轮 apply 结束，因此这里不代表已经 attach。
+   */
   readonly afterApply?: (sessionId: string) => Promise<void>
 }
 
@@ -955,11 +958,23 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
 
   const reports: PullSessionReport[] = []
   let revision = state.revision
+  // 拉取期间只收集待挂载会话，等整轮 apply 完再挂到工作区；这样前端不会在
+  // 子代理/根会话只到一半时刷新列表。pending 在 append+flush 后即清除，
+  // 挂载失败时下一轮会因本地已是最新而重试挂载。
+  const attachments: string[] = []
+  const applyDeps: PullDeps<Session> = deps.attach === undefined
+    ? deps
+    : {
+        ...deps,
+        attach: async (sessionId: string): Promise<void> => {
+          attachments.push(sessionId)
+        },
+      }
 
   // 上次崩溃留下的 pending：先把它补完，再继续游标。
   if (state.pending !== undefined) {
     try {
-      reports.push(await pullSession(deps, fetchImpl, base, master, state.pending.sessionId))
+      reports.push(await pullSession(applyDeps, fetchImpl, base, master, state.pending.sessionId))
       await deps.afterApply?.(state.pending.sessionId)
     } catch (error: unknown) {
       const classified = classifySyncError(error)
@@ -1002,7 +1017,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         continue
       }
       try {
-        reports.push(await pullSession(deps, fetchImpl, base, master, item.sessionId, item.loaded))
+        reports.push(await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, item.loaded))
       } catch (error: unknown) {
         const classified = classifySyncError(error)
         deps.logger?.warn(`dsh-session-sync: 拉取 ${item.sessionId} 失败：${classified.message}`)
@@ -1026,6 +1041,20 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
     }
     revision = maxRevision
     if (revision <= state.revision) break
+  }
+
+  if (deps.attach !== undefined) {
+    const unique = [...new Set(attachments)]
+    for (const sessionId of unique) {
+      try {
+        await deps.attach(sessionId)
+      } catch (error: unknown) {
+        const classified = classifySyncError(error)
+        deps.logger?.warn(`dsh-session-sync: 挂载 ${sessionId} 失败：${classified.message}`)
+        reports.push({ sessionId, status: 'error', error: classified.message, kind: classified.kind })
+        return { configured: true, sessions: reports, revision: state.revision }
+      }
+    }
   }
 
   return { configured: true, sessions: reports, revision }

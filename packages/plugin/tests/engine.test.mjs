@@ -277,6 +277,7 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
       assert.deepEqual(pushed.sessions.map((entry) => entry.sessionId), [child.id, root.id])
 
       const storeB = fakeStore(undefined)
+      const attached = []
       const pulled = await pullOnce({
         persistence: storeB,
         sessions,
@@ -287,12 +288,23 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
           workspaceAllowlist: ['D:/work', 'D:/b'],
         },
         workspacePath: 'D:/b',
-        attach: async () => {},
+        attach: async (id) => {
+          attached.push({
+            id,
+            created: storeB.created.length,
+            events: storeB.sessions.get(id)?.events.length ?? -1,
+          })
+        },
       }, { revision: 0 })
 
       assert.equal(pulled.configured, true)
       assert.deepEqual(storeB.created, [child.id, root.id])
       assert.deepEqual(pulled.sessions.map((entry) => entry.sessionId), [child.id, root.id])
+      // 所有会话先 apply 完，最后才挂载；子代理先于根，但两者挂载时已有完整闭包。
+      assert.deepEqual(attached, [
+        { id: child.id, created: 2, events: 3 },
+        { id: root.id, created: 2, events: 2 },
+      ])
     } finally {
       await close()
       db.close()
