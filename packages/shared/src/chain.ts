@@ -106,6 +106,8 @@ export interface ManifestInput {
   readonly createdAt: number
   readonly updatedAt: number
   readonly frames: readonly SealedFrameRef[]
+  readonly tailOpen?: boolean
+  readonly safeThroughSeq?: number
 }
 
 /**
@@ -121,11 +123,14 @@ export function buildManifest(input: ManifestInput): SessionManifest {
     if (frame.sealedVersion < 1) throw new Error(`manifest 第 ${position} 条的封帧版本非法`)
   })
   const last = input.frames[input.frames.length - 1]
+  const lastSeq = last === undefined ? -1 : last.seqTo
   return {
     sessionId: input.sessionId,
     formatVersion: input.formatVersion,
     createdAt: input.createdAt,
-    lastSeq: last === undefined ? -1 : last.seqTo,
+    lastSeq,
+    ...input.tailOpen === undefined ? {} : { tailOpen: input.tailOpen },
+    ...input.safeThroughSeq === undefined ? {} : { safeThroughSeq: input.safeThroughSeq },
     frames: input.frames,
     updatedAt: input.updatedAt,
   }
@@ -143,6 +148,9 @@ export function assertManifest(manifest: SessionManifest): void {
   })
   const last = manifest.frames[manifest.frames.length - 1]
   if ((last === undefined ? -1 : last.seqTo) !== manifest.lastSeq) throw new Error('manifest 的 lastSeq 与最后一帧不一致')
+  const safe = manifest.safeThroughSeq ?? manifest.lastSeq
+  if (!Number.isSafeInteger(safe) || safe < -1 || safe > manifest.lastSeq) throw new Error('manifest 的 safeThroughSeq 非法')
+  if (manifest.tailOpen !== undefined && typeof manifest.tailOpen !== 'boolean') throw new Error('manifest 的 tailOpen 非法')
 }
 
 /** 把值规整成键序稳定的 JSON 形状。 */
@@ -176,6 +184,8 @@ export function manifestDigest(manifest: SessionManifest): string {
     formatVersion: manifest.formatVersion,
     createdAt: manifest.createdAt,
     lastSeq: manifest.lastSeq,
+    tailOpen: manifest.tailOpen ?? null,
+    safeThroughSeq: manifest.safeThroughSeq ?? manifest.lastSeq,
     frames: manifest.frames.map((frame) => ({
       index: frame.index,
       chainHash: frame.chainHash,

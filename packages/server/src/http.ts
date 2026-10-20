@@ -253,6 +253,8 @@ function parseAppend(body: Record<string, unknown>): {
   createdAt: number
   formatVersion: number
   frames: SealedFrameRef[]
+  tailOpen?: boolean
+  safeThroughSeq?: number
 } {
   if (!Number.isSafeInteger(body.baseIndex)) throw new SyncError('bad-request', 'baseIndex 必须是整数')
   const baseChainHash = body.baseChainHash
@@ -262,12 +264,18 @@ function parseAppend(body: Record<string, unknown>): {
   if (!Number.isSafeInteger(body.createdAt) || Number(body.createdAt) < 0) throw new SyncError('bad-request', 'createdAt 必须是非负整数')
   if (!Number.isSafeInteger(body.formatVersion) || Number(body.formatVersion) < 1) throw new SyncError('bad-request', 'formatVersion 必须是正整数')
   if (!Array.isArray(body.frames)) throw new SyncError('bad-request', 'frames 必须是数组')
+  if (body.tailOpen !== undefined && typeof body.tailOpen !== 'boolean') throw new SyncError('bad-request', 'tailOpen 必须是布尔值')
+  if (body.safeThroughSeq !== undefined && (!Number.isSafeInteger(body.safeThroughSeq) || Number(body.safeThroughSeq) < -1)) {
+    throw new SyncError('bad-request', 'safeThroughSeq 必须是不小于 -1 的整数')
+  }
   return {
     baseIndex: Number(body.baseIndex),
     baseChainHash: baseChainHash as string | null,
     createdAt: Number(body.createdAt),
     formatVersion: Number(body.formatVersion),
     frames: body.frames as SealedFrameRef[],
+    ...body.tailOpen === undefined ? {} : { tailOpen: body.tailOpen },
+    ...body.safeThroughSeq === undefined ? {} : { safeThroughSeq: Number(body.safeThroughSeq) },
   }
 }
 

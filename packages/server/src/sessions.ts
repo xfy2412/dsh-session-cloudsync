@@ -56,6 +56,8 @@ export interface AppendInput {
   readonly createdAt: number
   readonly formatVersion: number
   readonly frames: readonly SealedFrameRef[]
+  readonly tailOpen?: boolean
+  readonly safeThroughSeq?: number
 }
 
 /** append / delete 之后返回的会话摘要。 */
@@ -173,13 +175,29 @@ export function releaseLease(db: ServerDb, sessionId: string, deviceId: string):
  * @param frames - 合并后的完整帧列表。
  * @returns manifest 与摘要。
  */
-function manifestOf(sessionId: string, formatVersion: number, createdAt: number, updatedAt: number, frames: readonly SealedFrameRef[]): {
+function manifestOf(
+  sessionId: string,
+  formatVersion: number,
+  createdAt: number,
+  updatedAt: number,
+  frames: readonly SealedFrameRef[],
+  tailOpen?: boolean,
+  safeThroughSeq?: number,
+): {
   manifest: SessionManifest
   digest: string
   headChainHash: string
 } {
   assertChain(toChain(frames))
-  const manifest = buildManifest({ sessionId, formatVersion, createdAt, updatedAt, frames })
+  const manifest = buildManifest({
+    sessionId,
+    formatVersion,
+    createdAt,
+    updatedAt,
+    frames,
+    ...tailOpen === undefined ? {} : { tailOpen },
+    ...safeThroughSeq === undefined ? {} : { safeThroughSeq },
+  })
   return { manifest, digest: manifestDigest(manifest), headChainHash: frames[frames.length - 1]!.chainHash }
 }
 
@@ -235,7 +253,15 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
     }
     input.frames.forEach((frame, offset) => assertRef(frame, (row === undefined || replacingLifecycle ? 0 : input.baseIndex + 1) + offset))
 
-    const { manifest, digest, headChainHash } = manifestOf(input.sessionId, formatVersion, createdAt, now, combined)
+    const { manifest, digest, headChainHash } = manifestOf(
+      input.sessionId,
+      formatVersion,
+      createdAt,
+      now,
+      combined,
+      input.tailOpen,
+      input.safeThroughSeq,
+    )
     const revision = bumpRevision(db)
     db.handle
       .prepare(`INSERT INTO sessions (dataset, session_id, created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at)

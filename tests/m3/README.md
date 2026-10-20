@@ -66,3 +66,13 @@ SessionPersistenceCorruptionError: current-generation delivery marker names the 
 - header（`formatVersion/createdAt/isSeeded/delegationDepth/agentPreset/inheritedEventCount`）走带外 sealed header；`cwd` 由设备本地映射，不进入 manifest 明文；
 - 删除/修复：协议不删除单个事件；未同步的脏尾不上传或走独立修复；已同步的脏内容走 **fork + 墓碑**；
 - 帧级读写（原始日志导出/恢复）是独立的后续功能，不参与同步链。
+
+## M3 实现状态
+
+- 推送：枚举 → flush → 读事件 → 远端 manifest → 增量批次 → 上传 → 租约/append；
+- 拉取：`/v1/cursor` → manifest → 下载 header/批次 → 只 apply 到 `safeThroughSeq`；
+- 安全字段：append 请求已携带 `tailOpen` / `safeThroughSeq`，服务端存进 manifest；
+- 真实双 home 验收：临时服务端 + 两个临时 DSH home，合成会话 **11 个事件**在 A/B 逐事件一致（header 的 `cwd` 按设备映射，符合设计）；
+- 开放尾验收：120 个闭合事件 + 1 个开放事件推送后，新设备只 apply 到 `safeThroughSeq=119`；闭合事件到达后才补到 121；
+- 断网验收：服务端停止后宿主继续运行，推送只记错误（引擎离线单测覆盖）；
+- 尚未实现：apply journal、手动按钮/状态 UI、`frames → batches` 重命名。

@@ -1,6 +1,6 @@
 # 同步安全边界与客户端防误操作
 
-> 状态：设计已定，M3/M4 实现前。文中的源码结论来自 DSH `0.2.1-rc.2`；客户端部分已在临时 GUI 上验证 DOM，尚未提交 UI 改动。
+> 状态：设计已定；M3 的安全边界（`tailOpen` / `safeThroughSeq`）与拉取已经落地，客户端防误操作（composer block / 列表拦截）留在 M4。文中的源码结论来自 DSH `0.2.1-rc.2`；客户端部分已在临时 GUI 上验证 DOM，尚未提交 UI 改动。
 
 ## 1. 为什么开放尾只能备份，不能直接给远端 resume
 
@@ -154,6 +154,7 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 ## 6. 已知限制与待验证
 
 - 客户端 projection 在列表行里的可见性还没端到端验证；
+- **apply journal 尚未实现**：M3 拉取用 revision 门控（失败不前进、重启从 0 重扫），本地最后 `seq` 保证幂等；崩溃后到下一次 reconcile 前若用户 resume，仍可能写入 closers 造成冲突；
 - `data-row-key` 是应用内部属性，不是公开 API；捕获拦截依赖它，升级时要回归；
 - 用户可能在 reconcile 完成前通过深链/其他入口打开会话；composer block 仍能阻止继续，但“打开”本身是否触发 agent resume 还没端到端验证；
 - 官方没有“禁用会话行”的插槽；可向上游提需求，M4 先用拦截方案；

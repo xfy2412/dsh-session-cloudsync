@@ -10,5 +10,20 @@
         enabled: true
         # 自部署服务端地址，例如 http://127.0.0.1:8787；空表示未配置。
         serverUrl: ''
-        # 本设备在台账/日志里的短标签；空表示首次同步时生成（PC-1 之类）。
+        # 管理台/CLI 签发的设备 token；空表示未配置。
+        token: ''
+        # 同步口令；不落盘。
+        passphrase: ''
+        # 可选：base64 的 16 字节 KDF 盐；空表示由 serverUrl 派生。
+        salt: ''
+        # 本设备在台账/日志里的短标签；空表示未使用。
         deviceName: ''
+        # 是否按间隔自动推送；false 时只做一次启动推送。
+        autoSync: true
+        # 自动推送间隔（毫秒）。
+        intervalMs: 60000
+        # 是否同步子代理会话。
+        includeSubagents: false
+        # 单批最多事件数 / 规范 JSON 字节数。
+        batchEvents: 50
+        batchBytes: 262144
