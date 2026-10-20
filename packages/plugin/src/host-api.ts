@@ -8,7 +8,7 @@
  */
 import { classifySyncError } from './engine.ts'
 import type { SyncRunResult } from './controller.ts'
-import type { SetupInfo, SyncStatus } from './status.ts'
+import type { SetupInfo, SyncStatus, SyncWorkspaceList } from './status.ts'
 
 /** 宿主注入的控制面。 */
 export interface SyncControl {
@@ -16,6 +16,8 @@ export interface SyncControl {
   status(): SyncStatus
   /** 非敏感配置，供首启/设置页读取。 */
   setup(): SetupInfo
+  /** 同步列表：工作区、会话计数与当前选中项。 */
+  workspaces(): Promise<SyncWorkspaceList>
   /** 手动触发一轮同步；已在运行时返回 `already-running`。 */
   syncNow(): Promise<SyncRunResult>
 }
@@ -57,6 +59,22 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async () => json({ ok: true, value: control.setup() }),
+    },
+    {
+      path: '/api/session-sync/workspaces',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => {
+        try {
+          return json({ ok: true, value: await control.workspaces() })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
     },
     {
       path: '/api/session-sync/sync',

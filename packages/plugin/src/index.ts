@@ -13,6 +13,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { join } from 'node:path'
 import { SyncController } from './controller.ts'
+import { buildSessionTree, pathAllowed, pathKeyOf } from './closure.ts'
 import {
   pullOnce,
   syncOnce,
@@ -25,7 +26,7 @@ import {
 } from './engine.ts'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
-import type { SetupInfo } from './status.ts'
+import type { SetupInfo, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
 export const name = 'dsh-session-sync'
@@ -49,11 +50,13 @@ export interface Config {
   deviceName?: string
   /** 拉取会话时挂载的本地工作区路径；空表示只推送不拉取。 */
   workspacePath?: string
+  /** 允许同步的工作区路径；空数组表示未配置、暂不同步任何会话。 */
+  workspaceAllowlist?: string[]
   /** 是否自动按间隔推送，默认 true；关闭后只做一次启动推送。 */
   autoSync?: boolean
   /** 自动推送间隔（毫秒），默认 60000，最小 1000。 */
   intervalMs?: number
-  /** 是否同步子代理会话，默认 false。 */
+  /** 是否同步子代理会话，默认 true。 */
   includeSubagents?: boolean
   /** 单批最多事件数，默认 50。 */
   batchEvents?: number
@@ -70,9 +73,10 @@ export const Config: z<Config> = z.object({
   salt: z.string().default(''),
   deviceName: z.string().default(''),
   workspacePath: z.string().default(''),
+  workspaceAllowlist: z.array(z.string()).default([]),
   autoSync: z.boolean().default(true),
   intervalMs: z.number().min(1000).default(60000),
-  includeSubagents: z.boolean().default(false),
+  includeSubagents: z.boolean().default(true),
   batchEvents: z.number().min(1).default(50),
   batchBytes: z.number().min(1024).default(256 * 1024),
 })
@@ -82,12 +86,17 @@ type LiveSession = NonNullable<ReturnType<Context['sessions']['get']>>
 
 /** workspace 服务的最小接口（类型包不在本插件依赖里）。 */
 interface WorkspaceLike {
+  readonly id: string
+  readonly path: string
+  readonly title: string
+  readonly sessionIds: readonly string[]
   attachSession(sessionId: SessionId): Promise<void>
 }
 
 interface WorkspaceRegistryLike {
   resolveByPath(path: string): Promise<WorkspaceLike | undefined>
   create(path: string, title: string): Promise<WorkspaceLike>
+  list?(): readonly WorkspaceLike[]
 }
 
 /** `ctx.connection` 的最小结构（类型包不在本插件依赖里）。 */
@@ -116,6 +125,16 @@ function statePathOf(ctx: Context): string | undefined {
 }
 
 /**
+ * 从路径取一个显示标题。
+ * @param path - 工作区路径。
+ * @returns 最后一段；路径为空时返回原值。
+ */
+function titleOfPath(path: string): string {
+  const parts = path.split(/[\\/]/u).filter((part) => part !== '')
+  return parts.at(-1) ?? path
+}
+
+/**
  * 注册插件。
  * @param ctx - 插件上下文；所有注册都随该 fiber 销毁。
  * @param config - 服务端、凭据与批次参数。
@@ -135,13 +154,15 @@ export function apply(ctx: Context, config: Config): void {
   const token = config.token ?? ''
   const passphrase = config.passphrase ?? ''
   const intervalMs = config.intervalMs ?? 60000
+  const workspaceAllowlist = [...config.workspaceAllowlist ?? []].filter((path) => path.trim() !== '')
 
   const engineConfig: EngineConfig = {
     serverUrl,
     token,
     passphrase,
     ...config.salt === undefined || config.salt === '' ? {} : { salt: config.salt },
-    includeSubagents: config.includeSubagents === true,
+    includeSubagents: config.includeSubagents !== false,
+    workspaceAllowlist,
     batchEvents: config.batchEvents ?? 50,
     batchBytes: config.batchBytes ?? 256 * 1024,
   }
@@ -185,6 +206,7 @@ export function apply(ctx: Context, config: Config): void {
     if (serverUrl.trim() === '') return { configured: false, reason: 'serverUrl 未配置' }
     if (token.trim() === '') return { configured: false, reason: 'token 未配置' }
     if (passphrase === '') return { configured: false, reason: 'passphrase 未配置' }
+    if (workspaceAllowlist.length === 0) return { configured: false, reason: 'workspaceAllowlist 未配置' }
     return { configured: true }
   }
 
@@ -242,17 +264,73 @@ export function apply(ctx: Context, config: Config): void {
       serverUrl,
       deviceName: config.deviceName ?? '',
       workspacePath,
+      workspaceAllowlist,
+      allowlistConfigured: workspaceAllowlist.length > 0,
       autoSync: config.autoSync !== false,
       intervalMs,
-      includeSubagents: config.includeSubagents === true,
+      includeSubagents: config.includeSubagents !== false,
       hasToken: token.trim() !== '',
       hasPassphrase: passphrase !== '',
+    }
+  }
+
+  const workspaces = async (): Promise<SyncWorkspaceList> => {
+    const snapshots = await ctx.sessionPersistence.list()
+    const tree = buildSessionTree(snapshots)
+    const groups = new Map<string, { path: string; rootSessions: number; subagentSessions: number }>()
+    for (const entry of tree.roots) {
+      const cwd = entry.root.header.cwd?.trim()
+      if (cwd === undefined || cwd === '') continue
+      const key = pathKeyOf(cwd)
+      const group = groups.get(key) ?? { path: cwd, rootSessions: 0, subagentSessions: 0 }
+      group.rootSessions += 1
+      group.subagentSessions += entry.descendants.length
+      groups.set(key, group)
+    }
+
+    let registered: readonly WorkspaceLike[] = []
+    try {
+      registered = workspaceRegistry?.list?.() ?? []
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-sync: 读取工作区列表失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    const candidates: SyncWorkspaceCandidate[] = []
+    const seen = new Set<string>()
+    for (const workspace of registered) {
+      const key = pathKeyOf(workspace.path)
+      seen.add(key)
+      const group = groups.get(key)
+      candidates.push({
+        path: workspace.path,
+        title: workspace.title,
+        rootSessions: group?.rootSessions ?? 0,
+        subagentSessions: group?.subagentSessions ?? 0,
+        selected: pathAllowed(workspace.path, workspaceAllowlist),
+      })
+    }
+    for (const [key, group] of groups) {
+      if (seen.has(key)) continue
+      candidates.push({
+        path: group.path,
+        title: titleOfPath(group.path),
+        rootSessions: group.rootSessions,
+        subagentSessions: group.subagentSessions,
+        selected: pathAllowed(group.path, workspaceAllowlist),
+      })
+    }
+
+    return {
+      allowlistConfigured: workspaceAllowlist.length > 0,
+      selectedPaths: workspaceAllowlist,
+      workspaces: candidates,
     }
   }
 
   const control: SyncControl = {
     status: () => controller.snapshot(),
     setup,
+    workspaces,
     syncNow: () => controller.run({ manual: true }),
   }
   ctx.inject(['connection'], (connectionCtx) => {

@@ -46,6 +46,7 @@ function fakePersistence(header, state) {
 /** 造一个可读写的假本地存储。 */
 function fakeStore(header, initialEvents = [], options = {}) {
   const sessions = new Map()
+  const created = []
   if (header !== undefined) sessions.set(header.id, { header, events: [...initialEvents] })
   const handleFor = (record) => ({
     header: record.header,
@@ -63,6 +64,7 @@ function fakeStore(header, initialEvents = [], options = {}) {
   })
   return {
     sessions,
+    created,
     list: async () => [...sessions.values()].map((record) => ({
       header: record.header,
       eventCount: record.events.length,
@@ -79,6 +81,7 @@ function fakeStore(header, initialEvents = [], options = {}) {
     },
     create: async (createdHeader) => {
       const record = { header: createdHeader, events: [] }
+      created.push(createdHeader.id)
       sessions.set(createdHeader.id, record)
       return handleFor(record)
     },
@@ -113,6 +116,7 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
         serverUrl: base,
         token: device.token,
         passphrase: 'correct horse battery staple',
+        workspaceAllowlist: ['D:/local'],
         batchEvents: 50,
       }
       const persistence = fakePersistence(header, state)
@@ -157,6 +161,173 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
   }
 })
 
+test('推送引擎：白名单为空时整体不执行', async () => {
+  const header = { id: 'session-no-allowlist', version: 4, createdAt: 1, isSeeded: false, delegationDepth: 0, cwd: 'D:/work' }
+  const report = await syncOnce({
+    persistence: fakePersistence(header, { events: events(0, 2) }),
+    sessions,
+    config: {
+      serverUrl: 'http://127.0.0.1:1',
+      token: 'token',
+      passphrase: 'pass',
+      workspaceAllowlist: [],
+    },
+  })
+  assert.equal(report.configured, false)
+  assert.equal(report.reason, 'workspaceAllowlist 未配置')
+  assert.deepEqual(report.sessions, [])
+})
+
+test('推送引擎：默认同步子代理闭包，子先父后，白名单外的根跳过', async () => {
+  const temp = createTempHome('plugin-closure')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'closure-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const root = {
+        id: 'session-closure-root',
+        version: 4,
+        createdAt: 100,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: 'D:/work',
+      }
+      const child = {
+        ...root,
+        id: 'session-closure-child',
+        createdAt: 200,
+        delegationDepth: 1,
+        parentSession: root.id,
+        origin: 'subagent',
+      }
+      const other = { ...root, id: 'session-closure-other', createdAt: 300, cwd: 'D:/other' }
+      const store = fakeStore(root, events(0, 1))
+      store.sessions.set(child.id, { header: child, events: events(0, 2) })
+      store.sessions.set(other.id, { header: other, events: events(0, 1) })
+
+      const report = await syncOnce({
+        persistence: store,
+        sessions,
+        config: {
+          serverUrl: base,
+          token: device.token,
+          passphrase: 'closure pass',
+          workspaceAllowlist: ['D:/work'],
+        },
+        isTailOpen: () => false,
+      })
+
+      const relevant = report.sessions.filter((entry) => entry.sessionId !== other.id)
+      assert.deepEqual(relevant.map((entry) => [entry.sessionId, entry.status]), [
+        [child.id, 'pushed'],
+        [root.id, 'pushed'],
+      ])
+      assert.deepEqual(report.sessions.find((entry) => entry.sessionId === other.id), {
+        sessionId: other.id,
+        status: 'skipped',
+        error: '工作区不在同步白名单',
+      })
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('拉取引擎：子代理先创建，根会话后创建', async () => {
+  const temp = createTempHome('plugin-pull-closure')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'pull-closure-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const root = {
+        id: 'session-pull-root',
+        version: 4,
+        createdAt: 100,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: 'D:/work',
+      }
+      const child = {
+        ...root,
+        id: 'session-pull-child',
+        createdAt: 200,
+        delegationDepth: 1,
+        parentSession: root.id,
+        origin: 'subagent',
+      }
+      const storeA = fakeStore(root, events(0, 1))
+      storeA.sessions.set(child.id, { header: child, events: events(0, 2) })
+
+      const pushed = await syncOnce({
+        persistence: storeA,
+        sessions,
+        config: {
+          serverUrl: base,
+          token: device.token,
+          passphrase: 'pull closure pass',
+          workspaceAllowlist: ['D:/work'],
+        },
+        isTailOpen: () => false,
+      })
+      assert.deepEqual(pushed.sessions.map((entry) => entry.sessionId), [child.id, root.id])
+
+      const storeB = fakeStore(undefined)
+      const pulled = await pullOnce({
+        persistence: storeB,
+        sessions,
+        config: {
+          serverUrl: base,
+          token: device.token,
+          passphrase: 'pull closure pass',
+          workspaceAllowlist: ['D:/work', 'D:/b'],
+        },
+        workspacePath: 'D:/b',
+        attach: async () => {},
+      }, { revision: 0 })
+
+      assert.equal(pulled.configured, true)
+      assert.deepEqual(storeB.created, [child.id, root.id])
+      assert.deepEqual(pulled.sessions.map((entry) => entry.sessionId), [child.id, root.id])
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('拉取引擎：白名单为空或拉取目标不在白名单时整体不执行', async () => {
+  const base = {
+    serverUrl: 'http://127.0.0.1:1',
+    token: 'token',
+    passphrase: 'pass',
+  }
+  const store = fakeStore(undefined)
+  const empty = await pullOnce({
+    persistence: store,
+    sessions,
+    config: { ...base, workspaceAllowlist: [] },
+    workspacePath: 'D:/b',
+  }, { revision: 0 })
+  assert.equal(empty.configured, false)
+  assert.equal(empty.reason, 'workspaceAllowlist 未配置')
+
+  const outside = await pullOnce({
+    persistence: store,
+    sessions,
+    config: { ...base, workspaceAllowlist: ['D:/a'] },
+    workspacePath: 'D:/b',
+  }, { revision: 0 })
+  assert.equal(outside.configured, false)
+  assert.equal(outside.reason, 'workspacePath 不在同步白名单')
+})
+
 test('错误分类：auth / lease / network / crypto', () => {
   assert.equal(classifySyncError(new SyncHttpError('unauthorized', 401)).kind, 'auth')
   const lease = new SyncHttpError('lease held', 409, 'lease-held')
@@ -185,7 +356,13 @@ test('拉取引擎：append 失败留下 pending，重启后按 pending 补完',
       }
       const eventsA = events(0, 59)
       const storeA = fakeStore(headerA, eventsA)
-      const config = { serverUrl: base, token: device.token, passphrase: 'pending pass', batchEvents: 20 }
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'pending pass',
+        workspaceAllowlist: ['D:/a', 'D:/b'],
+        batchEvents: 20,
+      }
       assert.equal((await syncOnce({ persistence: storeA, sessions, config, isTailOpen: () => false })).sessions[0].status, 'pushed')
 
       const storeB = fakeStore(undefined, [], { failAppendOnce: true })
@@ -242,7 +419,13 @@ test('拉取引擎：一个会话失败后停止，不覆盖它的 pending', asy
       })
       const storeA = fakeStore(header(firstId, 100), events(0, 3))
       storeA.sessions.set(secondId, { header: header(secondId, 200), events: events(0, 5) })
-      const config = { serverUrl: base, token: device.token, passphrase: 'pending stop pass', batchEvents: 20 }
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'pending stop pass',
+        workspaceAllowlist: ['D:/a', 'D:/b'],
+        batchEvents: 20,
+      }
       const pushed = await syncOnce({ persistence: storeA, sessions, config, isTailOpen: () => false })
       assert.equal(pushed.sessions.length, 2)
 
@@ -274,7 +457,14 @@ test('拉取引擎：一个会话失败后停止，不覆盖它的 pending', asy
 })
 
 test('推送引擎：未配置时不动作，离线时只报告错误不抛出', async () => {
-  const header = { id: 'session-engine-offline', version: 4, createdAt: 1, isSeeded: false, delegationDepth: 0 }
+  const header = {
+    id: 'session-engine-offline',
+    version: 4,
+    createdAt: 1,
+    isSeeded: false,
+    delegationDepth: 0,
+    cwd: 'D:/offline',
+  }
   const state = { events: events(0, 2) }
   const persistence = fakePersistence(header, state)
 
@@ -288,7 +478,12 @@ test('推送引擎：未配置时不动作，离线时只报告错误不抛出',
   const offline = await syncOnce({
     persistence,
     sessions,
-    config: { serverUrl: 'http://127.0.0.1:1', token: 'token', passphrase: 'pass' },
+    config: {
+      serverUrl: 'http://127.0.0.1:1',
+      token: 'token',
+      passphrase: 'pass',
+      workspaceAllowlist: ['D:/offline'],
+    },
   })
   assert.equal(offline.configured, true)
   assert.equal(offline.sessions[0].status, 'error')
@@ -315,7 +510,13 @@ test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', asyn
       const eventsA = events(0, 119)
       eventsA[eventsA.length - 1] = { ...eventsA[eventsA.length - 1], type: 'turn/end' }
       const storeA = fakeStore(headerA, eventsA)
-      const config = { serverUrl: base, token: device.token, passphrase: 'pull pass', batchEvents: 50 }
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'pull pass',
+        workspaceAllowlist: ['D:/device-a', 'D:/device-b'],
+        batchEvents: 50,
+      }
 
       const firstPush = await syncOnce({
         persistence: storeA,

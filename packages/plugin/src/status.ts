@@ -68,7 +68,7 @@ export interface SyncStatus {
 
 /** 设置页/首启向导读取的非敏感配置。 */
 export interface SetupInfo {
-  /** 三项必填配置是否齐全。 */
+  /** 服务端凭据与工作区白名单是否齐全。 */
   readonly configured: boolean
   /** 未配置原因。 */
   readonly reason: string | null
@@ -78,6 +78,10 @@ export interface SetupInfo {
   readonly deviceName: string
   /** 拉取会话挂载的本地工作区路径。 */
   readonly workspacePath: string
+  /** 允许同步的工作区路径；空数组表示未配置。 */
+  readonly workspaceAllowlist: readonly string[]
+  /** 白名单是否已配置。 */
+  readonly allowlistConfigured: boolean
   /** 是否按间隔自动同步。 */
   readonly autoSync: boolean
   /** 自动同步间隔（毫秒）。 */
@@ -88,4 +92,28 @@ export interface SetupInfo {
   readonly hasToken: boolean
   /** 是否已经配置口令；不返回口令本身。 */
   readonly hasPassphrase: boolean
+}
+
+/** 同步列表里的一个工作区（或未注册的 cwd 分组）。 */
+export interface SyncWorkspaceCandidate {
+  /** 工作区路径；选择后写入白名单。 */
+  readonly path: string
+  /** 显示标题：注册表标题，或路径最后一段。 */
+  readonly title: string
+  /** 该路径下的根会话数。 */
+  readonly rootSessions: number
+  /** 该路径下根会话的子代理后代数。 */
+  readonly subagentSessions: number
+  /** 当前白名单是否包含这个路径。 */
+  readonly selected: boolean
+}
+
+/** 首启/设置页的同步列表。 */
+export interface SyncWorkspaceList {
+  /** 白名单是否已配置。 */
+  readonly allowlistConfigured: boolean
+  /** 当前白名单原样返回。 */
+  readonly selectedPaths: readonly string[]
+  /** 候选工作区；`全选` 即取全部 path。 */
+  readonly workspaces: readonly SyncWorkspaceCandidate[]
 }

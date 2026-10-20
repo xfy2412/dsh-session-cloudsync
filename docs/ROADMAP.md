@@ -12,7 +12,7 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 | **M1** | 骨架 + `shared`：帧工具、封帧/加密、协议类型、真实会话夹具、官方校验器 | ✅ 基础完成；帧工具保留给本地导出/兼容，**同步链已改为事件批次** |
 | **M2** | 自部署服务端 MVP：设备 token、blob、manifest、租约、append、墓碑、cursor、配额、管理台、首次初始化 | ✅ 已完成；`/v1` 当前仍按帧命名，M3 统一改名 |
 | **M3** | 插件 MVP：枚举会话、事件批次哈希、推送/拉取、免重启 ingest、手动触发/状态、断网降级、安全边界（`tailOpen`/`safeThroughSeq`）与 apply journal | ✅ 推送/拉取/安全边界/双 home E2E/durable journal/错误退避已通过；手动入口与状态通道由 M4 A3/A4 补齐 |
-| **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | 🚧 A1–A4 完成（durable journal、错误退避、`status`/`setup`/`sync` 宿主 API）；A5、设置/凭据、首启与客户端防护待做 |
+| **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | 🚧 A1–A5 完成（durable journal、错误退避、状态/设置/手动同步 API、子代理闭包、工作区白名单与同步列表）；凭据/设置页、首启与客户端防护待做 |
 | **M5** | 公共多租户公益服 | ❌ 不在当前范围；只保留 `dataset` / `token.label` 两个薄接缝 |
 
 ## 当前阶段的验收

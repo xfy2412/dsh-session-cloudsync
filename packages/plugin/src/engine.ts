@@ -18,6 +18,7 @@ import {
   sealEventBatch,
   sealHeader,
   type SessionHeaderLike,
+  type SessionHeaderMeta,
   type SyncEvent,
 } from '../../shared/src/batches.ts'
 import { deriveMasterKey, sha256 } from '../../shared/src/crypto.ts'
@@ -26,10 +27,11 @@ import {
   type SealedFrame,
   type SealedFrameRef,
 } from '../../shared/src/sealed-frame.ts'
+import { pathAllowed, planSessionClosure } from './closure.ts'
 
 /** 服务端会话头/快照里本引擎需要的字段。 */
 export interface SnapshotLike {
-  readonly header: SessionHeaderLike & { readonly id: string }
+  readonly header: SessionHeaderLike & { readonly id: string; readonly cwd?: string }
   readonly eventCount?: number
   readonly sizeBytes?: number
 }
@@ -95,8 +97,10 @@ export interface EngineConfig {
   readonly passphrase: string
   /** 可选：base64 的 16 字节 KDF 盐；缺省由服务端地址派生。 */
   readonly salt?: string
-  /** 是否同步子代理会话，默认 false。 */
+  /** 是否同步子代理会话，默认 true。 */
   readonly includeSubagents?: boolean
+  /** 允许同步的工作区路径；空数组表示不采集任何会话。 */
+  readonly workspaceAllowlist?: readonly string[]
   /** 单批事件上限，默认 50。 */
   readonly batchEvents?: number
   /** 单批规范 JSON 字节上限，默认 256 KiB。 */
@@ -639,24 +643,31 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   if (config.serverUrl.trim() === '' || config.token.trim() === '' || config.passphrase === '') {
     return { configured: false, reason: 'serverUrl / token / passphrase 未配置全', sessions: [] }
   }
+  const allowlist = config.workspaceAllowlist ?? []
+  if (allowlist.length === 0) {
+    return { configured: false, reason: 'workspaceAllowlist 未配置', sessions: [] }
+  }
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [] }
   const salt = resolveSalt(config, base)
   const master = deriveMasterKey(config.passphrase, salt)
   const fetchImpl = deps.fetch ?? fetch
   const snapshots = await deps.persistence.list()
+  const plan = planSessionClosure(snapshots, {
+    includeSubagents: config.includeSubagents !== false,
+    workspaceAllowlist: allowlist,
+  })
   const sessions: SessionSyncReport[] = []
 
-  for (const snapshot of snapshots) {
-    const header = snapshot.header
-    const sessionId = String(header.id)
-    if (!config.includeSubagents && (header.origin === 'subagent' || header.parentSession !== undefined)) {
-      sessions.push({ sessionId, status: 'skipped', error: '子代理会话默认不同步' })
-      continue
-    }
+  for (const skipped of plan.skipped) {
+    sessions.push({ sessionId: String(skipped.snapshot.header.id), status: 'skipped', error: skipped.reason })
+  }
+
+  for (const entry of plan.planned) {
+    const sessionId = String(entry.snapshot.header.id)
     try {
       const sessionKey = sessionKeyOf(master, sessionId)
-      sessions.push(await syncSession(deps, fetchImpl, base, sessionKey, snapshot))
+      sessions.push(await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot))
     } catch (error: unknown) {
       const classified = classifySyncError(error)
       deps.logger?.warn(`dsh-session-sync: ${sessionId} 同步失败：${classified.message}`)
@@ -778,12 +789,52 @@ async function downloadSafeEvents(
 }
 
 /**
+ * 预先读好的远端会话头：拉取排序与真正的 apply 复用同一份数据。
+ */
+interface LoadedRemote {
+  /** manifest。 */
+  readonly remote: RemoteManifest
+  /** 解开的会话头；墓碑没有。 */
+  readonly meta?: SessionHeaderMeta
+}
+
+/**
+ * 读取 manifest 并解开会话头。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param master - 主密钥。
+ * @param sessionId - 会话 id。
+ * @returns manifest 与会话头。
+ */
+async function loadRemoteHeader(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  master: Buffer,
+  sessionId: string,
+): Promise<LoadedRemote> {
+  const remote = await readManifest(fetchImpl, base, token, sessionId)
+  if (remote === undefined) throw new Error('游标指向的会话没有 manifest')
+  if (remote.deletedAt !== undefined) return { remote }
+  const sessionKey = sessionKeyOf(master, sessionId)
+  const headerRef = remote.frames[0]
+  if (headerRef === undefined) throw new Error('manifest 缺少会话头')
+  const headerSealed = await downloadBlob(fetchImpl, base, token, headerRef.blobSha256)
+  const meta = openHeader(headerSealed, headerRef, sessionId, sessionKey)
+  if (meta.createdAt !== remote.createdAt) throw new Error('会话头 createdAt 与 manifest 不一致')
+  if (meta.formatVersion !== remote.formatVersion) throw new Error('会话头 formatVersion 与 manifest 不一致')
+  return { remote, meta }
+}
+
+/**
  * 拉取一个会话。
  * @param deps - 拉取依赖。
  * @param fetchImpl - fetch 实现。
  * @param base - 服务端地址。
  * @param master - 主密钥。
  * @param sessionId - 会话 id。
+ * @param preloaded - 已读取的 manifest/会话头；缺省现读。
  * @returns 会话拉取结果。
  */
 async function pullSession<Session>(
@@ -792,18 +843,17 @@ async function pullSession<Session>(
   base: string,
   master: Buffer,
   sessionId: string,
+  preloaded?: LoadedRemote,
 ): Promise<PullSessionReport> {
-  const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
-  if (remote === undefined) throw new Error('游标指向的会话没有 manifest')
+  const loaded = preloaded ?? await loadRemoteHeader(fetchImpl, base, deps.config.token, master, sessionId)
+  const remote = loaded.remote
   if (remote.deletedAt !== undefined) return { sessionId, status: 'tombstone' }
+  const meta = loaded.meta
+  if (meta === undefined) throw new Error('缺少会话头')
 
   const sessionKey = sessionKeyOf(master, sessionId)
   const headerRef = remote.frames[0]
   if (headerRef === undefined) throw new Error('manifest 缺少会话头')
-  const headerSealed = await downloadBlob(fetchImpl, base, deps.config.token, headerRef.blobSha256)
-  const meta = openHeader(headerSealed, headerRef, sessionId, sessionKey)
-  if (meta.createdAt !== remote.createdAt) throw new Error('会话头 createdAt 与 manifest 不一致')
-  if (meta.formatVersion !== remote.formatVersion) throw new Error('会话头 formatVersion 与 manifest 不一致')
 
   const safe = remote.safeThroughSeq ?? remote.lastSeq
   if (!Number.isSafeInteger(safe) || safe < -1 || safe > remote.lastSeq) throw new Error('manifest 的 safeThroughSeq 非法')
@@ -879,13 +929,23 @@ async function pullSession<Session>(
  */
 export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullState = { revision: 0 }): Promise<PullReport> {
   const config = deps.config
-  if (config.serverUrl.trim() === '' || config.token.trim() === '' || config.passphrase === '' || deps.workspacePath.trim() === '') {
+  if (config.serverUrl.trim() === '' || config.token.trim() === '' || config.passphrase === '') {
     return {
       configured: false,
-      reason: 'serverUrl / token / passphrase / workspacePath 未配置全',
+      reason: 'serverUrl / token / passphrase 未配置全',
       sessions: [],
       revision: state.revision,
     }
+  }
+  const allowlist = config.workspaceAllowlist ?? []
+  if (allowlist.length === 0) {
+    return { configured: false, reason: 'workspaceAllowlist 未配置', sessions: [], revision: state.revision }
+  }
+  if (deps.workspacePath.trim() === '') {
+    return { configured: false, reason: 'workspacePath 未配置', sessions: [], revision: state.revision }
+  }
+  if (!pathAllowed(deps.workspacePath, allowlist)) {
+    return { configured: false, reason: 'workspacePath 不在同步白名单', sessions: [], revision: state.revision }
   }
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [], revision: state.revision }
@@ -911,17 +971,42 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
 
   for (let page = 0; page < 20; page += 1) {
     const cursor = await readCursor(fetchImpl, base, config.token, revision)
+    const prepared: Array<{ readonly sessionId: string; readonly loaded: LoadedRemote }> = []
     for (const change of cursor.sessions) {
       if (change.deletedAt !== null) {
         reports.push({ sessionId: change.sessionId, status: 'tombstone' })
         continue
       }
       try {
-        reports.push(await pullSession(deps, fetchImpl, base, master, change.sessionId))
+        prepared.push({
+          sessionId: change.sessionId,
+          loaded: await loadRemoteHeader(fetchImpl, base, config.token, master, change.sessionId),
+        })
       } catch (error: unknown) {
         const classified = classifySyncError(error)
-        deps.logger?.warn(`dsh-session-sync: 拉取 ${change.sessionId} 失败：${classified.message}`)
+        deps.logger?.warn(`dsh-session-sync: 读取 ${change.sessionId} 的会话头失败：${classified.message}`)
         reports.push({ sessionId: change.sessionId, status: 'error', error: classified.message, kind: classified.kind })
+        return { configured: true, sessions: reports, revision: state.revision }
+      }
+    }
+
+    // 子代理先建、根后建：深度从大到小。同级按创建时间，保证稳定。
+    prepared.sort((left, right) =>
+      (right.loaded.meta?.delegationDepth ?? -1) - (left.loaded.meta?.delegationDepth ?? -1)
+      || (left.loaded.meta?.createdAt ?? 0) - (right.loaded.meta?.createdAt ?? 0)
+      || left.sessionId.localeCompare(right.sessionId))
+
+    for (const item of prepared) {
+      if (item.loaded.remote.deletedAt !== undefined) {
+        reports.push({ sessionId: item.sessionId, status: 'tombstone' })
+        continue
+      }
+      try {
+        reports.push(await pullSession(deps, fetchImpl, base, master, item.sessionId, item.loaded))
+      } catch (error: unknown) {
+        const classified = classifySyncError(error)
+        deps.logger?.warn(`dsh-session-sync: 拉取 ${item.sessionId} 失败：${classified.message}`)
+        reports.push({ sessionId: item.sessionId, status: 'error', error: classified.message, kind: classified.kind })
         // 一个会话失败后立即停止：pending 只有一条，继续应用下一个会话会覆盖
         // 前一个未完成的恢复记录（下一次启动就补不回来了）。
         return { configured: true, sessions: reports, revision: state.revision }

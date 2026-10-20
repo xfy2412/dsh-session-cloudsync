@@ -2,7 +2,7 @@
 
 > 状态：M3 核心链路已完成（推送/拉取/安全边界/断网降级/双 home 验收）；M4 未开始。本文件是 M4 的唯一清单，ROADMAP 只保留状态摘要。
 >
-> 进度（2026-10-20）：A1/A2/A3/A4 已完成（durable revision + pending journal、错误分类/退避、内部状态快照、手动触发与 `status`/`setup`/`sync` 宿主 API，82 tests）；下一步 A5 或 B1/B2。
+> 进度（2026-10-20）：A1–A5 已完成（durable revision + pending journal、错误分类/退避、状态/手动触发 API、子代理闭包；96 tests）；下一步 B1/B2（凭据与设置）。
 
 ## 1. M4 验收
 
@@ -24,7 +24,9 @@
 | A4 | 客户端可读的状态通道（session projection 或 host service） | A3 |
 | A5 | 子代理闭包：根会话 + 全部后代；推送按后序（子先父后），拉取先建子再挂根；默认开启 | A3 |
 
-> 进度：**A1–A4 已完成**。A3/A4 暴露了 `GET /api/session-sync/status`、`GET /api/session-sync/setup`、`POST /api/session-sync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照含 `configured/reason/running/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`，逐会话视图带 `direction/status/batches|applied/tailOpen/kind/error`。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。尚未实现 A5 子代理闭包。
+> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-sync/status`、`GET /api/session-sync/setup`、`GET /api/session-sync/workspaces`、`POST /api/session-sync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照含 `configured/reason/running/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`，逐会话视图带 `direction/status/batches|applied/tailOpen/kind/error`。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。
+>
+> **A5 已完成**：默认同步子代理闭包（`includeSubagents` 默认 true）；只把 `origin === 'subagent'` 当后代，fork 是独立根；推送按“后代深到浅、根最后”排序；拉取按远端 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入跳过列表。
 
 ### B. 配置与凭据
 
@@ -56,7 +58,7 @@
   - 仅在同步中/有待拉取/有错误时出现；成功后短暂显示再隐藏；
   - 右上角、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
   - 窄屏切底部 sheet；`aria-live="polite"`。
-- **API**：`GET /api/session-sync/setup`、`GET /status`、`POST /setup`、`/test`、`/sync`；全部走 `connection.fetch`，不单独发 token。
+- **API**：`GET /api/session-sync/setup`、`GET /status`、`GET /workspaces`、`POST /setup`、`/test`、`/sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区标题、根会话数、子代理数、是否选中；「全选」取全部 `path`。
 - **刷新**：同步中每 1s 轮询 status，空闲停止。
 
 ### C. 客户端防误操作
@@ -85,7 +87,7 @@
 | ID | 内容 |
 |---|---|
 | E1 | `frames → batches` 协议/字段/文档重命名 |
-| E2 | 采集白名单（按工作区路径）；空配置 = 全部非子代理根会话；子代理跟随根会话闭包 |
+| E2 | 采集白名单（按工作区路径）；**空配置 = 暂不同步任何会话**；首启/设置页的同步列表提供「全选」；子代理跟随根会话闭包 | A5 |
 | E3 | 更新 ROADMAP/PROTOCOL/SYNC-SAFETY/tests 文档 |
 
 ## 3. 已定与待拍板
@@ -96,14 +98,14 @@
 - 同步预览 = `shell.overlay` 顶层气泡；不用标题栏槽位；
 - 首启/状态 API 走 `connection.fetch`，继承 DSH 鉴权；
 - 非敏感配置走 settings，token/passphrase 走 credentials。
+- **子代理闭包默认开启**（`includeSubagents: true`）：同步根会话及其全部 `origin === 'subagent'` 后代；fork 作为独立根。
+- **工作区白名单空 = 暂不同步**：`workspaceAllowlist` 为空时插件只提供设置/状态 API，不推送、不拉取；首启/设置页的同步列表提供「全选」，选中后把路径写入白名单。
 
 **待拍板：**
 
 1. **凭据存储**：推荐 DSH `ctx.credentials`；profile YAML 只留非敏感项。环境变量作为首次配置 fallback。
-2. **子代理策略**：推荐“根 + 后代闭包”默认开启；不做“只同步根、子代理各设备各自产生”的默认模式。
-3. **白名单**：推荐可选的工作区路径 allowlist；空 = 当前“全部非子代理根会话 + 其子代理闭包”行为。
-4. **apply journal 粒度**：当前实现是 revision + pending；是否再拆成每 turn 的条目按需要再定。
-5. **重命名时机**：建议 M4 Host 稳定后、D5 之前统一做，避免边改协议边写故障测试。
+2. **apply journal 粒度**：当前实现是 revision + pending；是否再拆成每 turn 的条目按需要再定。
+3. **重命名时机**：建议 M4 Host 稳定后、D5 之前统一做，避免边改协议边写故障测试。
 
 ## 4. 执行顺序
 

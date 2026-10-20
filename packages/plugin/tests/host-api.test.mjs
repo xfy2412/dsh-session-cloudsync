@@ -25,12 +25,25 @@ function control(overrides = {}) {
       serverUrl: 'http://127.0.0.1:8787',
       deviceName: 'dev',
       workspacePath: 'D:/work',
+      workspaceAllowlist: ['D:/work'],
+      allowlistConfigured: true,
       autoSync: true,
       intervalMs: 60_000,
-      includeSubagents: false,
+      includeSubagents: true,
       hasToken: true,
       hasPassphrase: true,
     },
+    workspaces: overrides.workspaces ?? (async () => ({
+      allowlistConfigured: true,
+      selectedPaths: ['D:/work'],
+      workspaces: [{
+        path: 'D:/work',
+        title: 'work',
+        rootSessions: 2,
+        subagentSessions: 3,
+        selected: true,
+      }],
+    })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
   }
 }
@@ -52,6 +65,7 @@ test('宿主 API：注册 status/setup/sync 三条精确路由', () => {
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-sync/status', ['GET'], 'buffered'],
     ['/api/session-sync/setup', ['GET'], 'buffered'],
+    ['/api/session-sync/workspaces', ['GET'], 'buffered'],
     ['/api/session-sync/sync', ['POST'], 'buffered'],
   ])
 })
@@ -80,6 +94,37 @@ test('宿主 API：setup 只返回非敏感字段', async () => {
   assert.equal(body.value.hasToken, true)
   assert.equal('token' in body.value, false)
   assert.equal('passphrase' in body.value, false)
+})
+
+test('宿主 API：workspaces 返回同步列表与选中项', async () => {
+  const routes = createHostApi(control())
+  const response = await route(routes, '/api/session-sync/workspaces').fetch(
+    new Request('http://host/api/session-sync/workspaces'),
+  )
+  assert.equal(response.status, 200)
+  const body = await bodyOf(response)
+  assert.equal(body.value.allowlistConfigured, true)
+  assert.deepEqual(body.value.selectedPaths, ['D:/work'])
+  assert.deepEqual(body.value.workspaces, [{
+    path: 'D:/work',
+    title: 'work',
+    rootSessions: 2,
+    subagentSessions: 3,
+    selected: true,
+  }])
+})
+
+test('宿主 API：workspaces 读取失败时返回 500', async () => {
+  const routes = createHostApi(control({
+    workspaces: async () => { throw new Error('storage unavailable') },
+  }))
+  const response = await route(routes, '/api/session-sync/workspaces').fetch(
+    new Request('http://host/api/session-sync/workspaces'),
+  )
+  assert.equal(response.status, 500)
+  const body = await bodyOf(response)
+  assert.equal(body.ok, false)
+  assert.equal(body.error.message, 'storage unavailable')
 })
 
 test('宿主 API：sync 返回控制器结果', async () => {

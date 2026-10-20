@@ -3,18 +3,18 @@ import { test } from 'node:test'
 import { apply } from '../src/index.ts'
 
 /** 造一个只提供最小能力的宿主上下文。 */
-function fakeContext(connection) {
+function fakeContext(connection, services = {}) {
   const disposers = []
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
     sessions: { get: () => undefined, flush: async () => true },
-    sessionPersistence: {
+    sessionPersistence: services.sessionPersistence ?? {
       list: async () => [],
       stat: async () => undefined,
       open: async () => { throw new Error('不应打开会话') },
       create: async () => { throw new Error('不应创建会话') },
     },
-    get: (name) => name === 'connection' ? connection : undefined,
+    get: (name) => name === 'connection' ? connection : services[name],
     effect: (fn) => {
       const disposer = fn()
       disposers.push(disposer)
@@ -56,6 +56,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
   assert.deepEqual(connection.routes.map((route) => route.path), [
     '/api/session-sync/status',
     '/api/session-sync/setup',
+    '/api/session-sync/workspaces',
     '/api/session-sync/sync',
   ])
 
@@ -64,7 +65,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
   assert.equal(statusBody.value.configured, false)
   assert.equal(statusBody.value.reason, 'serverUrl 未配置')
 
-  const sync = await connection.routes[2].fetch(new Request('http://host/api/session-sync/sync', { method: 'POST' }))
+  const sync = await connection.routes[3].fetch(new Request('http://host/api/session-sync/sync', { method: 'POST' }))
   const syncBody = JSON.parse(await sync.text())
   assert.equal(syncBody.value.ok, false)
   assert.equal(syncBody.value.code, 'unconfigured')
@@ -90,6 +91,62 @@ test('应用接线：设置信息不回传 token/passphrase', async () => {
   assert.equal(body.value.hasPassphrase, true)
   assert.equal(JSON.stringify(body).includes('secret-token'), false)
   assert.equal(JSON.stringify(body).includes('secret-passphrase'), false)
+})
+
+test('应用接线：workspaces 汇总工作区、根会话与子代理计数', async () => {
+  const connection = fakeConnection()
+  const { ctx } = fakeContext(connection, {
+    sessionPersistence: {
+      list: async () => [
+        {
+          header: { id: 'root', createdAt: 1, isSeeded: false, delegationDepth: 0, cwd: 'D:/work' },
+          eventCount: 1,
+          sizeBytes: 0,
+        },
+        {
+          header: {
+            id: 'child',
+            createdAt: 2,
+            isSeeded: false,
+            delegationDepth: 1,
+            cwd: 'D:/work',
+            origin: 'subagent',
+            parentSession: 'root',
+          },
+          eventCount: 2,
+          sizeBytes: 0,
+        },
+      ],
+      stat: async () => undefined,
+      open: async () => { throw new Error('不应打开会话') },
+      create: async () => { throw new Error('不应创建会话') },
+    },
+    workspaceRegistry: {
+      list: () => [{ id: 'w1', path: 'D:/work', title: 'Work', sessionIds: ['root'], attachSession: async () => {} }],
+      resolveByPath: async () => undefined,
+      create: async () => { throw new Error('不应创建工作区') },
+    },
+  })
+  apply(ctx, {
+    enabled: true,
+    serverUrl: '',
+    token: '',
+    passphrase: '',
+    workspaceAllowlist: ['D:/work'],
+    autoSync: false,
+  })
+
+  const response = await connection.routes[2].fetch(new Request('http://host/api/session-sync/workspaces'))
+  const body = JSON.parse(await response.text())
+  assert.equal(body.value.allowlistConfigured, true)
+  assert.deepEqual(body.value.selectedPaths, ['D:/work'])
+  assert.deepEqual(body.value.workspaces, [{
+    path: 'D:/work',
+    title: 'Work',
+    rootSessions: 1,
+    subagentSessions: 1,
+    selected: true,
+  }])
 })
 
 test('应用接线：禁用时不注册任何路由', () => {
