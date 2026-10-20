@@ -1,6 +1,6 @@
 # 同步安全边界与客户端防误操作
 
-> 状态：设计已定；M3 的安全边界（`tailOpen` / `safeThroughSeq`）与拉取已经落地，客户端防误操作（composer block / 列表拦截）留在 M4。文中的源码结论来自 DSH `0.2.1-rc.2`；客户端部分已在临时 GUI 上验证 DOM，尚未提交 UI 改动。
+> 状态：设计已定；M3 的安全边界（`tailOpen` / `safeThroughSeq`）与拉取已经落地，M4 客户端防误操作已实现（composer block / 列表拦截 / leading 标记），剩真实 GUI 的 C5 回归。文中的源码结论来自 DSH `0.2.1-rc.2`。
 
 ## 1. 为什么开放尾只能备份，不能直接给远端 resume
 
@@ -152,12 +152,13 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 
 ### 5.3 状态从哪里来
 
-客户端需要知道哪些会话处于 `applying` / `openTail`。M4 的实现顺序：
+客户端需要知道哪些会话处于 `applying` / `openTail` / safe 落后。M4 已落地：
 
-- **A3/A4 已落地宿主 API**：`GET /api/session-sync/status` 提供运行中/上次结果/退避/pending/逐会话 `tailOpen`，`POST /api/session-sync/sync` 手动触发；客户端轮询即可驱动首版气泡；
-- 逐会话的精确状态最终仍建议写一个 **session projection**（如 `syncState: { state, safeThroughSeq, tailOpen }`），供 `useSessions` / 列表行使用；
-- 不用“写一条事件”表达临时同步状态，避免污染日志；
-- 如果列表行拿不到任意 projection，再考虑 `sessions.provide` 或轻量远程服务（C1 验证）。
+- **宿主 API**：`GET /api/session-sync/status` 提供运行中/上次结果/退避/pending/逐会话 `tailOpen`，以及本轮实时 `live` 视图（`pushing` / `pulling`）；`POST /api/session-sync/sync` 手动触发；客户端轮询即可驱动首版气泡；
+- **apply 中**：`pending.sessionId` 命中时 composer 与列表行都拦；
+- **开放尾**：最近一次推送视图 `tailOpen: true` 的会话拦截列表打开与 composer；
+- **safe 落后**：最近一次推送视图 `remote-ahead` 的会话按 safe 落后处理，拦列表打开与输入；
+- 不写临时同步事件，避免污染会话日志；逐会话 projection 仍可作为后续优化，但当前等价状态已由 `/status` 提供。
 
 ## 6. 已知限制与待验证
 
@@ -171,11 +172,11 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 
 ## 7. M4 客户端检查清单
 
-- [ ] `syncState` projection（或等价状态通道）落地；
-- [ ] `ctx.conversation.blocks.set` 对 `applying` / `openTail` / safe 落后三种状态生效；
-- [ ] 捕获阶段拦截 `[data-row-key]`，覆盖 click / pointerdown / keydown；
-- [ ] 空闲行 `sidebar.session.row.leading` 的同步标记（`id: 'sync-mark'`）；
-- [ ] 运行中行的 hover 卡片状态说明；
+- [x] 等价 `syncState` 状态通道（`/status` 的 `pending` / `live` / `tailOpen` / `remote-ahead`）落地；
+- [x] `ctx.conversation.blocks.set` 对 `applying` / `openTail` / safe 落后三种状态生效；
+- [x] 捕获阶段拦截 `[data-row-key]`，覆盖 click / pointerdown / keydown；
+- [x] 空闲行 `sidebar.session.row.leading` 的同步标记（`id: 'session-sync-mark'`）；
+- [x] 运行中行的 hover 卡片状态说明（`sidebar.session.row.hover` 的 `session-sync-hover`）；
 - [ ] 可选视觉蒙版；
 - [ ] GUI 回归：下拉、拖拽、键盘操作、深链打开都不误 resume；
 - [ ] 强杀拉取 + 启动 reconcile 的端到端测试。

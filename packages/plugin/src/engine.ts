@@ -105,6 +105,25 @@ export interface EngineConfig {
   readonly batchEvents?: number
   /** 单批规范 JSON 字节上限，默认 256 KiB。 */
   readonly batchBytes?: number
+  /** 单次 HTTP 读取超时（毫秒），默认 10s。 */
+  readonly requestTimeoutMs?: number
+}
+
+/** 默认单次 HTTP 读取超时。 */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+
+/**
+ * 给每次 fetch 加读取超时；调用方已有 signal 时尊重它。
+ * @param fetchImpl - 底层 fetch。
+ * @param timeoutMs - 超时毫秒；缺省 10s。
+ * @returns 带超时信号的 fetch。
+ */
+function withRequestTimeout(fetchImpl: typeof fetch, timeoutMs?: number): typeof fetch {
+  const ms = timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+  return ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const signal = init?.signal ?? AbortSignal.timeout(ms)
+    return fetchImpl(input, { ...init, signal })
+  }) as typeof fetch
 }
 
 /** 日志接口。 */
@@ -112,6 +131,22 @@ export interface SyncLogger {
   info(message: string): void
   warn(message: string): void
   error(message: string): void
+}
+
+/** 一轮同步中某个会话的实时阶段。 */
+export interface SyncProgress {
+  /** 会话 id。 */
+  readonly sessionId: string
+  /** 推送或拉取。 */
+  readonly direction: 'push' | 'pull'
+  /** 当前阶段。 */
+  readonly phase: 'start' | 'transferred' | 'committed' | 'done' | 'error'
+  /** 0–1 的粗粒度进度。 */
+  readonly progress: number
+  /** 失败说明。 */
+  readonly error?: string
+  /** 本次推送的批次数量（完成时）。 */
+  readonly batches?: number
 }
 
 /** 引擎依赖。 */
@@ -127,6 +162,8 @@ export interface SyncDeps<Session> {
    * `interruptedTurnClosers(events).length > 0`。缺省按闭合处理。
    */
   readonly isTailOpen?: (events: readonly SyncEvent[]) => boolean
+  /** 实时阶段回调；不抛异常，调用方负责容错。 */
+  readonly onProgress?: (progress: SyncProgress) => void
 }
 
 /** 单个会话的同步结果。 */
@@ -166,6 +203,8 @@ export interface PullDeps<Session> {
    * 整轮 apply 结束，因此这里不代表已经 attach。
    */
   readonly afterApply?: (sessionId: string) => Promise<void>
+  /** 实时阶段回调；不抛异常，调用方负责容错。 */
+  readonly onProgress?: (progress: SyncProgress) => void
 }
 
 /** 一次未完成的拉取。 */
@@ -209,6 +248,8 @@ interface RemoteManifest {
   readonly tailOpen?: boolean
   readonly safeThroughSeq?: number
   readonly frames: readonly SealedFrameRef[]
+  readonly batches?: readonly SealedFrameRef[]
+  readonly batchCount?: number
   readonly updatedAt: number
   readonly deletedAt?: number
 }
@@ -392,8 +433,9 @@ async function readManifest(
   const manifest = (value as Record<string, unknown>)['manifest']
   if (manifest === null || typeof manifest !== 'object') throw new Error('manifest 响应缺少 manifest')
   const record = manifest as Record<string, unknown>
-  if (!Array.isArray(record['frames'])) throw new Error('manifest.frames 不是数组')
-  return manifest as RemoteManifest
+  const refs = Array.isArray(record['batches']) ? record['batches'] : record['frames']
+  if (!Array.isArray(refs)) throw new Error('manifest.batches 不是数组')
+  return { ...record, frames: refs } as unknown as RemoteManifest
 }
 
 /**
@@ -500,7 +542,7 @@ async function appendFrames(
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, batches: input.frames }),
     },
   )
   if (status !== 200) {
@@ -531,6 +573,22 @@ export function safeThroughSeqOf(events: readonly SyncEvent[], tailOpen: boolean
     if ((event as { readonly type?: unknown }).type === 'turn/end') return event.seq
   }
   return -1
+}
+
+/**
+ * 发一次实时阶段；回调异常不能打断同步。
+ * @param deps - 带可选 onProgress 的依赖。
+ * @param progress - 当前阶段。
+ */
+function notifyProgress(
+  deps: { readonly onProgress?: (progress: SyncProgress) => void },
+  progress: SyncProgress,
+): void {
+  try {
+    deps.onProgress?.(progress)
+  } catch {
+    // UI 进度不是同步正确性的一部分。
+  }
 }
 
 /**
@@ -654,7 +712,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [] }
   const salt = resolveSalt(config, base)
   const master = deriveMasterKey(config.passphrase, salt)
-  const fetchImpl = deps.fetch ?? fetch
+  const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
   const snapshots = await deps.persistence.list()
   const plan = planSessionClosure(snapshots, {
     includeSubagents: config.includeSubagents !== false,
@@ -668,13 +726,23 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
 
   for (const entry of plan.planned) {
     const sessionId = String(entry.snapshot.header.id)
+    notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', progress: 0 })
     try {
       const sessionKey = sessionKeyOf(master, sessionId)
-      sessions.push(await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot))
+      const report = await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot)
+      sessions.push(report)
+      notifyProgress(deps, {
+        sessionId, direction: 'push',
+        phase: report.status === 'error' ? 'error' : 'done',
+        progress: report.status === 'error' ? 0 : 1,
+        ...report.batches === undefined ? {} : { batches: report.batches },
+        ...report.error === undefined ? {} : { error: report.error },
+      })
     } catch (error: unknown) {
       const classified = classifySyncError(error)
       deps.logger?.warn(`dsh-session-sync: ${sessionId} 同步失败：${classified.message}`)
       sessions.push({ sessionId, status: 'error', error: classified.message, kind: classified.kind })
+      notifyProgress(deps, { sessionId, direction: 'push', phase: 'error', progress: 0, error: classified.message })
     }
   }
 
@@ -705,8 +773,9 @@ export async function testConnection(
   if (config.token.trim() === '') return { ok: false, kind: 'config', message: 'token 未配置' }
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { ok: false, kind: 'config', message: 'serverUrl 非法' }
+  const timedFetch = withRequestTimeout(fetchImpl, config.requestTimeoutMs)
   try {
-    const { status, body } = await requestJson(fetchImpl, base, '/v1/cursor?since=0&limit=1', config.token)
+    const { status, body } = await requestJson(timedFetch, base, '/v1/cursor?since=0&limit=1', config.token)
     if (status === 200) return { ok: true }
     const error = errorOf(body)
     const classified = classifySyncError(new SyncHttpError(error.message, status, error.code))
@@ -990,7 +1059,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [], revision: state.revision }
   const salt = resolveSalt(config, base)
   const master = deriveMasterKey(config.passphrase, salt)
-  const fetchImpl = deps.fetch ?? fetch
+  const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
 
   const reports: PullSessionReport[] = []
   let revision = state.revision
@@ -1052,12 +1121,21 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         reports.push({ sessionId: item.sessionId, status: 'tombstone' })
         continue
       }
+      notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', progress: 0 })
       try {
-        reports.push(await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, item.loaded))
+        const report = await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, item.loaded)
+        reports.push(report)
+        notifyProgress(deps, {
+          sessionId: item.sessionId, direction: 'pull',
+          phase: report.status === 'error' ? 'error' : 'done',
+          progress: report.status === 'error' ? 0 : 1,
+          ...report.error === undefined ? {} : { error: report.error },
+        })
       } catch (error: unknown) {
         const classified = classifySyncError(error)
         deps.logger?.warn(`dsh-session-sync: 拉取 ${item.sessionId} 失败：${classified.message}`)
         reports.push({ sessionId: item.sessionId, status: 'error', error: classified.message, kind: classified.kind })
+        notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'error', progress: 0, error: classified.message })
         // 一个会话失败后立即停止：pending 只有一条，继续应用下一个会话会覆盖
         // 前一个未完成的恢复记录（下一次启动就补不回来了）。
         return { configured: true, sessions: reports, revision: state.revision }

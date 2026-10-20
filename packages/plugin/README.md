@@ -1,0 +1,56 @@
+# dsh-session-sync
+
+DSH 会话云同步插件：自部署服务端、端到端加密，同步根会话与子代理闭包。
+
+## 能力
+
+- 事件批次增量推送/拉取；批次哈希、AES-256-GCM 封批次；
+- 服务端只存密文、manifest 与 blob 去重，不持有明文口令；
+- 开放尾只备份、不直接 apply；拉取带 durable pending journal；
+- 工作区白名单：**空列表 = 暂不同步任何会话**；子代理跟随根会话闭包，fork 是独立根；
+- Plugins 页自定义设置页 + 首启向导 + 顶部同步气泡；
+- 同步中/开放尾/安全边界落后时，composer 与侧栏行会被拦截并显示原因。
+
+## 配置
+
+非敏感字段：
+
+```yaml
+serverUrl: ''            # 自部署服务端地址
+deviceName: ''           # 设备短标签
+workspacePath: ''        # 拉取会话落到哪个已选工作区；空 = 只推不拉
+workspaceAllowlist: []   # 允许同步的工作区路径；空 = 暂不同步
+autoSync: true
+intervalMs: 60000
+includeSubagents: true
+batchEvents: 50
+batchBytes: 262144
+requestTimeoutMs: 10000  # 单次 HTTP 读取超时；避免挂死
+```
+
+token 与同步口令写在 DSH 凭据库，引用名固定：
+
+- `DSH_SESSION_SYNC_TOKEN`
+- `DSH_SESSION_SYNC_PASSPHRASE`
+
+YAML 里的 `token` / `passphrase` 只作为 bootstrap fallback；插件每轮同步前重新解析凭据。
+
+## 客户端
+
+浏览器半边在 `client/index.js`，通过 `dsh.client` 清单加载：
+
+- `plugins.bundle.config`：Plugins 页的会话同步设置（连接/凭据/工作区/行为）；
+- `shell.overlay`：首启向导和顶部气泡；
+- `conversation.input.dock`：composer 同步守卫；
+- `sidebar.session.row.leading` / `.hover`：同步标记与原因；
+- document 捕获阶段拦截 `[data-row-key^="session:"]` 的 click/pointerdown/keydown。
+
+## 开发
+
+```sh
+pnpm test
+pnpm typecheck
+node packages/plugin/scripts/build.mjs
+```
+
+协议、设计、安全边界分别见 `docs/PROTOCOL.md`、`docs/DESIGN.md`、`docs/SYNC-SAFETY.md`。

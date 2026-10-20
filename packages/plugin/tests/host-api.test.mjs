@@ -18,6 +18,7 @@ function control(overrides = {}) {
       pending: null,
       revision: 3,
       sessions: [],
+      live: [],
     },
     setup: async () => overrides.setup ?? {
       configured: true,

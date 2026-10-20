@@ -377,6 +377,17 @@ test('连接测试：token 有效时通过，无效时分类为 auth，离线为
   }
 })
 
+test('连接测试：读取超时归类为 network', async () => {
+  const result = await testConnection({
+    serverUrl: 'http://127.0.0.1:1', token: 'token', passphrase: 'pass', requestTimeoutMs: 10,
+  }, (_input, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('request timeout')))
+  }))
+  assert.equal(result.ok, false)
+  assert.equal(result.kind, 'network')
+  assert.equal(result.message, 'request timeout')
+})
+
 test('错误分类：auth / lease / network / crypto', () => {
   assert.equal(classifySyncError(new SyncHttpError('unauthorized', 401)).kind, 'auth')
   const lease = new SyncHttpError('lease held', 409, 'lease-held')
@@ -384,6 +395,27 @@ test('错误分类：auth / lease / network / crypto', () => {
   assert.equal(classifySyncError(new Error('fetch failed')).kind, 'network')
   assert.equal(classifySyncError(new Error('封帧认证失败（密文、AAD 或密钥不匹配）')).kind, 'crypto')
   assert.equal(classifySyncError(new SyncHttpError('quota', 507)).retryable, true)
+})
+
+test('错误分类：M4 故障矩阵', () => {
+  const cases = [
+    [new SyncHttpError('forbidden', 403), 'forbidden', false],
+    [new SyncHttpError('missing', 404), 'not-found', false],
+    [new SyncHttpError('gone', 410), 'gone', false],
+    [new SyncHttpError('rate', 429), 'rate-limited', true],
+    [new SyncHttpError('quota', 507), 'quota', true],
+    [new SyncHttpError('server', 503), 'server', true],
+    [new SyncHttpError('lease', 409, 'lease-held'), 'lease-held', true],
+    [new SyncHttpError('diverged', 409, 'diverged'), 'diverged', false],
+    [new SyncHttpError('format', 409, 'format-mismatch'), 'format', false],
+    [new Error('request timeout'), 'network', true],
+    [new Error('未配置 serverUrl'), 'config', false],
+  ]
+  for (const [error, kind, retryable] of cases) {
+    const classified = classifySyncError(error)
+    assert.equal(classified.kind, kind, error.message)
+    assert.equal(classified.retryable, retryable, error.message)
+  }
 })
 
 test('拉取引擎：append 失败留下 pending，重启后按 pending 补完', async () => {

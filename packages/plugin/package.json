@@ -5,14 +5,18 @@
   "type": "module",
   "description": "DSH 会话云同步插件：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。",
   "license": "MIT",
+  "icon": "assets/icon.svg",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./client/index.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/**/*.js",
+    "client/**/*.js",
+    "assets/**/*",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -25,6 +29,18 @@
     "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
     }
   },
   "peerDependencies": {

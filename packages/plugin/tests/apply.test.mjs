@@ -73,6 +73,67 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
   assert.equal(syncBody.value.message, 'serverUrl 未配置')
 })
 
+test('应用接线：Schemastery volatile 引用按 .get() 读取', async () => {
+  const connection = fakeConnection()
+  const { ctx } = fakeContext(connection)
+  const ref = (value) => ({ get: () => value })
+  apply(ctx, {
+    enabled: true,
+    serverUrl: ref('http://127.0.0.1:8787'),
+    token: ref('token-value'),
+    passphrase: ref('pass-value'),
+    deviceName: ref('dev-box'),
+    workspacePath: ref(''),
+    workspaceAllowlist: ref([]),
+    autoSync: ref(false),
+    intervalMs: ref(15_000),
+    includeSubagents: ref(false),
+    batchEvents: ref(10),
+    batchBytes: ref(1024),
+  })
+
+  const setup = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  const body = JSON.parse(await setup.text())
+  assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
+  assert.equal(body.value.deviceName, 'dev-box')
+  assert.equal(body.value.intervalMs, 15_000)
+  assert.equal(body.value.autoSync, false)
+  assert.equal(body.value.includeSubagents, false)
+  assert.equal(body.value.reason, 'workspaceAllowlist 未配置')
+})
+
+test('应用接线：volatile 引用原地更新后 setup/status 立即读到新值', async () => {
+  const connection = fakeConnection()
+  const { ctx } = fakeContext(connection)
+  const values = { serverUrl: '', allowlist: [] }
+  const ref = (read) => ({ get: read })
+  apply(ctx, {
+    enabled: true,
+    serverUrl: ref(() => values.serverUrl),
+    token: 'token-value',
+    passphrase: 'pass-value',
+    deviceName: 'dev-box',
+    workspacePath: '',
+    workspaceAllowlist: ref(() => values.allowlist),
+    autoSync: false,
+    intervalMs: 15_000,
+    includeSubagents: false,
+    batchEvents: 10,
+    batchBytes: 1024,
+  })
+
+  const first = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  assert.equal((JSON.parse(await first.text())).value.reason, 'serverUrl 未配置')
+
+  values.serverUrl = 'http://127.0.0.1:8787'
+  values.allowlist = ['D:/work']
+  const second = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  const body = JSON.parse(await second.text())
+  assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
+  assert.equal(body.value.configured, true)
+  assert.deepEqual(body.value.workspaceAllowlist, ['D:/work'])
+})
+
 test('应用接线：设置信息不回传 token/passphrase', async () => {
   const connection = fakeConnection()
   const { ctx } = fakeContext(connection)

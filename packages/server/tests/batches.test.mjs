@@ -69,20 +69,21 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
       const created = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,
-        json: { baseIndex: -1, baseChainHash: null, createdAt, formatVersion: 4, frames: refs },
+        json: { baseIndex: -1, baseChainHash: null, createdAt, formatVersion: 4, batches: refs },
       })
       assert.equal(created.status, 200)
       assert.equal(created.body.value.frameCount, 4)
+      assert.equal(created.body.value.batchCount, 4)
       assert.equal(created.body.value.lastSeq, 119)
 
       const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.status, 200)
-      assert.equal(manifest.body.value.manifest.frames[0].seqFrom, -1)
-      assert.equal(manifest.body.value.manifest.frames[0].seqTo, -1)
-      assert.equal(manifest.body.value.manifest.frames[1].seqFrom, 0)
-      assert.equal(manifest.body.value.manifest.frames[3].seqTo, 119)
+      assert.equal(manifest.body.value.manifest.batches[0].seqFrom, -1)
+      assert.equal(manifest.body.value.manifest.batches[0].seqTo, -1)
+      assert.equal(manifest.body.value.manifest.batches[1].seqFrom, 0)
+      assert.equal(manifest.body.value.manifest.batches[3].seqTo, 119)
 
-      // 继续上传新增的 30 个事件，只追加一个新批次。
+      // 继续上传新增的 30 个事件，只追加一个新批次；这里用 legacy `frames` 验证兼容别名。
       const tail = events(120, 149)
       const [tailPlan] = planEventBatches(tail, 119)
       assert.ok(tailPlan !== undefined)
@@ -102,13 +103,15 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
       })
       assert.equal(appended.status, 200)
       assert.equal(appended.body.value.frameCount, 5)
+      assert.equal(appended.body.value.batchCount, 5)
       assert.equal(appended.body.value.lastSeq, 149)
 
-      const frames = await call(base, `/v1/sessions/${sessionId}/frames?from=0&limit=10`, { token: device.token })
-      assert.equal(frames.status, 200)
-      assert.equal(frames.body.value.frames.length, 5)
-      assert.equal(frames.body.value.frames[4].seqFrom, 120)
-      assert.equal(frames.body.value.frames[4].seqTo, 149)
+      const batchesPage = await call(base, `/v1/sessions/${sessionId}/batches?from=0&limit=10`, { token: device.token })
+      assert.equal(batchesPage.status, 200)
+      assert.equal(batchesPage.body.value.batches.length, 5)
+      assert.equal(batchesPage.body.value.batches[4].seqFrom, 120)
+      assert.equal(batchesPage.body.value.batches[4].seqTo, 149)
+      assert.equal(batchesPage.body.value.batchCount, 5)
     } finally {
       await close()
       db.close()

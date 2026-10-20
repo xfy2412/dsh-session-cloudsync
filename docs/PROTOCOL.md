@@ -1,9 +1,9 @@
 # 协议
 
-> 状态：M2 服务端已实现 `/v1/health`、设备 token、`/v1/blobs`、租约、append、墓碑、cursor、manifest/帧引用读取；
-> 管理台（cookie 会话 + 只读页面）已实现。
+> 状态：M2 服务端已实现 `/v1/health`、设备 token、`/v1/blobs`、租约、append、墓碑、cursor、manifest/批次引用读取；
+> 管理台（cookie 会话 + 只读页面）已实现。M4 已把协议规范字段改为 `batches` / `batchCount`，旧 `frames` / `frameCount` 保留兼容。
 >
-> **M3 变更（设计已定，代码待落）**：同步单位由原始帧改为**连续事件批次**，`frames` 相关字段/端点将统一更名为 `batches`；差异见文末「M3 目标语义」。
+> **M3/M4 语义**：同步单位是**连续事件批次**；差异见文末「M3/M4 语义」。
 
 ## 认证
 
@@ -48,16 +48,17 @@
 | GET | `/v1/blobs/:sha256` | 设备 | 下载密文 |
 | GET | `/v1/cursor?since=<revision>` | 设备 | 自某 revision 以来的变更**摘要** |
 | GET | `/v1/sessions/:id/manifest` | 设备 | 完整 manifest（大会话只在需要时拉） |
-| GET | `/v1/sessions/:id/frames?from=<index>&limit=<n>` | 设备 | 帧引用分页（默认 500/页） |
+| GET | `/v1/sessions/:id/frames?from=<index>&limit=<n>` | 设备 | 旧别名；等价于 `/batches` |
+| GET | `/v1/sessions/:id/batches?from=<index>&limit=<n>` | 设备 | 批次引用分页（默认 500/页） |
 | POST | `/v1/sessions/:id/lease` | 设备 | 申请/续租租约 |
-| POST | `/v1/sessions/:id/append` | 设备 | 提交新帧（`baseIndex + baseChainHash` + 封帧条目） |
+| POST | `/v1/sessions/:id/append` | 设备 | 提交新批次（`baseIndex + baseChainHash` + 封批次条目） |
 | POST | `/v1/sessions/:id/delete` | 设备 | 墓碑（绑定 `sessionId + createdAt + formatVersion`） |
 
 ### lease 与 append
 
 - 租约 TTL **60 秒**；同一设备续租会顺延，其他设备在过期前拿到 `409 lease-held`，过期后可抢占。
 - `DELETE /v1/sessions/:id/lease` 主动释放。
-- append 请求体只带**新增/替换的帧**，不重复整份 manifest：
+- append 请求体只带**新增/替换的批次**，不重复整份 manifest：
 
 ```json
 {
@@ -65,17 +66,18 @@
   "baseChainHash": "…",
   "createdAt": 1790000000000,
   "formatVersion": 4,
-  "frames": [ /* SealedFrameRef */ ]
+  "batches": [ /* SealedBatchRef */ ]
 }
 ```
 
-- 首次创建用 `baseIndex: -1, baseChainHash: null`，`frames` 从 index 0 开始；
-- 尾帧替换用 `baseIndex = 倒数第二帧`，`frames` 从该下标 +1 开始；
-- 服务端把这些帧拼到存储的链上，校验连续性后整体替换 manifest；请求体上限 8 MiB。
+- `frames` 是 M3 客户端的兼容别名，服务端仍接受；新客户端只写 `batches`；
+- 首次创建用 `baseIndex: -1, baseChainHash: null`，`batches` 从 index 0 开始；
+- 尾批替换用 `baseIndex = 倒数第二批`，`batches` 从该下标 +1 开始；
+- 服务端把这些批次拼到存储的链上，校验连续性后整体替换 manifest；请求体上限 8 MiB。
 
-### cursor 与帧引用分页
+### cursor 与批次引用分页
 
-`GET /v1/cursor` 只返回摘要，**不返回整份 manifest**（万帧会话的 manifest 约 1.2–1.6 MB）：
+`GET /v1/cursor` 只返回摘要，**不返回整份 manifest**（万批会话的 manifest 约 1.2–1.6 MB）：
 
 ```json
 {
@@ -85,7 +87,7 @@
     "revision": 40,
     "formatVersion": 4,
     "createdAt": 1790000000000,
-    "frameCount": 10000,
+    "batchCount": 10000,
     "headChainHash": "…",
     "manifestDigest": "…",
     "updatedAt": 1790000000000,
@@ -95,7 +97,7 @@
 }
 ```
 
-客户端先比 `frameCount + headChainHash`，一致就跳过；不一致再按页拉 `frames` 找公共前缀。
+客户端先比 `batchCount + headChainHash`，一致就跳过；不一致再按页拉 `batches` 找公共前缀。响应里仍带 `frameCount` / `frames` 作为旧字段别名。
 
 ## 不变量
 
@@ -123,15 +125,15 @@
 
 首版管理台不提供内容读取；会话预览（需要“允许服务器解密”）是 P2。根路径 `/` 会重定向到 `/admin`。
 
-## M3 语义（事件批次）
+## M3/M4 语义（事件批次）
 
-服务端仍沿用 `frames` 命名；客户端已按事件批次写入 header 与批次。剩余的重命名待做：
+协议单位已经统一为**事件批次**；服务端在 M4 提供 `batches` / `batchCount` 规范字段，并保留 `frames` / `frameCount` 作为旧客户端别名：
 
-- `SealedFrameRef` → `SealedBatchRef`：`index / seqFrom / seqTo / chainHash / blobSha256`；
+- `SealedFrameRef` 的内部类型名仍保留（`index / seqFrom / seqTo / chainHash / blobSha256`），协议字段用 `SealedBatchRef`；
 - `chainHash` = 批次内事件的**规范 JSON**（键序稳定）sha256，不再依赖物理帧字节；
-- `frames?from&limit` → `batches?from&limit`，按批次引用分页；
+- `frames?from&limit` 的规范路径是 `batches?from&limit`；`/frames` 仍可用；
 - append：`baseIndex + baseChainHash` 语义不变，提交的是“新增/替换的批次”；
-- manifest 摘要：`frameCount` → `batchCount`；header 元数据单独 sealed 上传（`formatVersion/createdAt/isSeeded/delegationDepth/agentPreset/inheritedEventCount`），`cwd` 不进 manifest；
+- manifest 摘要：规范字段 `batchCount`，旧字段 `frameCount` 保留；header 元数据单独 sealed 上传（`formatVersion/createdAt/isSeeded/delegationDepth/agentPreset/inheritedEventCount`），`cwd` 不进 manifest；
 - **已实现** `tailOpen: boolean` 与 `safeThroughSeq: number`：`tailOpen` 表示尾巴是否开放；`safeThroughSeq` 是最后一个闭合事件的 seq。读者只 apply `seqTo <= safeThroughSeq` 的批次，开放尾仅作备份，不写入本地可 resume 的会话；
 - 客户端对齐：manifest 的 `[seqFrom, seqTo]` 为权威；本地已有完整前缀不下载；跨界批次下载后校验重叠段，只追加缺的后半段；
 - 删除：协议不支持删除单个事件；已同步的脏内容用 fork + 墓碑。

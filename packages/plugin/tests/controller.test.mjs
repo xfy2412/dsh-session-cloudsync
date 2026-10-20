@@ -44,6 +44,24 @@ function createController(overrides = {}) {
   }
 }
 
+test('控制器：实时阶段只进入 live，轮次结束后清空', async () => {
+  let fixture
+  fixture = createController({
+    push: async () => {
+      fixture.controller.updateProgress({ sessionId: 's1', direction: 'push', phase: 'start', progress: 0 })
+      return pushReport([])
+    },
+  })
+
+  const running = fixture.controller.run()
+  assert.deepEqual(fixture.controller.snapshot().live, [
+    { sessionId: 's1', direction: 'push', status: 'pushing' },
+  ])
+  await running
+  assert.deepEqual(fixture.controller.snapshot().live, [])
+  assert.deepEqual(fixture.controller.snapshot().sessions, [])
+})
+
 test('控制器：成功一轮更新状态、revision 与逐会话视图', async () => {
   const fixture = createController({
     push: async () => pushReport([

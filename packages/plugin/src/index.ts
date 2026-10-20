@@ -69,6 +69,8 @@ export interface Config {
   batchEvents?: number
   /** 单批最多规范 JSON 字节数，默认 256 KiB。 */
   batchBytes?: number
+  /** 单次 HTTP 读取超时（毫秒），默认 10000。 */
+  requestTimeoutMs?: number
 }
 
 /** 配置 schema；非敏感字段可被 DSH 设置页直接编辑并热更新。 */
@@ -86,6 +88,7 @@ export const Config = z.object({
   includeSubagents: z.boolean().default(true).volatile(),
   batchEvents: z.number().min(1).default(50).volatile(),
   batchBytes: z.number().min(1024).default(256 * 1024).volatile(),
+  requestTimeoutMs: z.number().min(1000).default(10_000).volatile(),
 })
 
 /** 活动的会话类型（由 ctx.sessions 推导，避免手写 DSH 内部类型）。 */
@@ -118,11 +121,8 @@ interface CredentialsLike {
   resolve(ref: string): Promise<{ readonly value: string; readonly source: string } | undefined>
 }
 
-/** 运行期可被凭据刷新改写的引擎配置。 */
-type MutableEngineConfig = Omit<EngineConfig, 'token' | 'passphrase'> & {
-  token: string
-  passphrase: string
-}
+/** 运行期可被凭据刷新/配置引用改写的引擎配置。 */
+type MutableEngineConfig = { -readonly [K in keyof EngineConfig]: EngineConfig[K] }
 
 /**
  * 找出持久化状态文件路径。
@@ -153,6 +153,19 @@ function titleOfPath(path: string): string {
 }
 
 /**
+ * 读取 Schemastery 的 volatile 字段：它可能被解析成带 `.get()` 的稳定引用，
+ * 而不是裸值。非 volatile 字段原样返回。
+ * @param value - 原始配置字段。
+ * @returns 解引用后的值。
+ */
+function readVolatile<T>(value: unknown): T | undefined {
+  if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
+    return (value as { get: () => T }).get()
+  }
+  return value as T | undefined
+}
+
+/**
  * 注册插件。
  * @param ctx - 插件上下文；所有注册都随该 fiber 销毁。
  * @param config - 服务端、凭据与批次参数。
@@ -164,25 +177,68 @@ export function apply(ctx: Context, config: Config): void {
     error: (message) => ctx.logger.error(message),
   }
 
-  if (config.enabled === false) {
+  if (readVolatile<boolean>(config.enabled) === false) {
     logger.info('dsh-session-sync: 已禁用')
     return
   }
-  const serverUrl = config.serverUrl ?? ''
-  const configToken = config.token ?? ''
-  const configPassphrase = config.passphrase ?? ''
-  const intervalMs = config.intervalMs ?? 60000
-  const workspaceAllowlist = [...config.workspaceAllowlist ?? []].filter((path) => path.trim() !== '')
+  let serverUrl = readVolatile<string>(config.serverUrl) ?? ''
+  const configToken = readVolatile<string>(config.token) ?? ''
+  const configPassphrase = readVolatile<string>(config.passphrase) ?? ''
+  let intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
+  let workspaceAllowlist: string[] = []
+  let salt = readVolatile<string>(config.salt) ?? ''
+  let includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
+  let deviceName = readVolatile<string>(config.deviceName) ?? ''
+  let workspacePath = readVolatile<string>(config.workspacePath) ?? ''
+  let autoSync = readVolatile<boolean>(config.autoSync) !== false
+  let batchEvents = readVolatile<number>(config.batchEvents) ?? 50
+  let batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
+  let requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
+
+  const readAllowlist = (): string[] => {
+    const raw = readVolatile<unknown>(config.workspaceAllowlist)
+    return Array.isArray(raw)
+      ? raw.filter((path): path is string => typeof path === 'string' && path.trim() !== '')
+      : []
+  }
+  workspaceAllowlist = readAllowlist()
 
   const engineConfig: MutableEngineConfig = {
     serverUrl,
     token: configToken,
     passphrase: configPassphrase,
-    ...config.salt === undefined || config.salt === '' ? {} : { salt: config.salt },
-    includeSubagents: config.includeSubagents !== false,
+    ...salt === '' ? {} : { salt },
+    includeSubagents,
     workspaceAllowlist,
-    batchEvents: config.batchEvents ?? 50,
-    batchBytes: config.batchBytes ?? 256 * 1024,
+    batchEvents,
+    batchBytes,
+    requestTimeoutMs,
+  }
+
+  /**
+   * 重新读取 volatile 引用。设置页写入后，DSH 可能原地更新引用而不重启
+   * 插件；每轮同步/设置读取前调用，保证不会一直拿 apply 时的旧值。
+   */
+  const refreshConfig = (): void => {
+    serverUrl = readVolatile<string>(config.serverUrl) ?? ''
+    intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
+    workspaceAllowlist = readAllowlist()
+    salt = readVolatile<string>(config.salt) ?? ''
+    includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
+    deviceName = readVolatile<string>(config.deviceName) ?? ''
+    workspacePath = readVolatile<string>(config.workspacePath) ?? ''
+    autoSync = readVolatile<boolean>(config.autoSync) !== false
+    batchEvents = readVolatile<number>(config.batchEvents) ?? 50
+    batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
+    requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
+    engineConfig.serverUrl = serverUrl
+    engineConfig.includeSubagents = includeSubagents
+    engineConfig.workspaceAllowlist = workspaceAllowlist
+    engineConfig.batchEvents = batchEvents
+    engineConfig.batchBytes = batchBytes
+    engineConfig.requestTimeoutMs = requestTimeoutMs
+    if (salt === '') delete engineConfig.salt
+    else engineConfig.salt = salt
   }
   let tokenSource: string | null = configToken.trim() === '' ? null : 'config'
   let passphraseSource: string | null = configPassphrase === '' ? null : 'config'
@@ -241,7 +297,6 @@ export function apply(ctx: Context, config: Config): void {
       interruptedTurnClosers(events as readonly SessionEvent[]).length > 0,
   }
 
-  const workspacePath = config.workspacePath ?? ''
   const workspaceRegistry = ctx.get('workspaceRegistry') as unknown as WorkspaceRegistryLike | undefined
   if (configToken !== '' || configPassphrase !== '') {
     logger.warn(
@@ -269,6 +324,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const configuration = (): { configured: boolean; reason?: string } => {
+    refreshConfig()
     if (serverUrl.trim() === '') return { configured: false, reason: 'serverUrl 未配置' }
     if (engineConfig.token.trim() === '') return { configured: false, reason: 'token 未配置' }
     if (engineConfig.passphrase === '') return { configured: false, reason: 'passphrase 未配置' }
@@ -278,7 +334,7 @@ export function apply(ctx: Context, config: Config): void {
 
   let pullWithDeps: ((state: PullState) => Promise<PullReport>) | undefined
   const controller = new SyncController({
-    push: () => syncOnce(deps),
+    push: () => syncOnce({ ...deps, onProgress: (progress) => controller.updateProgress(progress) }),
     pull: (state) => {
       if (pullWithDeps === undefined) throw new Error('拉取引擎尚未初始化')
       return pullWithDeps(state)
@@ -320,22 +376,30 @@ export function apply(ctx: Context, config: Config): void {
       controller.endApply(sessionId)
     },
   }
-  pullWithDeps = (state) => pullOnce(pullDeps, state)
+  pullWithDeps = (state) => {
+    refreshConfig()
+    return pullOnce({
+      ...pullDeps,
+      workspacePath,
+      onProgress: (progress) => controller.updateProgress(progress),
+    }, state)
+  }
 
   const setup = async (): Promise<SetupInfo> => {
+    refreshConfig()
     await refreshSecrets()
     const state = configuration()
     return {
       configured: state.configured,
       reason: state.reason ?? null,
       serverUrl,
-      deviceName: config.deviceName ?? '',
+      deviceName,
       workspacePath,
       workspaceAllowlist,
       allowlistConfigured: workspaceAllowlist.length > 0,
-      autoSync: config.autoSync !== false,
+      autoSync,
       intervalMs,
-      includeSubagents: config.includeSubagents !== false,
+      includeSubagents,
       hasToken: engineConfig.token.trim() !== '',
       hasPassphrase: engineConfig.passphrase !== '',
       tokenSource,
@@ -345,11 +409,13 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const runSync = async (manual = false): Promise<Awaited<ReturnType<SyncController['run']>>> => {
+    refreshConfig()
     await refreshSecrets()
     return manual ? controller.run({ manual: true }) : controller.run()
   }
 
   const workspaces = async (): Promise<SyncWorkspaceList> => {
+    refreshConfig()
     const snapshots = await ctx.sessionPersistence.list()
     const tree = buildSessionTree(snapshots)
     const groups = new Map<string, { path: string; rootSessions: number; subagentSessions: number }>()
@@ -434,7 +500,7 @@ export function apply(ctx: Context, config: Config): void {
       void controller.run()
     }
   })
-  if (config.autoSync !== false) {
+  if (autoSync) {
     ctx.effect(() => {
       const timer = setInterval(() => { void runSync() }, intervalMs)
       return () => { clearInterval(timer) }

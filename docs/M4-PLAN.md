@@ -2,7 +2,7 @@
 
 > 状态：M3 核心链路已完成（推送/拉取/安全边界/断网降级/双 home 验收）；M4 进行中。本文件是 M4 的唯一清单，ROADMAP 只保留状态摘要。
 >
-> 进度（2026-10-20）：A1–A5 已完成（durable revision + pending journal、错误分类/退避、状态/手动触发 API、子代理闭包）；B1/B2/B4 的 host 侧已完成（凭据解析、volatile 配置、`/test`）；99 tests。下一步 B3/B5 客户端设置页与首启。
+> 进度（2026-10-20）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已把协议规范字段改为 `batches` / `batchCount` 并保留旧别名；102 tests。下一步 D5/C5 的端到端演练与 E3 文档收口。
 
 ## 1. M4 验收
 
@@ -41,9 +41,10 @@
 > 进度：**B1/B2/B4 的 host 侧已完成**。
 >
 > - B1：固定凭据引用 `DSH_SESSION_SYNC_TOKEN` / `DSH_SESSION_SYNC_PASSPHRASE`；每轮同步前 `ctx.credentials.resolve`，凭据优先、YAML `token`/`passphrase` 仅作 bootstrap fallback；`setup` 带 `hasToken/hasPassphrase/tokenSource/passphraseSource/credentialRefs`，不回传值。
-> - B2：非敏感字段已标 `.volatile()`，DSH 设置页可直接生成表单并热更新；`token`/`passphrase` 不放进普通表单。
+> - B2：非敏感字段已标 `.volatile()`，DSH 设置页可直接生成表单并热更新；`token`/`passphrase` 不放进普通表单。默认单次 HTTP 读取超时 10s（`requestTimeoutMs`），避免网络挂死无限等待。
+> - 宿主每轮 status/setup/sync 都重新读取 `.volatile()` 引用的 `.get()`，所以设置页保存后不必重启插件即可生效；首启/设置页的测试连接也先保存当前输入再测。
 > - B4：`GET /status`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 验证服务端可达与 token，不校验口令。
-> - 尚未做：B3 自定义设置页（工作区多选 + 全选 + 凭据卡片）与 B5 首启 overlay。
+> - **B3/B5 已完成**：`client/index.js` 通过 `plugins.bundle.config` 渲染自定义设置页（表单来自 `ctx.configForms.get('session-sync')`），`shell.overlay` 提供首启向导与顶部气泡；非敏感字段走 settings，token/passphrase 走 `remote.credentials`；首启完成后立即触发一轮同步。设置页「测试连接」会先落盘当前字段再测；首启步骤切换带方向动画，并且一旦以未配置姿态打开，后续保存不会把向导抽掉。
 
 **官方前端接口（已确认，来自本地 DSH 源码/类型）：**
 
@@ -83,6 +84,8 @@
 | C5 | GUI 回归：下拉、拖拽、键盘、深链打开都不误 resume | C2–C4 |
 | C6 | 顶部居中的分段进度气泡：收起态是唯一云图标，点击后同一图标展开成卡片，完成缩回；进度条按会话等分，黄→绿/红，子先父后并发推进；展开逐会话列表，不占标题栏 | A3、C1 |
 
+> C 进度：C1 状态下发到 `/status` 的 `live`（实时阶段）、`pending`（applying）与逐会话 `tailOpen`/`remote-ahead`（safe 落后）；C2 用 `conversation.input.dock` 的不可见守卫调用 `conversation.blocks.set`；C3 在 document 捕获阶段拦列表行 click/pointerdown/keydown；C4 用 `sidebar.session.row.leading` 渲染同步标记、`sidebar.session.row.hover` 渲染原因。C5 仍需在真实 GUI 做一次点击/拖拽/键盘回归。
+
 ### D. 故障演练
 
 | ID | 内容 | 依赖 |
@@ -93,11 +96,13 @@
 | D4 | 口令错误 / 解密失败 / 配额 507：停止对应方向，保留本地数据 | A2 |
 | D5 | 每个故障的确定性测试与 UI 文案 | B3、C5 |
 
+> D 进度：5xx/timeout 的退避、lease/diverged/format/crypto/quota/auth 的分类表与 controller 退避已有确定性测试；D5 的 UI 文案由 `/status.lastError.message` 与气泡统一展示，仍缺真实 GUI 的逐类演练与 C5 回归。
+
 ### E. 收口
 
 | ID | 内容 |
 |---|---|
-| E1 | `frames → batches` 协议/字段/文档重命名 |
+| E1 | `frames → batches` 协议/字段/文档重命名：已落 `batches`/`batchCount` 规范字段、`/batches` 路由与 client 新写入；`frames`/`frameCount` 仅保留兼容别名 | 已完成 |
 | E2 | 采集白名单（按工作区路径）；**空配置 = 暂不同步任何会话**；首启/设置页的同步列表提供「全选」；子代理跟随根会话闭包 | A5 |
 | E3 | 更新 ROADMAP/PROTOCOL/SYNC-SAFETY/tests 文档 |
 
@@ -116,7 +121,7 @@
 **待拍板：**
 
 1. **apply journal 粒度**：当前实现是 revision + pending；是否再拆成每 turn 的条目按需要再定。
-2. **重命名时机**：建议 M4 Host 稳定后、D5 之前统一做，避免边改协议边写故障测试。
+2. C5 GUI 回归与 D5 逐类故障文案演练的具体用例清单。
 
 ## 4. 执行顺序
 

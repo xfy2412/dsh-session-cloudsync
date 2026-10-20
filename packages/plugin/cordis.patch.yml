@@ -33,3 +33,5 @@
         # 单批最多事件数 / 规范 JSON 字节数。
         batchEvents: 50
         batchBytes: 262144
+        # 单次 HTTP 读取超时（毫秒）。
+        requestTimeoutMs: 10000

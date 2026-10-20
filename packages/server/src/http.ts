@@ -263,7 +263,9 @@ function parseAppend(body: Record<string, unknown>): {
   }
   if (!Number.isSafeInteger(body.createdAt) || Number(body.createdAt) < 0) throw new SyncError('bad-request', 'createdAt 必须是非负整数')
   if (!Number.isSafeInteger(body.formatVersion) || Number(body.formatVersion) < 1) throw new SyncError('bad-request', 'formatVersion 必须是正整数')
-  if (!Array.isArray(body.frames)) throw new SyncError('bad-request', 'frames 必须是数组')
+  // 规范字段是 `batches`；`frames` 只作为 M3 客户端的兼容别名。
+  const refs = Array.isArray(body.batches) ? body.batches : body.frames
+  if (!Array.isArray(refs)) throw new SyncError('bad-request', 'batches 必须是数组')
   if (body.tailOpen !== undefined && typeof body.tailOpen !== 'boolean') throw new SyncError('bad-request', 'tailOpen 必须是布尔值')
   if (body.safeThroughSeq !== undefined && (!Number.isSafeInteger(body.safeThroughSeq) || Number(body.safeThroughSeq) < -1)) {
     throw new SyncError('bad-request', 'safeThroughSeq 必须是不小于 -1 的整数')
@@ -273,7 +275,7 @@ function parseAppend(body: Record<string, unknown>): {
     baseChainHash: baseChainHash as string | null,
     createdAt: Number(body.createdAt),
     formatVersion: Number(body.formatVersion),
-    frames: body.frames as SealedFrameRef[],
+    frames: refs as SealedFrameRef[],
     ...body.tailOpen === undefined ? {} : { tailOpen: body.tailOpen },
     ...body.safeThroughSeq === undefined ? {} : { safeThroughSeq: Number(body.safeThroughSeq) },
   }
@@ -299,9 +301,35 @@ const LEASE_PATH = /^\/v1\/sessions\/([^/]+)\/lease$/u
 const APPEND_PATH = /^\/v1\/sessions\/([^/]+)\/append$/u
 const DELETE_PATH = /^\/v1\/sessions\/([^/]+)\/delete$/u
 const MANIFEST_PATH = /^\/v1\/sessions\/([^/]+)\/manifest$/u
-const FRAMES_PATH = /^\/v1\/sessions\/([^/]+)\/frames$/u
+const FRAMES_PATH = /^\/v1\/sessions\/([^/]+)\/(?:frames|batches)$/u
 const CURSOR_PATH = /^\/v1\/cursor$/u
 const ADMIN_DEVICE_PATH = /^\/admin\/devices\/([0-9a-f]+)$/u
+
+/**
+ * 在响应里补上 canonical `batches` / `batchCount`，同时保留旧字段。
+ * @param value - 会话摘要、manifest 或批次列表。
+ * @returns 同一对象结构的兼容视图。
+ */
+function withBatchAliases(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value
+  const record = value as Record<string, unknown>
+  const refs = Array.isArray(record['batches']) ? record['batches'] : record['frames']
+  const result: Record<string, unknown> = { ...record }
+  if (Array.isArray(refs)) {
+    result['batches'] = refs
+    result['batchCount'] = typeof record['batchCount'] === 'number'
+      ? record['batchCount']
+      : typeof record['frameCount'] === 'number'
+        ? record['frameCount']
+        : typeof record['total'] === 'number' ? record['total'] : refs.length
+  } else if (typeof record['frameCount'] === 'number' && typeof record['batchCount'] !== 'number') {
+    result['batchCount'] = record['frameCount']
+  }
+  if (record['manifest'] !== null && typeof record['manifest'] === 'object') {
+    result['manifest'] = withBatchAliases(record['manifest'])
+  }
+  return result
+}
 
 /** 管理台会话 cookie 名。 */
 const ADMIN_COOKIE = 'dsh_sync_admin'
@@ -671,7 +699,7 @@ export function createHttpServer(options: ServerOptions): Server {
         const body = await readJson(req, MAX_APPEND_BODY_BYTES)
         const parsed = parseAppend(body)
         const value = appendFrames(db, options.dataDir, { sessionId: id, deviceId: device.deviceId, ...parsed })
-        return json(res, 200, { ok: true, value })
+        return json(res, 200, { ok: true, value: withBatchAliases(value) })
       },
     },
     {
@@ -693,7 +721,7 @@ export function createHttpServer(options: ServerOptions): Server {
         const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, MANIFEST_PATH)
         const found = getManifest(db, id)
         if (found === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
-        return json(res, 200, { ok: true, value: found })
+        return json(res, 200, { ok: true, value: withBatchAliases(found) })
       },
     },
     {
@@ -705,7 +733,7 @@ export function createHttpServer(options: ServerOptions): Server {
         const id = sessionIdFrom(url.pathname, FRAMES_PATH)
         const found = listFrames(db, id, intParam(url.searchParams.get('from'), 0, 0, Number.MAX_SAFE_INTEGER), intParam(url.searchParams.get('limit'), 500, 1, 1000))
         if (found === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
-        return json(res, 200, { ok: true, value: found })
+        return json(res, 200, { ok: true, value: withBatchAliases(found) })
       },
     },
     {

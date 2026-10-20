@@ -14,6 +14,7 @@ import {
   type SessionSyncReport,
   type SyncErrorKind,
   type SyncLogger,
+  type SyncProgress,
   type SyncReport,
 } from './engine.ts'
 import type { SessionSyncView, SyncErrorView, SyncStatus } from './status.ts'
@@ -85,6 +86,7 @@ export class SyncController {
   private retryCount = 0
   private nextRetryAt = 0
   private sessions: readonly SessionSyncView[] = []
+  private live: readonly SessionSyncView[] = []
 
   /**
    * @param options - 引擎、持久化与时钟注入点。
@@ -111,7 +113,30 @@ export class SyncController {
       pending: this.pending ?? null,
       revision: this.revision,
       sessions: this.sessions,
+      live: this.live,
     }
+  }
+
+  /**
+   * 引擎的实时阶段：只更新当前一轮的临时视图，不覆盖上一轮最终结果。
+   * @param progress - 推送/拉取的阶段。
+   */
+  updateProgress(progress: SyncProgress): void {
+    const status = progress.phase === 'error'
+      ? 'error'
+      : progress.phase === 'done'
+        ? progress.direction === 'push' ? 'pushed' : 'pulled'
+        : progress.direction === 'push' ? 'pushing' : 'pulling'
+    const view: SessionSyncView = {
+      sessionId: progress.sessionId,
+      direction: progress.direction,
+      status,
+      ...progress.error === undefined ? {} : { error: progress.error },
+      ...progress.batches === undefined ? {} : { batches: progress.batches },
+    }
+    const next = this.live.filter((item) => !(item.sessionId === view.sessionId && item.direction === view.direction))
+    next.push(view)
+    this.live = next
   }
 
   /**
@@ -160,6 +185,7 @@ export class SyncController {
     }
 
     this.running = true
+    this.live = []
     this.lastAttempt = now
     const errors: Array<{ kind: SyncErrorKind; message: string }> = []
     const views: SessionSyncView[] = []
@@ -179,6 +205,7 @@ export class SyncController {
 
     this.running = false
     this.sessions = views
+    this.live = []
     const finished = this.now()
     if (errors.length > 0) {
       return this.fail(errors, finished)

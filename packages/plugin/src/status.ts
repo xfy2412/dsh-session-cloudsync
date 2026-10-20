@@ -64,6 +64,8 @@ export interface SyncStatus {
   readonly revision: number
   /** 最近一轮的逐会话结果；尚未执行过为空数组。 */
   readonly sessions: readonly SessionSyncView[]
+  /** 当前一轮的实时逐会话阶段；空闲时为空数组。 */
+  readonly live: readonly SessionSyncView[]
 }
 
 /** 设置页/首启向导读取的非敏感配置。 */
