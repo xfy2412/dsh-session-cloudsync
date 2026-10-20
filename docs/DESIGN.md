@@ -1,6 +1,7 @@
 # 设计
 
-> 状态：脚手架阶段。M1/M2 已落地；M3 的传输模型已定为事件批次，实现推进中。
+> 状态：M1/M2 已落地；M3 传输模型已定为事件批次并已实现；M4 客户端防护做收口。
+> L2/L3 的加密附加数据层与多工作区映射见 [VAULT.md](VAULT.md)（设计稿）。
 
 ## 目标
 
@@ -14,8 +15,10 @@
 | L2 设备台账 | 每设备一条：OS、DSH 与 profile、已加载插件与版本、会话格式版本、工具链版本与路径、工作区路径、最后在线 | KB 级 | 按 deviceId 分槽，天然无冲突 |
 | L3 agent 笔记 | append-only 笔记：设备/会话/工作区/时间/作者/标签 | KB–MB 级 | 只追加，天然无冲突 |
 
-L2 同时是**兼容性闸门**：服务端一次性返回各设备的 `sessionFormatVersion`，同步前就能拒绝代际不匹配的会话。
-L3 的工具链条目分 `auto`（自动采集）与 `authored`（agent 或用户维护）两个来源，自动采集**不覆盖** `authored`。
+L2 同时是**兼容性闸门**：服务端只返回各设备的加密台账，客户端解密后拿到 `sessionFormatVersion`，
+在同步前拒绝代际不匹配的会话。
+L2 的工具链条目分 `auto`（自动采集）与 `authored`（agent 或用户维护）两个来源，自动采集**不覆盖** `authored`。
+L2/L3 的加密存储、工作区 key 与绑定、插件版本匹配见 [VAULT.md](VAULT.md)。
 
 ## 传输单位：事件批次
 
@@ -65,7 +68,7 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 
 优先走 DSH 原生接缝——`ctx.sessionPersistence.create` / `open(id, 'write')` + `append(events)` 写入，`ctx.workspaceRegistry.resolveByPath` + `Workspace.attachSession` 挂回工作区，避免重启宿主。M0 已验证写入后宿主能发现新会话；已打开的客户端需要 `sessions.refresh()` 才会拉到冷会话。
 
-会话头（`formatVersion`/`createdAt`/`isSeeded`/`delegationDepth`/`agentPreset`，以及 seeded 会话的 `inheritedEventCount`）作为单独的 **sealed header** 上传，manifest 只记哈希；`cwd` 不进入 manifest 明文，由设备在解密后映射为本地路径再 `create`。这样同一会话在不同设备上的链身份不受本地路径影响。
+会话头（`formatVersion`/`createdAt`/`isSeeded`/`delegationDepth`/`agentPreset`，以及 seeded 会话的 `inheritedEventCount`）作为单独的 **sealed header** 上传，manifest 只记哈希；`cwd` 不进入 manifest 明文。拉取端按 `workspaceKey` 的工作区绑定决定落到哪个本地工作区；绑定/映射的加密存储见 [VAULT.md](VAULT.md)。这样同一会话在不同设备上的链身份不受本地路径影响。
 
 开放尾（`tailOpen`/`safeThroughSeq`）、拉取崩溃恢复（apply journal / 启动 reconcile）与客户端防误操作（composer block / 列表拦截）见 [SYNC-SAFETY.md](./SYNC-SAFETY.md)。
 

@@ -99,6 +99,8 @@
 
 客户端先比 `batchCount + headChainHash`，一致就跳过；不一致再按页拉 `batches` 找公共前缀。响应里仍带 `frameCount` / `frames` 作为旧字段别名。
 
+> Vault（设备台账 / 工作区映射 / 笔记）的 `/v1/vault/*` 是后续扩展，设计见 [VAULT.md](VAULT.md)；当前 `/v1` 不包含这些路由。
+
 ## 不变量
 
 1. `append` 只接受**前缀延续**：`baseIndex` 必须是当前链的最后一个下标，且 `baseChainHash` 与该帧的明文哈希一致；否则 `409`。
