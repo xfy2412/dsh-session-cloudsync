@@ -144,17 +144,18 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 
 ### 5.3 状态从哪里来
 
-客户端需要知道哪些会话处于 `applying` / `openTail`。建议：
+客户端需要知道哪些会话处于 `applying` / `openTail`。M4 的实现顺序：
 
-- 宿主插件写一个 **session projection**（如 `syncState: { state, safeThroughSeq, tailOpen }`）；
-- 客户端用 `useSessions` / session projections 读取，再驱动 `blocks.set` 和行拦截；
+- **A3/A4 已落地宿主 API**：`GET /api/session-sync/status` 提供运行中/上次结果/退避/pending/逐会话 `tailOpen`，`POST /api/session-sync/sync` 手动触发；客户端轮询即可驱动首版气泡；
+- 逐会话的精确状态最终仍建议写一个 **session projection**（如 `syncState: { state, safeThroughSeq, tailOpen }`），供 `useSessions` / 列表行使用；
 - 不用“写一条事件”表达临时同步状态，避免污染日志；
-- 如果列表行拿不到任意 projection，再考虑 `sessions.provide` 或轻量远程服务（M4 验证）。
+- 如果列表行拿不到任意 projection，再考虑 `sessions.provide` 或轻量远程服务（C1 验证）。
 
 ## 6. 已知限制与待验证
 
 - 客户端 projection 在列表行里的可见性还没端到端验证；
 - **durable revision + pending journal 已实现**：拉取前落盘 `{sessionId,targetSeq}`，成功后清除；启动先补 pending。若崩溃到 reconcile 前用户 resume，仍可能写入 closers 造成冲突，这条竞态仍需 UI/守卫兜底；
+- **pending 只有一条**：一个会话失败后 `pullOnce` 立即停止，不再开始下一个会话，避免覆盖前一个未完成的恢复记录；代价是失败会话解决前，本轮后续会话暂不拉取。逐会话 journal 条目留到后续按需再拆；
 - `data-row-key` 是应用内部属性，不是公开 API；捕获拦截依赖它，升级时要回归；
 - 用户可能在 reconcile 完成前通过深链/其他入口打开会话；composer block 仍能阻止继续，但“打开”本身是否触发 agent resume 还没端到端验证；
 - 官方没有“禁用会话行”的插槽；可向上游提需求，M4 先用拦截方案；

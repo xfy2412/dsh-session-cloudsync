@@ -1,8 +1,9 @@
 /**
  * dsh-session-sync 宿主插件入口。
  *
- * M3：按事件批次把本地会话推到自部署服务端；拉取、客户端 UI 与自动故障
- * 恢复在后续里程碑补齐。
+ * M4：在 M3 的推拉引擎外面加一层同步控制器——手动触发、状态快照和
+ * `/api/session-sync/*` 宿主 API。未配置时也加载，设置/首启界面需要读取
+ * `setup` 与 `status`。
  *
  * @module dsh-session-sync
  */
@@ -11,18 +12,20 @@ import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { join } from 'node:path'
+import { SyncController } from './controller.ts'
 import {
-  classifySyncError,
   pullOnce,
   syncOnce,
   type CreateHeaderLike,
   type CreateOptions,
   type EngineConfig,
-  type PendingApply,
-  type SyncErrorKind,
+  type PullReport,
+  type PullState,
   type SyncLogger,
 } from './engine.ts'
+import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
+import type { SetupInfo } from './status.ts'
 
 /** 插件在加载器里的名字。 */
 export const name = 'dsh-session-sync'
@@ -87,6 +90,13 @@ interface WorkspaceRegistryLike {
   create(path: string, title: string): Promise<WorkspaceLike>
 }
 
+/** `ctx.connection` 的最小结构（类型包不在本插件依赖里）。 */
+interface ConnectionLike {
+  readonly fetch: {
+    register(route: HostFetchRoute): () => Promise<void>
+  }
+}
+
 /**
  * 找出持久化状态文件路径。
  * @param ctx - 插件上下文。
@@ -104,9 +114,6 @@ function statePathOf(ctx: Context): string | undefined {
   const home = process.env.DSH_HOME
   return home === undefined || home === '' ? undefined : join(home, 'session-sync', 'state.json')
 }
-
-/** 不可自动恢复、只应等待配置/人工处理的错误。 */
-const NON_RETRYABLE: ReadonlySet<SyncErrorKind> = new Set(['auth', 'forbidden', 'diverged', 'format', 'crypto', 'gone'])
 
 /**
  * 注册插件。
@@ -127,10 +134,7 @@ export function apply(ctx: Context, config: Config): void {
   const serverUrl = config.serverUrl ?? ''
   const token = config.token ?? ''
   const passphrase = config.passphrase ?? ''
-  if (serverUrl.trim() === '' || token.trim() === '' || passphrase === '') {
-    logger.info('dsh-session-sync: 未配置 serverUrl/token/passphrase，插件只加载不推送')
-    return
-  }
+  const intervalMs = config.intervalMs ?? 60000
 
   const engineConfig: EngineConfig = {
     serverUrl,
@@ -162,22 +166,44 @@ export function apply(ctx: Context, config: Config): void {
   const initialJournal: PullJournal = statePath === undefined
     ? { version: STATE_VERSION, revision: 0 }
     : readPullJournal(statePath)
-  let pullRevision = initialJournal.revision
-  let pending: PendingApply | undefined = initialJournal.pending
   if (statePath === undefined) logger.info('dsh-session-sync: 找不到 DSH home，拉取状态只保存在内存')
 
-  const persistState = (): void => {
+  const persistState = (state: PullState): void => {
     if (statePath === undefined) return
     try {
       writePullJournal(statePath, {
         version: STATE_VERSION,
-        revision: pullRevision,
-        ...pending === undefined ? {} : { pending },
+        revision: state.revision,
+        ...state.pending === undefined ? {} : { pending: state.pending },
       })
     } catch (error: unknown) {
       logger.warn(`dsh-session-sync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
+
+  const configuration = (): { configured: boolean; reason?: string } => {
+    if (serverUrl.trim() === '') return { configured: false, reason: 'serverUrl 未配置' }
+    if (token.trim() === '') return { configured: false, reason: 'token 未配置' }
+    if (passphrase === '') return { configured: false, reason: 'passphrase 未配置' }
+    return { configured: true }
+  }
+
+  let pullWithDeps: ((state: PullState) => Promise<PullReport>) | undefined
+  const controller = new SyncController({
+    push: () => syncOnce(deps),
+    pull: (state) => {
+      if (pullWithDeps === undefined) throw new Error('拉取引擎尚未初始化')
+      return pullWithDeps(state)
+    },
+    persist: persistState,
+    configuration,
+    intervalMs,
+    initial: {
+      revision: initialJournal.revision,
+      ...initialJournal.pending === undefined ? {} : { pending: initialJournal.pending },
+    },
+    logger,
+  })
 
   const pullDeps = {
     persistence: {
@@ -200,104 +226,58 @@ export function apply(ctx: Context, config: Config): void {
     },
     logger,
     beforeApply: async (sessionId: string, targetSeq: number): Promise<void> => {
-      pending = { sessionId, targetSeq, at: Date.now() }
-      persistState()
+      controller.beginApply(sessionId, targetSeq)
     },
-    afterApply: async (): Promise<void> => {
-      pending = undefined
-      persistState()
+    afterApply: async (sessionId: string): Promise<void> => {
+      controller.endApply(sessionId)
     },
   }
+  pullWithDeps = (state) => pullOnce(pullDeps, state)
 
-  const status: {
-    running: boolean
-    lastAttempt: number | undefined
-    lastSuccess: number | undefined
-    lastError: { kind: SyncErrorKind; message: string; at: number } | undefined
-    retryCount: number
-    nextRetryAt: number
-  } = {
-    running: false,
-    lastAttempt: undefined,
-    lastSuccess: undefined,
-    lastError: undefined,
-    retryCount: 0,
-    nextRetryAt: 0,
-  }
-
-  const run = async (): Promise<void> => {
-    if (status.running) return
-    if (Date.now() < status.nextRetryAt) return
-    status.running = true
-    status.lastAttempt = Date.now()
-    const errors: Array<{ kind: SyncErrorKind; message: string }> = []
-    try {
-      const report = await syncOnce(deps)
-      if (!report.configured) {
-        logger.warn(`dsh-session-sync: 未执行推送（${report.reason ?? '未配置'}）`)
-      } else {
-        const pushed = report.sessions.filter((session) => session.status === 'pushed')
-        const failed = report.sessions.filter((session) => session.status === 'error')
-        const skipped = report.sessions.length - pushed.length - failed.length
-        if (pushed.length > 0 || failed.length > 0) {
-          logger.info(`dsh-session-sync: 推送 ${pushed.length} 个会话，失败 ${failed.length}，跳过 ${skipped}`)
-        }
-        for (const session of failed) {
-          const kind = session.kind ?? 'unknown'
-          errors.push({ kind, message: session.error ?? '未知错误' })
-          logger.warn(`dsh-session-sync: ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
-        }
-      }
-
-      const pulled = await pullOnce(pullDeps, pending === undefined
-        ? { revision: pullRevision }
-        : { revision: pullRevision, pending })
-      if (pulled.configured) {
-        const failed = pulled.sessions.filter((session) => session.status === 'error')
-        const applied = pulled.sessions.filter((session) => session.status === 'pulled' || session.status === 'partial')
-        if (failed.length === 0) {
-          pullRevision = pulled.revision
-          persistState()
-        }
-        if (applied.length > 0 || failed.length > 0) {
-          logger.info(`dsh-session-sync: 拉取 ${applied.length} 个会话，失败 ${failed.length}`)
-        }
-        for (const session of failed) {
-          const kind = session.kind ?? 'unknown'
-          errors.push({ kind, message: session.error ?? '未知错误' })
-          logger.warn(`dsh-session-sync: 拉取 ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
-        }
-      }
-    } catch (error: unknown) {
-      const classified = classifySyncError(error)
-      errors.push({ kind: classified.kind, message: classified.message })
-      logger.warn(`dsh-session-sync: 一次同步失败（${classified.kind}）：${classified.message}`)
-    } finally {
-      status.running = false
-      if (errors.length > 0) {
-        status.retryCount += 1
-        const nonRetryable = errors.some((entry) => NON_RETRYABLE.has(entry.kind))
-        const base = config.intervalMs ?? 60000
-        const delay = nonRetryable
-          ? Math.max(base, 5 * 60_000)
-          : Math.min(base * 2 ** Math.min(status.retryCount, 5), 5 * 60_000)
-        status.nextRetryAt = Date.now() + delay
-        status.lastError = { kind: errors[0]!.kind, message: errors[0]!.message, at: Date.now() }
-        logger.warn(`dsh-session-sync: 将在 ${Math.round(delay / 1000)}s 后重试（retry=${status.retryCount}）`)
-      } else {
-        status.retryCount = 0
-        status.nextRetryAt = 0
-        status.lastSuccess = Date.now()
-        status.lastError = undefined
-        persistState()
-      }
+  const setup = (): SetupInfo => {
+    const state = configuration()
+    return {
+      configured: state.configured,
+      reason: state.reason ?? null,
+      serverUrl,
+      deviceName: config.deviceName ?? '',
+      workspacePath,
+      autoSync: config.autoSync !== false,
+      intervalMs,
+      includeSubagents: config.includeSubagents === true,
+      hasToken: token.trim() !== '',
+      hasPassphrase: passphrase !== '',
     }
   }
 
-  void run()
+  const control: SyncControl = {
+    status: () => controller.snapshot(),
+    setup,
+    syncNow: () => controller.run({ manual: true }),
+  }
+  ctx.inject(['connection'], (connectionCtx) => {
+    const connection = connectionCtx.get('connection') as ConnectionLike | undefined
+    if (connection === undefined) {
+      logger.warn('dsh-session-sync: connection 服务不可用，状态/控制 API 未注册')
+      return
+    }
+    for (const route of createHostApi(control)) {
+      connectionCtx.effect(
+        () => connection.fetch.register(route),
+        `dsh-session-sync: ${route.path}`,
+      )
+    }
+  })
+
+  const current = configuration()
+  if (!current.configured) {
+    logger.info(`dsh-session-sync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
+  } else {
+    void controller.run()
+  }
   if (config.autoSync !== false) {
     ctx.effect(() => {
-      const timer = setInterval(() => { void run() }, config.intervalMs ?? 60000)
+      const timer = setInterval(() => { void controller.run() }, intervalMs)
       return () => { clearInterval(timer) }
     })
   }

@@ -76,4 +76,5 @@ SessionPersistenceCorruptionError: current-generation delivery marker names the 
 - 开放尾验收：120 个闭合事件 + 1 个开放事件推送后，新设备只 apply 到 `safeThroughSeq=119`；闭合事件到达后才补到 121；
 - 断网验收：服务端停止后宿主继续运行，推送只记错误（引擎离线单测覆盖）；
 - 可靠性：durable revision + pending journal（`state.json` 原子写入），启动先补 pending；错误分类与退避已落到 host；
-- 尚未实现：手动按钮/状态 UI、`frames → batches` 重命名。
+- M4 A3/A4：`GET /api/session-sync/status`、`GET /api/session-sync/setup`、`POST /api/session-sync/sync`（`ctx.connection.fetch`，owner-only）；状态含逐会话视图与 `tailOpen`，手动触发跳过退避；
+- 尚未实现：图形化手动按钮/状态气泡（C6）、`frames → batches` 重命名。

@@ -133,6 +133,8 @@ export interface SessionSyncReport {
   readonly bytes?: number
   readonly error?: string
   readonly kind?: SyncErrorKind
+  /** 本地尾巴是否还有未闭合的 turn；只在读到事件后可知。 */
+  readonly tailOpen?: boolean
 }
 
 /** 一次同步的总结果。 */
@@ -563,14 +565,14 @@ async function syncSession<Session>(
   const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
 
   if (remote !== undefined && remote.deletedAt !== undefined) {
-    return { sessionId, status: 'skipped', error: '远端已有墓碑' }
+    return { sessionId, status: 'skipped', error: '远端已有墓碑', tailOpen }
   }
   if (remote !== undefined) {
     if (remote.createdAt !== meta.createdAt) throw new Error('远端会话的 createdAt 与本地不一致')
     if (remote.formatVersion !== meta.formatVersion) throw new Error('远端会话的格式代际与本地不一致')
     const head = remote.frames[0]
     if (head === undefined || head.chainHash !== headerChainHash(meta)) throw new Error('远端会话头与本地不一致（diverged）')
-    if (localLast < remote.lastSeq) return { sessionId, status: 'remote-ahead' }
+    if (localLast < remote.lastSeq) return { sessionId, status: 'remote-ahead', tailOpen }
     if (remote.safeThroughSeq !== undefined) safeThroughSeq = Math.max(safeThroughSeq, remote.safeThroughSeq)
   }
 
@@ -591,7 +593,7 @@ async function syncSession<Session>(
     baseChainHash = null
   } else {
     const batches = planEventBatches(events, remote.lastSeq, batchOptions(deps.config))
-    if (batches.length === 0) return { sessionId, status: 'up-to-date' }
+    if (batches.length === 0) return { sessionId, status: 'up-to-date', tailOpen }
     batches.forEach((batch, offset) => {
       sealedEntries.push(sealEventBatch(batch.events, sessionId, remote.frames.length + offset, sessionKey))
     })
@@ -603,7 +605,7 @@ async function syncSession<Session>(
   for (const entry of sealedEntries) await uploadBlob(fetchImpl, base, deps.config.token, entry)
 
   const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId)
-  if (!leased) return { sessionId, status: 'lease-held' }
+  if (!leased) return { sessionId, status: 'lease-held', tailOpen }
   try {
     await appendFrames(fetchImpl, base, deps.config.token, sessionId, {
       baseIndex,
@@ -623,6 +625,7 @@ async function syncSession<Session>(
     status: 'pushed',
     batches: pushedBatches,
     bytes: sealedEntries.reduce((total, entry) => total + entry.ref.bytes, 0),
+    tailOpen,
   }
 }
 
@@ -908,7 +911,6 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
 
   for (let page = 0; page < 20; page += 1) {
     const cursor = await readCursor(fetchImpl, base, config.token, revision)
-    let failed = false
     for (const change of cursor.sessions) {
       if (change.deletedAt !== null) {
         reports.push({ sessionId: change.sessionId, status: 'tombstone' })
@@ -917,16 +919,17 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       try {
         reports.push(await pullSession(deps, fetchImpl, base, master, change.sessionId))
       } catch (error: unknown) {
-        failed = true
         const classified = classifySyncError(error)
         deps.logger?.warn(`dsh-session-sync: 拉取 ${change.sessionId} 失败：${classified.message}`)
         reports.push({ sessionId: change.sessionId, status: 'error', error: classified.message, kind: classified.kind })
+        // 一个会话失败后立即停止：pending 只有一条，继续应用下一个会话会覆盖
+        // 前一个未完成的恢复记录（下一次启动就补不回来了）。
+        return { configured: true, sessions: reports, revision: state.revision }
       }
     }
     for (const tombstone of cursor.tombstones) {
       reports.push({ sessionId: tombstone.sessionId, status: 'tombstone' })
     }
-    if (failed) return { configured: true, sessions: reports, revision: state.revision }
     const maxRevision = Math.max(
       revision,
       ...cursor.sessions.map((change) => change.revision),

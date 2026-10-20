@@ -222,6 +222,57 @@ test('拉取引擎：append 失败留下 pending，重启后按 pending 补完',
   }
 })
 
+test('拉取引擎：一个会话失败后停止，不覆盖它的 pending', async () => {
+  const temp = createTempHome('plugin-pending-stop')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'pending-stop-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const firstId = 'session-pending-stop-1'
+      const secondId = 'session-pending-stop-2'
+      const header = (id, createdAt) => ({
+        id,
+        version: 4,
+        createdAt,
+        isSeeded: false,
+        delegationDepth: 0,
+        agentPreset: 'standard',
+        cwd: 'D:/a',
+      })
+      const storeA = fakeStore(header(firstId, 100), events(0, 3))
+      storeA.sessions.set(secondId, { header: header(secondId, 200), events: events(0, 5) })
+      const config = { serverUrl: base, token: device.token, passphrase: 'pending stop pass', batchEvents: 20 }
+      const pushed = await syncOnce({ persistence: storeA, sessions, config, isTailOpen: () => false })
+      assert.equal(pushed.sessions.length, 2)
+
+      const storeB = fakeStore(undefined, [], { failAppendOnce: true })
+      let pending
+      const pulled = await pullOnce({
+        persistence: storeB,
+        sessions,
+        config,
+        workspacePath: 'D:/b',
+        attach: async () => {},
+        beforeApply: async (id, targetSeq) => { pending = { sessionId: id, targetSeq, at: 1 } },
+        afterApply: async (id) => {
+          if (pending?.sessionId === id) pending = undefined
+        },
+      }, { revision: 0 })
+
+      assert.equal(pulled.sessions.length, 1, '第一个会话失败后应立即停止')
+      assert.equal(pulled.sessions[0].status, 'error')
+      assert.deepEqual(pending?.sessionId, pulled.sessions[0].sessionId)
+      assert.equal(storeB.sessions.size, 1, '不应开始创建第二个会话')
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
 test('推送引擎：未配置时不动作，离线时只报告错误不抛出', async () => {
   const header = { id: 'session-engine-offline', version: 4, createdAt: 1, isSeeded: false, delegationDepth: 0 }
   const state = { events: events(0, 2) }
