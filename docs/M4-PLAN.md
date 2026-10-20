@@ -58,15 +58,19 @@
 
 ### 前端形态（已定）
 
-- **首启**：客户端启动请求 `GET /api/session-sync/setup`；未配置时用 `shell.overlay` 显示全屏向导（连接 → 凭据 → 工作区白名单 → 测试/首次同步），可“稍后”；之后在 Plugins 页常驻配置。
-- **同步预览**：不用 `conversation.session.header.*` 槽位，改为 **`shell.overlay` 的顶层气泡**：
-  - 收起态：图标 + `完成/总数` + 细进度条；
-  - 展开态：逐会话状态、错误、下次重试；
-  - 仅在同步中/有待拉取/有错误时出现；成功后短暂显示再隐藏；
-  - 右上角、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
+- **首启**：客户端启动请求 `GET /api/session-sync/setup`；未配置时用 `shell.overlay` 显示全屏向导（连接 → 凭据 → 工作区白名单 → 测试/首次同步），可“稍后”；之后在 Plugins 页常驻配置。向导打开/关闭有缩放淡入淡出，步骤切换按方向滑入；动效约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
+- **同步预览**：不用 `conversation.session.header.*` 槽位，改为 **`shell.overlay` 的顶部居中气泡**：
+  - 收起态是顶部居中的唯一云图标；点击后同一个云图标带着卡片展开，再点缩回图标；组件常驻 overlay 层，切页面不重建；
+  - 一条完整进度条，无间隔切成 N 等份，每份对应一个会话；
+  - 同步中为黄色，填满为绿色，失败为红色；会话可并发推进（多线程下载器观感）；
+  - 展开后显示逐会话状态、错误、下次重试；列表展开有高度过渡；
+  - 仅在同步中/有待拉取/有错误时出现；成功后短暂显示再缩回图标；
+  - 用户主动打开或操作过气泡后，失焦 5 秒再自动收回；焦点/指针回到气泡会取消，焦点在气泡内时不收回；手动点图标可立即收起；
+  - 顶部居中、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
   - 窄屏切底部 sheet；`aria-live="polite"`。
 - **API**：`GET /api/session-sync/setup`、`GET /status`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区标题、根会话数、子代理数、是否选中；「全选」取全部 `path`。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
 - **刷新**：同步中每 1s 轮询 status，空闲停止。
+- **动效**：状态变化才动；微交互 120–180ms、面板 220–320ms、气泡进出 320–420ms；只动 `transform` / `opacity` / `grid-template-rows`，进度用 `linear`；必须支持 `prefers-reduced-motion`。详细约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
 
 ### C. 客户端防误操作
 
@@ -77,7 +81,7 @@
 | C3 | 列表行捕获拦截：click / pointerdown / keydown（运行中/同步中的行） | C1 |
 | C4 | 空闲行 `sidebar.session.row.leading` 同步标记 + hover 说明 | C1 |
 | C5 | GUI 回归：下拉、拖拽、键盘、深链打开都不误 resume | C2–C4 |
-| C6 | 顶层同步气泡：`shell.overlay` 中的收起/展开进度卡片（完成/总数 + 细条 + 逐会话列表），不占标题栏 | A3、C1 |
+| C6 | 顶部居中的分段进度气泡：收起态是唯一云图标，点击后同一图标展开成卡片，完成缩回；进度条按会话等分，黄→绿/红，子先父后并发推进；展开逐会话列表，不占标题栏 | A3、C1 |
 
 ### D. 故障演练
 

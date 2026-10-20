@@ -69,6 +69,8 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 - [docs/DESIGN.md](docs/DESIGN.md)：范围、数据分层、并发与加密的取舍。
 - [docs/PROTOCOL.md](docs/PROTOCOL.md)：服务端端点与不变量。
 - [docs/SYNC-SAFETY.md](docs/SYNC-SAFETY.md)：开放尾与安全边界、拉取原子性、客户端防误操作。
+- [docs/UI-GUIDELINES.md](docs/UI-GUIDELINES.md)：客户端页面的动效与可访问性约定。
+- [dev/ui/README.md](dev/ui/README.md)：设置页 / 首启 / 同步气泡的静态原型。
 - [tests/README.md](tests/README.md)：临时 home 与夹具约定。
 
 ## 许可证

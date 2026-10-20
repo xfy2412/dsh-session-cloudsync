@@ -1,0 +1,1385 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话同步 · UI 原型</title>
+<style>
+  :root {
+    --bg: #151517;
+    --sidebar: #1a1a1c;
+    --layer-1: #232324;
+    --layer-2: #2c2c2e;
+    --layer-3: #353436;
+    --border: rgba(255, 255, 255, .07);
+    --border-strong: rgba(255, 255, 255, .14);
+    --text: #ebedf0;
+    --muted: #a9adb3;
+    --faint: #81858c;
+    --accent: #5686fe;
+    --accent-soft: rgba(86, 134, 254, .13);
+    --accent-line: rgba(86, 134, 254, .42);
+    --success: #22c55e;
+    --success-soft: rgba(34, 197, 94, .12);
+    --danger: #ef4444;
+    --danger-soft: rgba(239, 68, 68, .12);
+    --warn: #f59e0b;
+    --warn-soft: rgba(245, 158, 11, .12);
+    --radius: 14px;
+    --shadow: 0 18px 50px rgba(0, 0, 0, .45);
+    --t-morph: .34s;
+    --t-panel: .3s;
+    --t-fade: .18s;
+    --t-move: .26s;
+    --t-hover: .15s;
+  }
+  body.slow-mo {
+    --t-morph: 34s;
+    --t-panel: 30s;
+    --t-fade: 18s;
+    --t-move: 26s;
+    --t-hover: 15s;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 460px at 76% -8%, rgba(86, 134, 254, .10), transparent 62%),
+      radial-gradient(700px 420px at 8% 110%, rgba(86, 134, 254, .05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; }
+  button { color: inherit; }
+  button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  svg { display: block; }
+
+  /* 原型工具条：不属于产品 UI，仅用于切换预览状态。 */
+  .proto-bar {
+    position: fixed; inset: 0 0 auto 0; height: 48px; z-index: 300;
+    display: flex; align-items: center; gap: 18px; padding: 0 16px;
+    background: rgba(21, 21, 23, .9); border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+  }
+  .proto-title { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .proto-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px rgba(86, 134, 254, .12); }
+  .proto-tag { padding: 1px 7px; border: 1px solid var(--border-strong); border-radius: 999px; font-size: 11px; color: var(--faint); }
+  .proto-speed {
+    border: 1px solid var(--border-strong); background: transparent; color: var(--faint);
+    border-radius: 999px; padding: 1px 7px; font-size: 10.5px; cursor: pointer;
+  }
+  .proto-speed.on { color: #b9ccff; border-color: var(--accent-line); background: var(--accent-soft); }
+  .proto-tabs { display: flex; align-items: center; gap: 4px; margin-left: 4px; }
+  .proto-tabs button, .proto-states button {
+    border: 0; background: transparent; color: var(--muted); padding: 5px 10px; border-radius: 8px; cursor: pointer; font-size: 12px;
+  }
+  .proto-tabs button:hover, .proto-states button:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
+  .proto-tabs button.on { background: var(--accent-soft); color: #b9ccff; }
+  .proto-states { display: flex; gap: 2px; margin-left: auto; align-items: center; }
+  .proto-states::before { content: "预览状态"; color: var(--faint); font-size: 11px; margin-right: 6px; }
+  .proto-states button { border: 1px solid transparent; }
+  .proto-states button.on { border-color: var(--border-strong); background: rgba(255, 255, 255, .05); color: var(--text); }
+
+  #stage { padding-top: 48px; min-height: 100vh; }
+
+  .page { width: min(760px, 100%); margin: 0 auto; padding: 30px 20px 56px; }
+  .page-head { display: flex; align-items: flex-start; gap: 14px; margin: 2px 0 20px; }
+  .head-icon {
+    width: 44px; height: 44px; flex: 0 0 auto; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 13px; color: #a9c1ff;
+    background: linear-gradient(145deg, rgba(86, 134, 254, .22), rgba(86, 134, 254, .04));
+  }
+  .page-head h1 { margin: 0 0 2px; font-size: 21px; line-height: 1.3; letter-spacing: .01em; }
+  .page-head p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .head-badge { margin-left: auto; padding-top: 5px; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+    border: 1px solid var(--border-strong); border-radius: 999px; color: var(--muted);
+    font-size: 11.5px; line-height: 1.6; white-space: nowrap; background: rgba(255, 255, 255, .025);
+  }
+  .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+  .badge.success { color: #8be0aa; border-color: rgba(34, 197, 94, .28); background: var(--success-soft); }
+  .badge.success .dot { background: var(--success); }
+  .badge.warn { color: #f5c76b; border-color: rgba(245, 158, 11, .28); background: var(--warn-soft); }
+  .badge.warn .dot { background: var(--warn); }
+  .badge.danger { color: #ff9a9a; border-color: rgba(239, 68, 68, .3); background: var(--danger-soft); }
+  .badge.danger .dot { background: var(--danger); }
+  .badge.info { color: #b9ccff; border-color: rgba(86, 134, 254, .3); background: var(--accent-soft); }
+  .badge.info .dot { background: var(--accent); }
+
+  .card {
+    background: linear-gradient(180deg, rgba(255, 255, 255, .018), transparent 70%), var(--layer-1);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px; margin-bottom: 14px;
+  }
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .card-head h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .01em; }
+  .card-head .hint { color: var(--faint); font-size: 11.5px; }
+  .card-head .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .field + .field { margin-top: 0; }
+  .field-label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+  .field-label .pill { margin-left: auto; }
+  .input-wrap { position: relative; display: flex; align-items: center; }
+  .input {
+    width: 100%; height: 36px; padding: 0 11px; border: 1px solid var(--border-strong);
+    border-radius: 9px; background: rgba(0, 0, 0, .18); color: var(--text);
+    transition: border-color .15s, background .15s;
+  }
+  .input:hover { border-color: rgba(255, 255, 255, .2); }
+  .input:focus { outline: none; border-color: var(--accent-line); background: rgba(0, 0, 0, .26); box-shadow: 0 0 0 3px rgba(86, 134, 254, .1); }
+  .input::placeholder { color: #777b82; }
+  .input.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; }
+  .hint { color: var(--faint); font-size: 11.5px; line-height: 1.55; }
+  .hint.warn { color: #e0b15c; }
+  .hint.danger { color: #ff9a9a; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px;
+    border-radius: 999px; font-size: 10.5px; color: var(--muted);
+    border: 1px solid var(--border); background: rgba(255, 255, 255, .03);
+  }
+  .pill.ok { color: #8be0aa; border-color: rgba(34, 197, 94, .25); background: var(--success-soft); }
+  .pill.warn { color: #f5c76b; border-color: rgba(245, 158, 11, .25); background: var(--warn-soft); }
+
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row.between { justify-content: space-between; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 12px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--border-strong); background: rgba(255, 255, 255, .035); color: var(--text);
+    transition: background .15s, border-color .15s, opacity .15s; white-space: nowrap;
+  }
+  .btn:hover { background: rgba(255, 255, 255, .07); border-color: rgba(255, 255, 255, .2); }
+  .btn:active { transform: translateY(.5px); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #6b96ff; border-color: #6b96ff; }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.ghost:hover { background: rgba(255, 255, 255, .055); color: var(--text); }
+  .btn.small { height: 27px; padding: 0 9px; font-size: 12px; border-radius: 8px; }
+  .btn:disabled { opacity: .42; cursor: not-allowed; }
+
+  .test-result { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; min-height: 18px; }
+  .test-result.ok { color: #8be0aa; }
+  .test-result.bad { color: #ff9a9a; }
+  .spinner {
+    width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, .22);
+    border-top-color: currentColor; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .cred-row { display: flex; flex-direction: column; gap: 6px; }
+  .cred-row + .cred-row { margin-top: 12px; }
+  .cred-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+  .cred-head .pill { margin-left: auto; }
+
+  .ws-toolbar { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
+  .ws-toolbar .hint { margin-right: auto; }
+  .ws-list { display: flex; flex-direction: column; gap: 8px; }
+  .ws-row {
+    position: relative; display: flex; align-items: center; gap: 11px;
+    padding: 10px 11px; border: 1px solid var(--border); border-radius: 10px;
+    background: rgba(0, 0, 0, .1); cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .ws-row:hover { border-color: var(--border-strong); background: rgba(255, 255, 255, .025); }
+  .ws-row.on { border-color: var(--accent-line); background: var(--accent-soft); }
+  .ws-input { position: absolute; opacity: 0; pointer-events: none; }
+  .ws-check {
+    width: 18px; height: 18px; flex: 0 0 auto; border-radius: 5px;
+    border: 1.5px solid rgba(255, 255, 255, .24); display: grid; place-items: center;
+    color: #fff; background: rgba(0, 0, 0, .12); transition: background .15s, border-color .15s;
+  }
+  .ws-check svg { opacity: 0; transform: scale(.7); transition: opacity .12s, transform .12s; }
+  .ws-row.on .ws-check { background: var(--accent); border-color: var(--accent); }
+  .ws-row.on .ws-check svg { opacity: 1; transform: scale(1); }
+  .ws-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .ws-title { font-size: 13px; line-height: 1.4; }
+  .ws-path { color: var(--faint); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-meta { margin-left: auto; flex: 0 0 auto; text-align: right; color: var(--muted); font-size: 11px; line-height: 1.4; }
+  .ws-meta small { display: block; color: var(--faint); font-size: 10.5px; }
+  .ws-empty { padding: 22px; border: 1px dashed var(--border-strong); border-radius: 10px; text-align: center; color: var(--faint); font-size: 12px; }
+  .ws-summary { margin-top: 10px; color: var(--faint); font-size: 11.5px; }
+  .ws-summary strong { color: var(--muted); font-weight: 500; }
+
+  .behavior-row { display: flex; align-items: center; gap: 12px; padding: 3px 0; }
+  .behavior-row + .behavior-row { margin-top: 10px; padding-top: 13px; border-top: 1px solid var(--border); }
+  .behavior-main { min-width: 0; }
+  .behavior-main b { display: block; font-size: 12.5px; font-weight: 500; }
+  .behavior-main span { color: var(--faint); font-size: 11px; }
+  .behavior-row .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .switch { position: relative; display: inline-flex; width: 38px; height: 22px; flex: 0 0 auto; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .switch span {
+    position: absolute; inset: 0; border-radius: 999px; background: rgba(255, 255, 255, .12);
+    border: 1px solid var(--border-strong); transition: background .16s, border-color .16s;
+  }
+  .switch span::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: #c9ccd1; transition: transform .16s, background .16s;
+  }
+  .switch input:checked + span { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(16px); background: #fff; }
+  .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .select {
+    height: 30px; padding: 0 28px 0 9px; border-radius: 8px; border: 1px solid var(--border-strong);
+    color: var(--text); background-color: rgba(0, 0, 0, .18);
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='m1 1 4 4 4-4' fill='none' stroke='%2381858c' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+
+  .actions {
+    display: flex; align-items: center; gap: 10px; margin-top: 18px; padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .actions .status-text { color: var(--faint); font-size: 11.5px; margin-right: auto; }
+  .actions .btn.primary { min-width: 82px; }
+
+  /* 模拟的 DSH 应用壳：只用于展示 overlay / 气泡。 */
+  .app-shell { display: grid; grid-template-columns: 246px 1fr; height: calc(100vh - 48px); overflow: hidden; }
+  .mock-sidebar { background: var(--sidebar); border-right: 1px solid var(--border); padding: 14px 10px; overflow: hidden; }
+  .mock-brand { display: flex; align-items: center; gap: 9px; padding: 0 8px 14px; color: var(--muted); font-size: 13px; }
+  .mock-brand .mark { width: 20px; height: 20px; border-radius: 6px; background: linear-gradient(145deg, #6f98ff, #335bd7); }
+  .mock-session {
+    display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; color: var(--muted);
+    font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mock-session .glyph { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+  .mock-session.on { background: rgba(255, 255, 255, .055); color: var(--text); }
+  .mock-session.child { padding-left: 28px; font-size: 12px; color: var(--faint); }
+  .mock-session.child .glyph { width: 5px; height: 5px; background: #59606a; }
+  .mock-group { padding: 16px 9px 5px; color: #666b73; font-size: 10.5px; letter-spacing: .03em; }
+  .mock-chat { padding: 26px 34px; position: relative; overflow: hidden; }
+  .mock-chat h3 { margin: 0 0 4px; font-size: 16px; font-weight: 500; }
+  .mock-chat p { margin: 0 0 22px; color: var(--faint); font-size: 12px; }
+  .mock-bubble-user {
+    margin-left: auto; width: min(520px, 78%); padding: 12px 14px; border-radius: 14px 14px 4px 14px;
+    background: rgba(86, 134, 254, .12); border: 1px solid rgba(86, 134, 254, .16); color: #d7e0f8; font-size: 12.5px;
+  }
+  .mock-reply { width: min(660px, 90%); margin-top: 20px; color: var(--muted); font-size: 12.5px; line-height: 1.75; }
+  .mock-line { height: 9px; border-radius: 5px; background: rgba(255, 255, 255, .055); margin: 8px 0; }
+  .mock-line.w80 { width: 80%; } .mock-line.w62 { width: 62%; } .mock-line.w91 { width: 91%; }
+  .mock-dock {
+    position: absolute; left: 24px; right: 24px; bottom: 20px; height: 70px; border-radius: 16px;
+    border: 1px solid var(--border-strong); background: rgba(35, 35, 36, .88); backdrop-filter: blur(10px);
+  }
+
+  /* 首启 overlay */
+  .overlay {
+    position: fixed; inset: 48px 0 0; z-index: 180; display: grid; place-items: center; padding: 24px;
+    background: rgba(8, 8, 10, .48); backdrop-filter: blur(6px);
+  }
+  .overlay.overlay-in { animation: overlay-in .26s ease both; }
+  .overlay.overlay-out { animation: overlay-out .24s ease both; pointer-events: none; }
+  @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes overlay-out { from { opacity: 1; } to { opacity: 0; } }
+  .wizard {
+    width: min(650px, 100%); max-height: calc(100vh - 96px);
+    overflow-x: hidden; overflow-y: auto;
+    border: 1px solid var(--border-strong); border-radius: 18px; background: #222223; box-shadow: var(--shadow);
+    transform-origin: top center;
+  }
+  .wizard.wizard-in { animation: wizard-in .38s cubic-bezier(.16, 1, .3, 1) both; }
+  .wizard.wizard-out { animation: wizard-out .28s cubic-bezier(.55, 0, .8, .35) both; pointer-events: none; }
+  @keyframes wizard-in {
+    from { opacity: 0; transform: translateY(-16px) scale(.94); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes wizard-out {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to { opacity: 0; transform: translateY(-12px) scale(.96); }
+  }
+  .wizard-head { display: flex; gap: 13px; align-items: flex-start; padding: 22px 22px 0; }
+  .wizard-icon {
+    width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 11px;
+    color: #c4d5ff; background: linear-gradient(145deg, rgba(86, 134, 254, .26), rgba(86, 134, 254, .06));
+    border: 1px solid rgba(86, 134, 254, .22);
+  }
+  .wizard-head h2 { margin: 1px 0 3px; font-size: 18px; font-weight: 600; }
+  .wizard-head p { margin: 0; color: var(--muted); font-size: 12px; }
+  .icon-btn {
+    margin-left: auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px;
+    border: 0; background: transparent; color: var(--faint); cursor: pointer;
+  }
+  .icon-btn:hover { background: rgba(255, 255, 255, .07); color: var(--text); }
+  .steps { display: flex; align-items: center; gap: 0; padding: 20px 22px 0; }
+  .step { display: flex; align-items: center; gap: 7px; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+  .step .num {
+    width: 19px; height: 19px; display: grid; place-items: center; border-radius: 50%;
+    border: 1px solid var(--border-strong); font-size: 10.5px; color: var(--faint);
+  }
+  .step.on { color: #c6d7ff; }
+  .step.on .num { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .step.done { color: #9aa0a8; }
+  .step.done .num { border-color: rgba(34, 197, 94, .4); background: var(--success-soft); color: #8be0aa; }
+  .steps.advanced .step.on .num { animation: step-pop .26s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes step-pop {
+    0% { transform: scale(.82); }
+    60% { transform: scale(1.08); }
+    100% { transform: scale(1); }
+  }
+  .step-line { flex: 1 1 auto; height: 1px; margin: 0 9px; background: var(--border); min-width: 10px; }
+  .wizard-body { padding: 22px; }
+  .wizard-body.step-next { animation: step-next .26s cubic-bezier(.2, .8, .2, 1) both; }
+  .wizard-body.step-back { animation: step-back .26s cubic-bezier(.2, .8, .2, 1) both; }
+  @keyframes step-next {
+    from { opacity: 0; transform: translateX(16px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes step-back {
+    from { opacity: 0; transform: translateX(-16px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .wizard-foot { display: flex; align-items: center; gap: 8px; padding: 0 22px 20px; }
+  .wizard-foot .spacer { flex: 1 1 auto; }
+  .wizard-note { color: var(--faint); font-size: 11.5px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: rgba(0, 0, 0, .12); }
+  .done-mark {
+    width: 54px; height: 54px; margin: 8px auto 14px; border-radius: 50%; display: grid; place-items: center;
+    color: #8be0aa; background: var(--success-soft); border: 1px solid rgba(34, 197, 94, .25);
+    animation: done-pop .38s cubic-bezier(.2, .8, .2, 1) both;
+  }
+  @keyframes done-pop {
+    from { opacity: 0; transform: scale(.7); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .done-copy { text-align: center; }
+  .done-copy h3 { margin: 0 0 5px; font-size: 17px; }
+  .done-copy p { margin: 0 auto; max-width: 390px; color: var(--muted); font-size: 12px; }
+  .done-stats { display: flex; justify-content: center; gap: 26px; margin: 20px 0 4px; }
+  .done-stat { text-align: center; }
+  .done-stat b { display: block; font-size: 20px; font-weight: 600; color: #d9e3ff; }
+  .done-stat span { color: var(--faint); font-size: 11px; }
+
+  /* 同步气泡：收起态就是这个图标，展开时长成同一张卡片 */
+  .bubble-wrap {
+    position: fixed; top: 58px; left: 50%; transform: translateX(-50%); z-index: 130;
+    width: min(560px, calc(100vw - 32px));
+    transition: width var(--t-morph) cubic-bezier(.16, 1, .3, 1);
+  }
+  .bubble-wrap.collapsed { width: 30px; }
+  .bubble {
+    width: 100%; max-height: 56px; overflow: hidden;
+    border: 1px solid var(--border-strong); border-radius: 12px;
+    background: rgba(34, 34, 36, .96); box-shadow: 0 18px 44px rgba(0, 0, 0, .42);
+    backdrop-filter: blur(16px);
+    transition: max-height var(--t-morph) cubic-bezier(.16, 1, .3, 1), border-radius var(--t-panel), border-color var(--t-fade), background var(--t-fade);
+  }
+  .bubble.open { max-height: 500px; }
+  .bubble.collapsed { max-height: 30px; border-radius: 9px; }
+  .bubble.bad { border-color: rgba(239, 68, 68, .28); }
+  .bubble-head {
+    display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 11px;
+    cursor: pointer; user-select: none;
+    transition: padding var(--t-morph), height var(--t-morph);
+  }
+  .bubble.collapsed .bubble-head { height: 28px; padding: 0; justify-content: flex-start; }
+  .bubble-symbol {
+    width: 23px; height: 23px; flex: 0 0 auto; display: grid; place-items: center; position: relative;
+    border: 0; border-radius: 7px; padding: 0; cursor: pointer;
+    color: #b9ccff; background: transparent;
+    transition: background var(--t-hover), width var(--t-morph), height var(--t-morph);
+  }
+  .bubble-symbol svg { width: 20px; height: 20px; }
+  .bubble-symbol:hover { background: rgba(86, 134, 254, .14); }
+  .bubble.collapsed .bubble-symbol { width: 28px; height: 28px; }
+  .bubble.collapsed .bubble-symbol:hover { background: transparent; }
+  .bubble-dot {
+    position: absolute; right: 1px; bottom: 1px; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--faint); border: 1.5px solid #232324;
+  }
+  .bubble-dot.syncing { background: #f0b64a; }
+  .bubble-dot.bad { background: var(--danger); }
+  .bubble-dot.ok { background: var(--success); }
+  .bubble-dot.warn { background: var(--warn); }
+  .bubble-label {
+    min-width: 0; flex: 1 1 auto; max-width: 100%; overflow: hidden;
+    transition: opacity var(--t-fade), max-width var(--t-morph);
+  }
+  .bubble-label b, .bubble-label span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .bubble-label b { font-size: 12px; font-weight: 500; line-height: 1.35; }
+  .bubble-label span { color: var(--faint); font-size: 10.5px; line-height: 1.4; }
+  .bubble-count {
+    color: #c6d7ff; font-size: 11px; font-variant-numeric: tabular-nums; flex: 0 0 auto;
+    margin-left: auto; max-width: 80px; overflow: hidden;
+    transition: opacity var(--t-fade), max-width var(--t-morph);
+  }
+  .bubble-chevron {
+    color: var(--faint); flex: 0 0 auto;
+    transition: transform var(--t-fade), background var(--t-hover), opacity var(--t-fade), max-width var(--t-morph);
+    width: 20px; height: 20px; max-width: 20px; overflow: hidden;
+    display: grid; place-items: center; padding: 0;
+    border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+  }
+  .bubble-chevron:hover { color: var(--text); background: rgba(255, 255, 255, .06); }
+  .bubble.open .bubble-chevron { transform: rotate(180deg); }
+  .bubble.collapsed .bubble-label { max-width: 0; opacity: 0; }
+  .bubble.collapsed .bubble-count,
+  .bubble.collapsed .bubble-chevron { max-width: 0; opacity: 0; }
+  .bubble.collapsed .segbar { opacity: 0; }
+
+  /* 一根完整的分段进度条：外观上没有分隔，只有每段自己的填充。 */
+  .segbar {
+    display: flex; width: auto; height: 6px; margin: 0 11px 9px;
+    background: rgba(255, 255, 255, .08); border-radius: 999px; overflow: hidden;
+    transition: opacity var(--t-fade);
+  }
+  .seg { flex: 1 1 0; min-width: 0; background: transparent; position: relative; overflow: hidden; }
+  .seg > i {
+    display: block; height: 100%; width: 0;
+    background: #f0b64a;
+    transition: width .22s linear;
+  }
+  .seg.done > i { background: #34c77b; }
+  .seg.bad > i { background: #ef4444; }
+  .seg.wait > i { width: 0 !important; }
+  .bubble.bad .seg > i:not(.done) { background: #ef4444; }
+  .bubble.complete .segbar { background: rgba(52, 199, 123, .16); }
+
+  .bubble-panel { border-top: 1px solid var(--border); padding: 4px 6px 6px; max-height: 232px; overflow: auto; }
+  .bubble-panel::-webkit-scrollbar { width: 6px; }
+  .bubble-panel::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: 999px; }
+  .bubble-panel::-webkit-scrollbar-track { background: transparent; }
+  .bubble-collapse {
+    display: grid; grid-template-rows: 0fr;
+    transition: grid-template-rows var(--t-panel) cubic-bezier(.2, .8, .2, 1);
+  }
+  .bubble-collapse-inner {
+    min-height: 0; overflow: hidden; opacity: 0; transform: translateY(-4px);
+    transition: opacity var(--t-fade) ease, transform var(--t-move) cubic-bezier(.2, .8, .2, 1);
+  }
+  .bubble.open .bubble-collapse { grid-template-rows: 1fr; }
+  .bubble.open .bubble-collapse-inner { opacity: 1; transform: translateY(0); }
+  .bubble-row { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 7px; }
+  .bubble-row:hover { background: rgba(255, 255, 255, .04); }
+  .bubble-row .state { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: var(--faint); }
+  .bubble-row .state.ok { background: var(--success); }
+  .bubble-row .state.run { background: #f0b64a; box-shadow: 0 0 0 3px rgba(240, 182, 74, .14); }
+  .bubble-row .state.bad { background: var(--danger); }
+  .bubble-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--muted); }
+  .bubble-row .name.child { padding-left: 12px; color: var(--faint); }
+  .bubble-row .tag { margin-left: auto; font-size: 10px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .bubble-foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); color: var(--faint); font-size: 10.5px; }
+  .bubble-foot .spacer { flex: 1 1 auto; }
+  .bubble-error { margin: 0 8px 8px; padding: 8px 9px; border-radius: 8px; background: var(--danger-soft); border: 1px solid rgba(239, 68, 68, .22); color: #ffb1b1; font-size: 11px; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px); z-index: 500;
+    padding: 9px 14px; border-radius: 10px; border: 1px solid var(--border-strong);
+    background: #2a2a2d; color: var(--text); font-size: 12px; box-shadow: var(--shadow);
+    opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .proto-title .proto-tag, .proto-states::before { display: none; }
+    .proto-bar { gap: 8px; padding: 0 8px; }
+    .proto-tabs button, .proto-states button { padding: 4px 7px; }
+    .field-grid { grid-template-columns: 1fr; }
+    .page { padding: 20px 14px 44px; }
+    .app-shell { grid-template-columns: 0 1fr; }
+    .mock-sidebar { display: none; }
+    .mock-chat { padding: 20px 16px; }
+    .bubble-wrap { top: auto; bottom: 16px; right: 12px; left: 12px; width: auto; }
+    .bubble { width: 100%; }
+  }
+</style>
+</head>
+<body class="slow-mo">
+<div class="proto-bar">
+  <div class="proto-title"><span class="proto-dot"></span> 会话同步 <span class="proto-tag">UI 原型</span><button id="slow-toggle" class="proto-speed on" type="button" title="切换 100× 慢放">100×</button></div>
+  <div class="proto-tabs" role="tablist" aria-label="预览视图">
+    <button data-view="settings" class="on" role="tab">设置页</button>
+    <button data-view="onboarding" role="tab">首启</button>
+    <button data-view="bubble" role="tab">同步气泡</button>
+  </div>
+  <div class="proto-states" aria-label="预览状态">
+    <button data-state="ready" class="on">已配置</button>
+    <button data-state="unconfigured">未配置</button>
+    <button data-state="syncing">同步中</button>
+    <button data-state="error">错误</button>
+  </div>
+</div>
+<main id="stage"></main>
+<div id="sync-widget-root"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+  const WORKSPACES = [
+    { path: 'D:/git-repo/dsh-session-sync', title: 'dsh-session-sync', roots: 12, subs: 37 },
+    { path: 'D:/git-repo/ServerPluginCore', title: 'ServerPluginCore', roots: 8, subs: 19 },
+    { path: 'D:/git-repo/deepseek-harness', title: 'deepseek-harness', roots: 3, subs: 2 },
+    { path: 'D:/git-repo/_audit', title: '_audit', roots: 5, subs: 0 },
+  ];
+
+  // 气泡里的 10 段；每段一个会话。duration/delay 用来模拟并发进度。
+  const SESSIONS = [
+    { name: '会话同步设计', child: false, duration: 1500, delay: 0 },
+    { name: 'M4 host 调试', child: false, duration: 2300, delay: 90 },
+    { name: '子代理 · 采集范围', child: true, duration: 1300, delay: 360 },
+    { name: '服务端部署笔记', child: false, duration: 2900, delay: 0 },
+    { name: 'ServerPluginCore', child: false, duration: 2400, delay: 620 },
+    { name: 'deepseek-harness', child: false, duration: 1900, delay: 1100 },
+    { name: '_audit', child: false, duration: 2700, delay: 480 },
+    { name: 'SSH 远程', child: false, duration: 2100, delay: 1450 },
+    { name: 'XFYLoader', child: false, duration: 1700, delay: 1700 },
+    { name: 'xfysync', child: false, duration: 2300, delay: 900 },
+  ];
+
+  const state = {
+    view: 'settings',
+    status: 'ready',
+    serverUrl: 'http://127.0.0.1:8787',
+    deviceName: 'XFY-COLORFUL',
+    allowlist: ['D:/git-repo/dsh-session-sync'],
+    autoSync: true,
+    interval: 60,
+    includeSubagents: true,
+    hasToken: true,
+    hasPassphrase: true,
+    onboardStep: 0,
+    onboardAnim: '',
+    onboardStepAnim: '',
+    bubbleOpen: false,
+    bubbleVisible: true,
+    bubblePinned: false,
+    autoHide: false,
+    sessions: SESSIONS.map((session) => ({ ...session, progress: 1, state: 'done' })),
+    syncStartedAt: 0,
+    syncError: '连接被拒绝（127.0.0.1:8787）',
+    testResult: null,
+  };
+
+  const stage = document.getElementById('stage');
+  const toastEl = document.getElementById('toast');
+  let toastTimer;
+
+  function esc(value) {
+    return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+  }
+
+  function selectedWorkspaces() {
+    return WORKSPACES.filter((ws) => state.allowlist.includes(ws.path));
+  }
+
+  function selectedSummary() {
+    const selected = selectedWorkspaces();
+    const roots = selected.reduce((sum, ws) => sum + ws.roots, 0);
+    const subs = selected.reduce((sum, ws) => sum + ws.subs, 0);
+    return { workspaces: selected.length, roots, subs };
+  }
+
+  function badge() {
+    if (state.status === 'unconfigured') return '<span class="badge warn"><i class="dot"></i>未配置</span>';
+    if (state.status === 'syncing') return '<span class="badge info"><span class="spinner"></span>同步中</span>';
+    if (state.status === 'error') return '<span class="badge danger"><i class="dot"></i>同步失败</span>';
+    return '<span class="badge success"><i class="dot"></i>已连接</span>';
+  }
+
+  const icons = {
+    cloud: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 .4-9A6.5 6.5 0 0 0 5.6 9.4 4.3 4.3 0 0 0 6 19h11.5Z"/><path d="M12 12v5"/><path d="m9.8 14.2 2.2-2.2 2.2 2.2"/></svg>',
+    lock: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>',
+    check: '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 6 2.5 2.5L10 3.5"/></svg>',
+    close: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m4 4 8 8M12 4l-8 8"/></svg>',
+    chevron: '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m3 5 3 3 3-3"/></svg>',
+    shield: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.4 2.8 7.6 7 10 4.2-2.4 7-5.6 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>',
+  };
+
+  function switchHtml(checked, name, label) {
+    return `<label class="switch" aria-label="${esc(label)}"><input type="checkbox" data-toggle="${name}" ${checked ? 'checked' : ''}><span></span></label>`;
+  }
+
+  function workspaceRowsHtml() {
+    if (WORKSPACES.length === 0) return '<div class="ws-empty">还没有注册的工作区</div>';
+    return WORKSPACES.map((ws) => {
+      const on = state.allowlist.includes(ws.path);
+      return `<label class="ws-row ${on ? 'on' : ''}">
+        <input class="ws-input" type="checkbox" data-ws="${esc(ws.path)}" ${on ? 'checked' : ''}>
+        <span class="ws-check">${icons.check}</span>
+        <span class="ws-main"><span class="ws-title">${esc(ws.title)}</span><span class="ws-path">${esc(ws.path)}</span></span>
+        <span class="ws-meta">${ws.roots} 个会话<small>${ws.subs} 个子代理</small></span>
+      </label>`;
+    }).join('');
+  }
+
+  function summaryHtml() {
+    const summary = selectedSummary();
+    if (summary.workspaces === 0) {
+      return '<div class="ws-summary hint warn">还没有选择工作区；同步会保持暂停，直到你至少选择一个。</div>';
+    }
+    return `<div class="ws-summary">已选 <strong>${summary.workspaces}</strong> 个工作区 · <strong>${summary.roots}</strong> 个根会话 · <strong>${summary.subs}</strong> 个子代理</div>`;
+  }
+
+  function renderSettings() {
+    const allSelected = state.allowlist.length === WORKSPACES.length && WORKSPACES.length > 0;
+    stage.innerHTML = `<div class="page">
+      <header class="page-head">
+        <div class="head-icon">${icons.cloud}</div>
+        <div><h1>会话同步</h1><p>把会话端到端加密备份到你自己的服务端，在另一台设备继续。</p></div>
+        <div class="head-badge">${badge()}</div>
+      </header>
+
+      <section class="card">
+        <div class="card-head"><h2>连接</h2><span class="hint">自部署服务端</span><span class="right"><button class="btn small" id="test-connection">测试连接</button></span></div>
+        <div class="field-grid">
+          <label class="field"><span class="field-label">服务端地址</span><input class="input mono" id="server-url" value="${esc(state.serverUrl)}" placeholder="http://127.0.0.1:8787"></label>
+          <label class="field"><span class="field-label">设备名称</span><input class="input" id="device-name" value="${esc(state.deviceName)}" placeholder="例如 XFY-COLORFUL"></label>
+        </div>
+        <div class="row" style="margin-top:10px"><span class="test-result" id="test-result">${state.testResult ? `<span class="${state.testResult.ok ? 'ok' : 'bad'}">${esc(state.testResult.text)}</span>` : '<span>填写地址后测试服务端与 token。</span>'}</span></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>凭据</h2><span class="hint">保存到 DSH 凭据库，不写进普通配置</span><span class="right">${icons.lock}</span></div>
+        <div class="cred-row">
+          <div class="cred-head"><span>设备 token</span><span class="pill ${state.hasToken ? 'ok' : 'warn'}">${state.hasToken ? '已配置' : '未配置'}</span></div>
+          <input class="input mono" id="token" type="password" autocomplete="off" placeholder="${state.hasToken ? '已配置；留空保持不变' : '粘贴管理台/CLI 签发的 token'}">
+        </div>
+        <div class="cred-row">
+          <div class="cred-head"><span>同步口令</span><span class="pill ${state.hasPassphrase ? 'ok' : 'warn'}">${state.hasPassphrase ? '已配置' : '未配置'}</span></div>
+          <input class="input" id="passphrase" type="password" autocomplete="new-password" placeholder="${state.hasPassphrase ? '已配置；留空保持不变' : '至少 8 位，所有设备一致'}">
+        </div>
+        <p class="hint" style="margin:10px 0 0">口令只用于本地派生加密密钥；服务端只存密文。口令丢失后，云端内容无法解密。</p>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>同步范围</h2><span class="hint">按工作区同步根会话及其子代理闭包</span><span class="right"><button class="btn small" id="select-all">${allSelected ? '清空' : '全选'}</button></span></div>
+        <p class="hint" style="margin:0 0 10px">没有选择任何工作区时，插件不会推送或拉取。</p>
+        <div class="ws-list" id="ws-list">${workspaceRowsHtml()}</div>
+        ${summaryHtml()}
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>同步行为</h2></div>
+        <div class="behavior-row">
+          <div class="behavior-main"><b>自动同步</b><span>按间隔在后台推送并拉取</span></div>
+          <div class="right">${switchHtml(state.autoSync, 'autoSync', '自动同步')}<select class="select" id="interval" ${state.autoSync ? '' : 'disabled'}>
+            <option value="15" ${state.interval === 15 ? 'selected' : ''}>15 秒</option>
+            <option value="30" ${state.interval === 30 ? 'selected' : ''}>30 秒</option>
+            <option value="60" ${state.interval === 60 ? 'selected' : ''}>1 分钟</option>
+            <option value="300" ${state.interval === 300 ? 'selected' : ''}>5 分钟</option>
+          </select></div>
+        </div>
+        <div class="behavior-row">
+          <div class="behavior-main"><b>同步子代理会话</b><span>随根会话一起同步全部后代；关闭后只同步根会话</span></div>
+          <div class="right">${switchHtml(state.includeSubagents, 'includeSubagents', '同步子代理会话')}</div>
+        </div>
+      </section>
+
+      <div class="actions">
+        <span class="status-text">上次同步 2 分钟前 · 传输已加密</span>
+        <button class="btn ghost" id="sync-now">立即同步</button>
+        <button class="btn primary" id="save">保存</button>
+      </div>
+    </div>`;
+
+    document.querySelectorAll('[data-ws]').forEach((input) => {
+      input.addEventListener('change', () => {
+        const path = input.dataset.ws;
+        if (input.checked) {
+          if (!state.allowlist.includes(path)) state.allowlist.push(path);
+        } else {
+          state.allowlist = state.allowlist.filter((item) => item !== path);
+        }
+        renderSettings();
+      });
+    });
+    document.getElementById('select-all').addEventListener('click', () => {
+      state.allowlist = allSelected ? [] : WORKSPACES.map((ws) => ws.path);
+      renderSettings();
+    });
+    document.getElementById('test-connection').addEventListener('click', () => runTest('test-connection', 'test-result'));
+    document.getElementById('save').addEventListener('click', () => saveSettings());
+    document.getElementById('sync-now').addEventListener('click', () => {
+      startMockSync();
+    });
+    document.querySelectorAll('[data-toggle]').forEach((input) => {
+      input.addEventListener('change', () => {
+        const name = input.dataset.toggle;
+        if (name === 'autoSync') state.autoSync = input.checked;
+        if (name === 'includeSubagents') state.includeSubagents = input.checked;
+        // 不整页重绘：保留开关节点，CSS 过渡才能看到滑块移动。
+        const interval = document.getElementById('interval');
+        if (interval !== null) interval.disabled = !state.autoSync;
+      });
+    });
+    const interval = document.getElementById('interval');
+    if (interval) interval.addEventListener('change', () => { state.interval = Number(interval.value); });
+  }
+
+  function collectSettings() {
+    state.serverUrl = document.getElementById('server-url').value.trim();
+    state.deviceName = document.getElementById('device-name').value.trim();
+    const token = document.getElementById('token').value.trim();
+    const passphrase = document.getElementById('passphrase').value;
+    if (token !== '') state.hasToken = true;
+    if (passphrase !== '') state.hasPassphrase = true;
+    state.interval = Number(document.getElementById('interval').value);
+    state.status = state.serverUrl && state.hasToken && state.hasPassphrase && state.allowlist.length > 0
+      ? 'ready' : 'unconfigured';
+  }
+
+  function saveSettings() {
+    collectSettings();
+    renderSettings();
+    toast(state.status === 'ready' ? '设置已保存（原型）' : '已保存；还需要补齐凭据或工作区才能同步');
+  }
+
+  function runTest(buttonId, resultId) {
+    const button = document.getElementById(buttonId);
+    const result = document.getElementById(resultId);
+    if (!button || !result) return;
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = '测试中…';
+    result.className = 'test-result';
+    result.innerHTML = '<span class="spinner"></span> 正在连接服务端…';
+    const server = document.getElementById('server-url')?.value.trim() ?? state.serverUrl;
+    setTimeout(() => {
+      button.disabled = false;
+      button.textContent = original;
+      const ok = Boolean(server) && state.hasToken;
+      result.className = `test-result ${ok ? 'ok' : 'bad'}`;
+      result.innerHTML = ok
+        ? `${icons.check} 服务端可达，token 有效；未校验口令`
+        : `${icons.close} ${server ? 'token 未配置' : '请先填写服务端地址'}`;
+      state.testResult = { ok, text: ok ? '服务端可达，token 有效；未校验口令' : (server ? 'token 未配置' : '请先填写服务端地址') };
+    }, 650);
+  }
+
+  function mockApp() {
+    return `<div class="app-shell">
+      <aside class="mock-sidebar">
+        <div class="mock-brand"><span class="mark"></span> DeepSeek Harness</div>
+        <div class="mock-session on"><span class="glyph"></span> 会话同步设计</div>
+        <div class="mock-session"><span class="glyph"></span> M4 host 调试</div>
+        <div class="mock-session child"><span class="glyph"></span> 子代理 · 采集范围</div>
+        <div class="mock-session"><span class="glyph"></span> 服务端部署笔记</div>
+        <div class="mock-group">其他工作区</div>
+        <div class="mock-session"><span class="glyph"></span> ServerPluginCore</div>
+        <div class="mock-session"><span class="glyph"></span> deepseek-harness</div>
+      </aside>
+      <main class="mock-chat">
+        <h3>会话同步设计</h3>
+        <p>dsh-session-sync · 标准模式</p>
+        <div class="mock-bubble-user">把同步范围改成按工作区选择；没选工作区时先不要同步。</div>
+        <div class="mock-reply">
+          <div>明白。同步列表会列出每个工作区的根会话和子代理数量，并提供全选。</div>
+          <div class="mock-line w91"></div><div class="mock-line w80"></div><div class="mock-line w62"></div>
+        </div>
+        <div class="mock-dock"></div>
+      </main>
+    </div>`;
+  }
+
+  function renderOnboarding() {
+    const step = state.onboardStep;
+    const summary = selectedSummary();
+    const body = (() => {
+      if (step === 0) return `
+        <div class="field-grid">
+          <label class="field"><span class="field-label">服务端地址</span><input class="input mono" id="ob-server" value="${esc(state.serverUrl)}" placeholder="http://127.0.0.1:8787"></label>
+          <label class="field"><span class="field-label">设备名称</span><input class="input" id="ob-device" value="${esc(state.deviceName)}" placeholder="例如 XFY-COLORFUL"></label>
+        </div>
+        <div class="row" style="margin-top:12px"><button class="btn small" id="ob-test">测试连接</button><span class="test-result" id="ob-test-result">先确认服务端能连通。</span></div>
+        <p class="wizard-note" style="margin-top:16px">自部署服务端地址形如 <code>http://127.0.0.1:8787</code>；远程访问时换成实际域名。</p>`;
+      if (step === 1) return `
+        <div class="cred-row"><div class="cred-head"><span>设备 token</span><span class="pill ${state.hasToken ? 'ok' : 'warn'}">${state.hasToken ? '已配置' : '未配置'}</span></div>
+          <input class="input mono" id="ob-token" type="password" autocomplete="off" placeholder="${state.hasToken ? '已配置；留空保持不变' : '粘贴管理台/CLI 签发的 token'}"></div>
+        <div class="cred-row"><div class="cred-head"><span>同步口令</span><span class="pill ${state.hasPassphrase ? 'ok' : 'warn'}">${state.hasPassphrase ? '已配置' : '未配置'}</span></div>
+          <input class="input" id="ob-passphrase" type="password" autocomplete="new-password" placeholder="${state.hasPassphrase ? '已配置；留空保持不变' : '至少 8 位，所有设备一致'}"></div>
+        <p class="wizard-note" style="margin-top:16px">凭据保存在 DSH 凭据库（引用 <code>DSH_SESSION_SYNC_TOKEN</code> / <code>DSH_SESSION_SYNC_PASSPHRASE</code>），不会写入普通配置。</p>`;
+      if (step === 2) return `
+        <div class="row between" style="margin-bottom:8px"><span class="hint">没有选择工作区时不会同步。</span><button class="btn small" id="ob-select-all">${state.allowlist.length === WORKSPACES.length && WORKSPACES.length > 0 ? '清空' : '全选'}</button></div>
+        <div class="ws-list" id="ob-ws-list">${workspaceRowsHtml()}</div>
+        ${summaryHtml()}`;
+      return `
+        <div class="done-mark">${icons.check}</div>
+        <div class="done-copy"><h3>准备就绪</h3><p>连接、凭据和同步范围都已填写。点击开始后，会在后台完成第一次同步。</p></div>
+        <div class="done-stats">
+          <div class="done-stat"><b>${summary.workspaces}</b><span>工作区</span></div>
+          <div class="done-stat"><b>${summary.roots}</b><span>根会话</span></div>
+          <div class="done-stat"><b>${summary.subs}</b><span>子代理</span></div>
+        </div>
+        <p class="wizard-note" style="margin-top:18px">首次同步会在后台运行；可以在设置页或顶部气泡查看进度。同步中的会话不应 resume。</p>`;
+    })();
+
+    const steps = ['连接', '凭据', '范围', '完成'];
+    const stepper = steps.map((label, index) => {
+      const cls = index === step ? 'on' : index < step ? 'done' : '';
+      return `<span class="step ${cls}"><span class="num">${index < step ? '✓' : index + 1}</span>${label}</span>${index < steps.length - 1 ? '<span class="step-line"></span>' : ''}`;
+    }).join('');
+
+    const stepsClass = state.onboardStepAnim === '' ? '' : ' advanced';
+    const bodyClass = state.onboardStepAnim === 'next' ? ' step-next' : state.onboardStepAnim === 'back' ? ' step-back' : '';
+    const overlayClass = state.onboardAnim === 'in' ? ' overlay-in' : '';
+    const wizardClass = state.onboardAnim === 'in' ? ' wizard-in' : '';
+
+    stage.innerHTML = `${mockApp()}
+      <div class="overlay${overlayClass}">
+        <div class="wizard${wizardClass}" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+          <div class="wizard-head">
+            <div class="wizard-icon">${icons.shield}</div>
+            <div><h2 id="wizard-title">连接会话同步</h2><p>把会话端到端加密备份到你自己的服务端。</p></div>
+            <button class="icon-btn" id="ob-close" aria-label="稍后配置">${icons.close}</button>
+          </div>
+          <div class="steps${stepsClass}">${stepper}</div>
+          <div class="wizard-body${bodyClass}">${body}</div>
+          <div class="wizard-foot">
+            <button class="btn ghost" id="ob-later">稍后</button>
+            <span class="spacer"></span>
+            ${step > 0 ? '<button class="btn" id="ob-back">上一步</button>' : ''}
+            ${step < 3 ? '<button class="btn primary" id="ob-next">下一步</button>' : '<button class="btn primary" id="ob-finish">开始同步</button>'}
+          </div>
+        </div>
+      </div>`;
+
+    bindOnboarding();
+  }
+
+  let onboardingClosing = false;
+
+  /** 先播放收回动画，再切到目标视图。 */
+  function dismissOnboarding(after) {
+    if (onboardingClosing) return;
+    onboardingClosing = true;
+    const overlay = document.querySelector('.overlay');
+    const wizard = document.querySelector('.wizard');
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (overlay === null || wizard === null) {
+      onboardingClosing = false;
+      after();
+      return;
+    }
+    overlay.classList.add('overlay-out');
+    wizard.classList.add('wizard-out');
+    setTimeout(() => {
+      onboardingClosing = false;
+      state.onboardAnim = '';
+      after();
+    }, reduced ? 0 : 300);
+  }
+
+  function bindOnboarding() {
+    const close = () => dismissOnboarding(() => {
+      state.view = 'settings';
+      render();
+      toast('已保存到稍后配置');
+    });
+    const goStep = (delta) => {
+      collectOnboarding();
+      const next = Math.min(3, Math.max(0, state.onboardStep + delta));
+      if (next === state.onboardStep) return;
+      state.onboardStep = next;
+      state.onboardStepAnim = delta > 0 ? 'next' : 'back';
+      renderOnboarding();
+      state.onboardStepAnim = '';
+    };
+    document.getElementById('ob-close')?.addEventListener('click', close);
+    document.getElementById('ob-later')?.addEventListener('click', close);
+    document.getElementById('ob-back')?.addEventListener('click', () => goStep(-1));
+    document.getElementById('ob-next')?.addEventListener('click', () => goStep(1));
+    document.getElementById('ob-finish')?.addEventListener('click', () => {
+      dismissOnboarding(startMockSync);
+    });
+    document.getElementById('ob-test')?.addEventListener('click', () => runTest('ob-test', 'ob-test-result'));
+    document.querySelectorAll('[data-ws]').forEach((input) => input.addEventListener('change', () => {
+      const path = input.dataset.ws;
+      if (input.checked) { if (!state.allowlist.includes(path)) state.allowlist.push(path); }
+      else state.allowlist = state.allowlist.filter((item) => item !== path);
+      renderOnboarding();
+    }));
+    document.getElementById('ob-select-all')?.addEventListener('click', () => {
+      state.allowlist = state.allowlist.length === WORKSPACES.length ? [] : WORKSPACES.map((ws) => ws.path);
+      renderOnboarding();
+    });
+  }
+
+  function collectOnboarding() {
+    const server = document.getElementById('ob-server');
+    const device = document.getElementById('ob-device');
+    const token = document.getElementById('ob-token');
+    const passphrase = document.getElementById('ob-passphrase');
+    if (server) state.serverUrl = server.value.trim();
+    if (device) state.deviceName = device.value.trim();
+    if (token && token.value.trim() !== '') state.hasToken = true;
+    if (passphrase && passphrase.value !== '') state.hasPassphrase = true;
+  }
+
+  /** 按预览状态重置每段进度。 */
+  function setSessionMode(mode) {
+    state.sessions = SESSIONS.map((session, index) => {
+      let progress = 1;
+      let sessionState = 'done';
+      if (mode === 'syncing') {
+        progress = 0;
+        sessionState = 'wait';
+      } else if (mode === 'error') {
+        if (index < 3) {
+          progress = 1;
+          sessionState = 'done';
+        } else if (index < 5) {
+          progress = index === 3 ? .58 : .32;
+          sessionState = 'bad';
+        } else {
+          progress = 0;
+          sessionState = 'wait';
+        }
+      }
+      return { ...session, progress, state: sessionState };
+    });
+  }
+
+  function statusDotClass() {
+    return state.status === 'syncing' ? 'syncing'
+      : state.status === 'error' ? 'bad'
+        : state.status === 'unconfigured' ? 'warn' : 'ok';
+  }
+
+  function updateIconDot() {
+    const dot = document.querySelector('.bubble-dot');
+    if (dot !== null) dot.className = `bubble-dot ${statusDotClass()}`;
+  }
+
+  function updateIconLabel(collapsed) {
+    const icon = document.getElementById('sync-icon');
+    if (icon === null) return;
+    icon.setAttribute('aria-label', collapsed ? '展开会话同步' : '收起会话同步');
+    icon.setAttribute('title', collapsed ? '展开会话同步' : '收起为图标');
+  }
+
+  /**
+   * 图标 => 气泡。pin=false 用于自动同步：展开但不阻止完成后收回。
+   * 从设置页过来时先渲染收起态，下一帧再展开，让 CSS 宽高过渡真正发生。
+   */
+  /** 用户操作过气泡后，失焦 5 秒再自动收回；焦点/鼠标回到气泡会取消。 */
+  function scheduleBlurCollapse() {
+    if (!state.bubbleVisible || !state.bubblePinned) return;
+    clearTimeout(blurTimer);
+    blurTimer = setTimeout(() => {
+      if (!state.bubbleVisible) return;
+      const widget = document.querySelector('#sync-widget-root .bubble');
+      if (widget === null) return;
+      if (document.hasFocus() && widget.contains(document.activeElement)) return;
+      if (document.hasFocus() && widget.matches(':hover')) return;
+      state.bubblePinned = false;
+      collapseBubble(false);
+    }, 5000);
+  }
+
+  function expandBubble(pin = true) {
+    if (state.status === 'unconfigured') {
+      state.view = 'settings';
+      render();
+      toast('先完成服务端、凭据和工作区配置');
+      return;
+    }
+    if (pin) state.bubblePinned = true;
+    state.autoHide = !state.bubblePinned;
+    clearTimeout(blurTimer);
+    state.bubbleVisible = true;
+    const root = document.getElementById('sync-widget-root');
+    if (root.querySelector('.bubble') === null) renderWidget();
+    root.querySelector('.bubble-wrap')?.classList.remove('collapsed');
+    root.querySelector('.bubble')?.classList.remove('collapsed');
+    updateIconLabel(false);
+  }
+
+  function collapseBubble(manual = true) {
+    state.bubbleVisible = false;
+    state.bubbleOpen = false;
+    state.autoHide = false;
+    if (manual) state.bubblePinned = false;
+    clearTimeout(blurTimer);
+    const root = document.getElementById('sync-widget-root');
+    const bubble = root.querySelector('.bubble');
+    bubble?.classList.remove('open');
+    bubble?.classList.add('collapsed');
+    root.querySelector('.bubble-wrap')?.classList.add('collapsed');
+    updateIconLabel(true);
+  }
+
+  function toggleBubbleList() {
+    state.bubbleOpen = !state.bubbleOpen;
+    const bubble = document.querySelector('.bubble');
+    if (bubble === null) return;
+    bubble.classList.toggle('open', state.bubbleOpen);
+    const head = document.getElementById('bubble-toggle');
+    head?.setAttribute('aria-expanded', String(state.bubbleOpen));
+    head?.setAttribute('aria-label', state.bubbleOpen ? '收起同步进度' : '展开同步进度');
+    document.getElementById('bubble-list-toggle')?.setAttribute('aria-expanded', String(state.bubbleOpen));
+    document.getElementById('bubble-body')?.toggleAttribute('inert', !state.bubbleOpen);
+  }
+
+  /** 绑定共享气泡的云图标、标题栏、列表按钮和展开动作。 */
+  function bindWidget() {
+    const openSettings = () => {
+      state.view = 'settings';
+      state.onboardAnim = '';
+      render();
+    };
+    document.getElementById('sync-icon')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (state.status === 'unconfigured') {
+        openSettings();
+        toast('先完成服务端、凭据和工作区配置');
+        return;
+      }
+      if (state.bubbleVisible) collapseBubble(true);
+      else expandBubble(true);
+    });
+    document.getElementById('bubble-toggle')?.addEventListener('click', () => {
+      if (state.status === 'unconfigured') {
+        openSettings();
+        toast('先完成服务端、凭据和工作区配置');
+        return;
+      }
+      if (!state.bubbleVisible) {
+        expandBubble(true);
+        return;
+      }
+      toggleBubbleList();
+    });
+    document.getElementById('bubble-toggle')?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      if (state.status === 'unconfigured') return openSettings();
+      if (!state.bubbleVisible) expandBubble(true);
+      else toggleBubbleList();
+    });
+    document.getElementById('bubble-list-toggle')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (!state.bubbleVisible) expandBubble(true);
+      else toggleBubbleList();
+    });
+    document.getElementById('bubble-open-settings')?.addEventListener('click', openSettings);
+    document.getElementById('bubble-sync')?.addEventListener('click', startMockSync);
+    document.getElementById('bubble-retry')?.addEventListener('click', startMockSync);
+    const bubbleEl = document.querySelector('.bubble');
+    bubbleEl?.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('#sync-icon')) return;
+      // 用户碰过气泡：取消待执行的收回，并让本轮完成后保持常驻。
+      clearTimeout(hideTimer);
+      clearTimeout(blurTimer);
+      state.bubblePinned = true;
+      state.autoHide = false;
+    });
+    bubbleEl?.addEventListener('focusin', () => {
+      if (!state.bubbleVisible) return;
+      clearTimeout(hideTimer);
+      clearTimeout(blurTimer);
+      state.bubblePinned = true;
+      state.autoHide = false;
+    });
+    bubbleEl?.addEventListener('focusout', (event) => {
+      if (!state.bubblePinned) return;
+      if (event.relatedTarget instanceof Node && bubbleEl.contains(event.relatedTarget)) return;
+      scheduleBlurCollapse();
+    });
+    bubbleEl?.addEventListener('pointerenter', () => {
+      if (state.bubblePinned) clearTimeout(blurTimer);
+    });
+    bubbleEl?.addEventListener('pointerleave', () => scheduleBlurCollapse());
+  }
+
+  function bubbleHtml(forceCollapsed = false) {
+    const collapsed = forceCollapsed || !state.bubbleVisible;
+    const total = state.sessions.length;
+    const done = state.sessions.filter((session) => session.state === 'done').length;
+    const statusClass = state.status === 'error' ? 'bad' : state.status === 'syncing' ? 'syncing' : 'complete';
+    const openClass = state.bubbleOpen && !collapsed ? 'open' : '';
+    const collapsedClass = collapsed ? ' collapsed' : '';
+    const segments = state.sessions.map((session) => {
+      const pct = Math.round(session.progress * 100);
+      return `<span class="seg ${session.state}" title="${esc(session.name)} · ${pct}%"><i style="width:${pct}%"></i></span>`;
+    }).join('');
+    const rows = state.sessions.map((session, index) => {
+      const dot = session.state === 'done' ? 'ok' : session.state === 'bad' ? 'bad' : session.state === 'run' ? 'run' : '';
+      const tag = session.state === 'done' ? '已完成'
+        : session.state === 'bad' ? '失败'
+          : session.state === 'run' ? `${Math.round(session.progress * 100)}%`
+            : '等待';
+      return `<div class="bubble-row" data-index="${index}">
+        <span class="state ${dot}"></span>
+        <span class="name ${session.child ? 'child' : ''}">${esc(session.name)}</span>
+        <span class="tag">${tag}</span>
+      </div>`;
+    }).join('');
+    const title = state.status === 'error' ? '同步失败'
+      : state.status === 'syncing' ? '正在同步'
+        : '同步完成';
+    const subtitle = state.status === 'error' ? '有会话未完成，已暂停'
+      : state.status === 'syncing' ? `${done}/${total} 个会话 · 端到端加密`
+        : `${done}/${total} 个会话 · 2 分钟前`;
+    const footLabel = state.status === 'error' ? '已暂停' : state.status === 'syncing' ? '正在写入本地会话…' : '全部完成';
+    const actions = state.status === 'error'
+      ? '<button class="btn small" id="bubble-retry">重试</button>'
+      : state.status === 'syncing' ? ''
+        : '<button class="btn small" id="bubble-sync">立即同步</button>';
+
+    if (state.status === 'unconfigured') {
+      return `<div class="bubble collapsed empty" aria-live="polite">
+        <div class="bubble-head" id="bubble-toggle">
+          <button class="bubble-symbol" id="sync-icon" type="button" aria-label="展开会话同步" title="会话同步 · 未配置">
+            ${icons.cloud}<span class="bubble-dot warn"></span>
+          </button>
+        </div>
+      </div>`;
+    }
+
+    return `<div class="bubble ${statusClass} ${openClass}${collapsedClass}" aria-live="polite">
+      <div class="bubble-head" id="bubble-toggle">
+        <button class="bubble-symbol" id="sync-icon" type="button"
+          aria-label="${collapsed ? '展开会话同步' : '收起会话同步'}"
+          title="${collapsed ? '展开会话同步' : '收起为图标'}">
+          ${icons.cloud}<span class="bubble-dot ${statusDotClass()}"></span>
+        </button>
+        <div class="bubble-label">
+          <b id="bubble-title">${title}</b>
+          <span id="bubble-subtitle">${subtitle}</span>
+        </div>
+        <span class="bubble-count" id="bubble-count">${done}/${total}</span>
+        <button class="bubble-chevron" id="bubble-list-toggle" type="button"
+          aria-label="${state.bubbleOpen ? '收起同步会话' : '展开同步会话'}"
+          aria-expanded="${state.bubbleOpen}" aria-controls="bubble-body">${icons.chevron}</button>
+      </div>
+      <div class="segbar" aria-hidden="true">${segments}</div>
+      <div class="bubble-collapse" id="bubble-body" ${state.bubbleOpen && !collapsed ? '' : 'inert'}>
+        <div class="bubble-collapse-inner">
+          <div class="bubble-panel" id="bubble-rows">${rows}</div>
+          ${state.status === 'error' ? `<div class="bubble-error">${esc(state.syncError)}<br><span style="color:#f5c76b">保留本地数据；下一轮自动重试。</span></div>` : ''}
+          <div class="bubble-foot">
+            <span id="bubble-foot-label">${footLabel}</span><span class="spacer"></span>
+            ${actions}
+            <button class="btn small ghost" id="bubble-open-settings">设置</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderBubble() {
+    stage.innerHTML = mockApp();
+  }
+
+  /** 共享气泡放在 stage 之外；切页面不重建，图标 -> 气泡始终是同一个 DOM。 */
+  function renderWidget() {
+    const root = document.getElementById('sync-widget-root');
+    if (state.view === 'onboarding') {
+      root.innerHTML = '';
+      return;
+    }
+    const collapsed = !state.bubbleVisible || state.status === 'unconfigured';
+    root.innerHTML = `<div class="bubble-wrap ${collapsed ? 'collapsed' : ''}">${bubbleHtml(collapsed)}</div>`;
+    bindWidget();
+  }
+
+  /** 只更新进度，不重建 DOM，避免每帧重播进入动画。 */
+  function updateBubbleProgress() {
+    const bubble = document.querySelector('#sync-widget-root .bubble');
+    if (bubble === null) return;
+    const total = state.sessions.length;
+    const done = state.sessions.filter((session) => session.state === 'done').length;
+    const segments = bubble.querySelectorAll('.seg');
+    state.sessions.forEach((session, index) => {
+      const segment = segments[index];
+      if (segment === undefined) return;
+      segment.className = `seg ${session.state}`;
+      segment.title = `${session.name} · ${Math.round(session.progress * 100)}%`;
+      const fill = segment.querySelector('i');
+      if (fill !== null) fill.style.width = `${Math.round(session.progress * 100)}%`;
+      const row = bubble.querySelector(`.bubble-row[data-index="${index}"]`);
+      if (row !== null) {
+        const dot = row.querySelector('.state');
+        dot.className = `state ${session.state === 'done' ? 'ok' : session.state === 'bad' ? 'bad' : session.state === 'run' ? 'run' : ''}`;
+        row.querySelector('.tag').textContent = session.state === 'done' ? '已完成'
+          : session.state === 'bad' ? '失败'
+            : session.state === 'run' ? `${Math.round(session.progress * 100)}%`
+              : '等待';
+      }
+    });
+    const count = document.getElementById('bubble-count');
+    if (count !== null) count.textContent = `${done}/${total}`;
+    const title = document.getElementById('bubble-title');
+    if (title !== null) {
+      title.textContent = state.status === 'error' ? '同步失败' : state.status === 'syncing' ? '正在同步' : '同步完成';
+    }
+    const foot = document.getElementById('bubble-foot-label');
+    if (foot !== null) {
+      foot.textContent = state.status === 'error' ? '已暂停' : state.status === 'syncing' ? '正在写入本地会话…' : '全部完成';
+    }
+    const subtitle = document.getElementById('bubble-subtitle');
+    if (subtitle !== null) {
+      subtitle.textContent = state.status === 'error' ? '有会话未完成，已暂停'
+        : state.status === 'syncing' ? `${done}/${total} 个会话 · 端到端加密`
+          : `${done}/${total} 个会话 · 2 分钟前`;
+    }
+    bubble.classList.toggle('complete', done === total && state.status !== 'error');
+    bubble.classList.toggle('bad', state.status === 'error');
+    bubble.classList.toggle('syncing', state.status === 'syncing');
+    updateIconDot();
+  }
+
+  let syncTimer;
+  let hideTimer;
+  let blurTimer;
+
+  function startMockSync() {
+    clearInterval(syncTimer);
+    clearTimeout(hideTimer);
+    state.status = 'syncing';
+    if (!state.bubblePinned) state.bubbleOpen = false;
+    state.autoHide = !state.bubblePinned;
+    state.syncStartedAt = performance.now();
+    setSessionMode('syncing');
+    if (!document.querySelector('#sync-widget-root .bubble')) renderWidget();
+    // 未配置态只有图标，没有进度结构；预览切到同步中时重建一次。
+    if (!document.querySelector('#sync-widget-root .segbar')) renderWidget();
+    const bubble = document.querySelector('#sync-widget-root .bubble');
+    if (!state.bubblePinned && bubble) {
+      bubble.classList.remove('open');
+      document.getElementById('bubble-body')?.setAttribute('inert', '');
+    }
+    if (!state.bubbleVisible) expandBubble(false);
+    updateBubbleProgress();
+    updateIconDot();
+    syncToolbar();
+    toast('已开始同步（原型）');
+    syncTimer = setInterval(tickSync, 120);
+  }
+
+  function tickSync() {
+    if (state.status !== 'syncing') return;
+    const elapsed = performance.now() - state.syncStartedAt;
+    let allDone = true;
+    state.sessions.forEach((session) => {
+      const progress = Math.max(0, Math.min(1, (elapsed - session.delay) / session.duration));
+      session.progress = progress;
+      session.state = progress >= 1 ? 'done' : progress > 0 ? 'run' : 'wait';
+      if (progress < 1) allDone = false;
+    });
+    updateBubbleProgress();
+    if (allDone) finishSync();
+  }
+
+  function finishSync() {
+    clearInterval(syncTimer);
+    state.status = 'ready';
+    state.sessions.forEach((session) => { session.progress = 1; session.state = 'done'; });
+    updateBubbleProgress();
+    syncToolbar();
+    updateIconDot();
+    if (!state.autoHide || state.bubblePinned) return;
+    hideTimer = setTimeout(() => { collapseBubble(false); }, 1000);
+  }
+
+  function syncToolbar() {
+    document.querySelectorAll('.proto-tabs button').forEach((button) => button.classList.toggle('on', button.dataset.view === state.view));
+    document.querySelectorAll('.proto-states button').forEach((button) => button.classList.toggle('on', button.dataset.state === state.status));
+  }
+
+  function render() {
+    syncToolbar();
+    if (state.view === 'settings') renderSettings();
+    else if (state.view === 'onboarding') renderOnboarding();
+    else renderBubble();
+    renderWidget();
+  }
+
+  document.querySelectorAll('.proto-tabs button').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = button.dataset.view;
+      state.onboardAnim = '';
+      state.onboardStepAnim = '';
+      if (state.view === 'onboarding') {
+        state.onboardStep = 0;
+        state.onboardAnim = 'in';
+      }
+      render();
+      state.onboardAnim = '';
+    });
+  });
+
+  document.querySelectorAll('.proto-states button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const next = button.dataset.state;
+      if (next === 'syncing') { startMockSync(); return; }
+      state.status = next;
+      state.autoHide = false;
+      if (next === 'unconfigured') {
+        state.hasToken = false;
+        state.allowlist = [];
+        state.bubbleVisible = true;
+      }
+      if (next === 'ready') {
+        state.hasToken = true;
+        state.hasPassphrase = true;
+        state.allowlist = ['D:/git-repo/dsh-session-sync'];
+        setSessionMode('ready');
+        state.bubbleVisible = true;
+        state.bubbleOpen = false;
+      }
+      if (next === 'error') {
+        setSessionMode('error');
+        state.bubbleVisible = true;
+        state.bubbleOpen = true;
+      }
+      render();
+    });
+  });
+
+  const slowToggle = document.getElementById('slow-toggle');
+  slowToggle?.addEventListener('click', () => {
+    const slow = document.body.classList.toggle('slow-mo');
+    slowToggle.classList.toggle('on', slow);
+    slowToggle.textContent = slow ? '100×' : '1×';
+    slowToggle.title = slow ? '切换正常速度' : '切换 100× 慢放';
+  });
+
+  document.addEventListener('pointerdown', (event) => {
+    const widget = document.querySelector('#sync-widget-root .bubble');
+    if (widget === null || !state.bubblePinned) return;
+    if (widget.contains(event.target)) return;
+    scheduleBlurCollapse();
+  }, true);
+
+  window.addEventListener('blur', () => {
+    if (state.bubblePinned) scheduleBlurCollapse();
+  });
+  window.addEventListener('focus', () => {
+    const widget = document.querySelector('#sync-widget-root .bubble');
+    if (widget !== null && widget.contains(document.activeElement)) clearTimeout(blurTimer);
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.bubbleVisible) {
+      collapseBubble(true);
+    }
+  });
+
+  render();
+</script>
+</body>
+</html>
