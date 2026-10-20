@@ -75,4 +75,5 @@ SessionPersistenceCorruptionError: current-generation delivery marker names the 
 - 真实双 home 验收：临时服务端 + 两个临时 DSH home，合成会话 **11 个事件**在 A/B 逐事件一致（header 的 `cwd` 按设备映射，符合设计）；
 - 开放尾验收：120 个闭合事件 + 1 个开放事件推送后，新设备只 apply 到 `safeThroughSeq=119`；闭合事件到达后才补到 121；
 - 断网验收：服务端停止后宿主继续运行，推送只记错误（引擎离线单测覆盖）；
-- 尚未实现：apply journal、手动按钮/状态 UI、`frames → batches` 重命名。
+- 可靠性：durable revision + pending journal（`state.json` 原子写入），启动先补 pending；错误分类与退避已落到 host；
+- 尚未实现：手动按钮/状态 UI、`frames → batches` 重命名。

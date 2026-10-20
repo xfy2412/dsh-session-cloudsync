@@ -132,6 +132,7 @@ export interface SessionSyncReport {
   readonly batches?: number
   readonly bytes?: number
   readonly error?: string
+  readonly kind?: SyncErrorKind
 }
 
 /** 一次同步的总结果。 */
@@ -152,12 +153,25 @@ export interface PullDeps<Session> {
   readonly attach?: (sessionId: string) => Promise<void>
   readonly logger?: SyncLogger
   readonly fetch?: typeof fetch
+  /** 在第一次本地写入之前落盘 pending 记录。 */
+  readonly beforeApply?: (sessionId: string, targetSeq: number) => Promise<void>
+  /** 本地追加、flush、attach 全部成功后清除 pending。 */
+  readonly afterApply?: (sessionId: string) => Promise<void>
+}
+
+/** 一次未完成的拉取。 */
+export interface PendingApply {
+  readonly sessionId: string
+  readonly targetSeq: number
+  readonly at: number
 }
 
 /** 拉取游标。 */
 export interface PullState {
   /** 已处理到的服务端 revision；0 表示从头扫描。 */
   readonly revision: number
+  /** 上次崩溃前未完成的会话。 */
+  readonly pending?: PendingApply
 }
 
 /** 单个会话的拉取结果。 */
@@ -166,6 +180,7 @@ export interface PullSessionReport {
   readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'local-ahead' | 'tombstone' | 'error'
   readonly applied?: number
   readonly error?: string
+  readonly kind?: SyncErrorKind
 }
 
 /** 一次拉取的总结果。 */
@@ -216,6 +231,62 @@ export class SyncHttpError extends Error {
  */
 function normalizeBase(url: string): string {
   return url.trim().replace(/\/+$/u, '')
+}
+
+/** 同步错误的粗分类，供退避与 UI 文案使用。 */
+export type SyncErrorKind =
+  | 'auth'
+  | 'forbidden'
+  | 'not-found'
+  | 'lease-held'
+  | 'diverged'
+  | 'gone'
+  | 'quota'
+  | 'rate-limited'
+  | 'server'
+  | 'network'
+  | 'crypto'
+  | 'format'
+  | 'config'
+  | 'unknown'
+
+/** 分类后的错误。 */
+export interface ClassifiedSyncError {
+  readonly kind: SyncErrorKind
+  readonly message: string
+  readonly retryable: boolean
+}
+
+/**
+ * 把异常归类成稳定的错误种类。
+ * @param error - 同步过程中抛出的异常。
+ * @returns 种类、可读消息与是否值得自动重试。
+ */
+export function classifySyncError(error: unknown): ClassifiedSyncError {
+  const message = error instanceof Error ? error.message : String(error)
+  if (error instanceof SyncHttpError) {
+    switch (error.status) {
+      case 401: return { kind: 'auth', message, retryable: false }
+      case 403: return { kind: 'forbidden', message, retryable: false }
+      case 404: return { kind: 'not-found', message, retryable: false }
+      case 410: return { kind: 'gone', message, retryable: false }
+      case 507: return { kind: 'quota', message, retryable: true }
+      case 429: return { kind: 'rate-limited', message, retryable: true }
+      default: break
+    }
+    if (error.status === 409) {
+      if (error.code === 'lease-held') return { kind: 'lease-held', message, retryable: true }
+      if (error.code === 'diverged') return { kind: 'diverged', message, retryable: false }
+      return { kind: 'format', message, retryable: false }
+    }
+    if (error.status >= 500) return { kind: 'server', message, retryable: true }
+    return { kind: 'unknown', message, retryable: true }
+  }
+  if (/认证失败|keyId|明文哈希|解密|密钥/u.test(message)) return { kind: 'crypto', message, retryable: false }
+  if (/seq|manifest|格式|会话头|批次/u.test(message)) return { kind: 'format', message, retryable: false }
+  if (/fetch failed|ECONN|ETIMEDOUT|timeout|network|socket|ENOTFOUND/u.test(message)) return { kind: 'network', message, retryable: true }
+  if (/未配置|配置/u.test(message)) return { kind: 'config', message, retryable: false }
+  return { kind: 'unknown', message, retryable: true }
 }
 
 /**
@@ -584,9 +655,9 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
       const sessionKey = sessionKeyOf(master, sessionId)
       sessions.push(await syncSession(deps, fetchImpl, base, sessionKey, snapshot))
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error)
-      deps.logger?.warn(`dsh-session-sync: ${sessionId} 同步失败：${message}`)
-      sessions.push({ sessionId, status: 'error', error: message })
+      const classified = classifySyncError(error)
+      deps.logger?.warn(`dsh-session-sync: ${sessionId} 同步失败：${classified.message}`)
+      sessions.push({ sessionId, status: 'error', error: classified.message, kind: classified.kind })
     }
   }
 
@@ -752,9 +823,11 @@ async function pullSession<Session>(
       }
       const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, localLast, safe, sessionKey)
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
+      await deps.beforeApply?.(sessionId, safe)
       await handle.append(events)
       await handle.flush()
       await deps.attach?.(sessionId)
+      await deps.afterApply?.(sessionId)
       return {
         sessionId,
         status: safe < remote.lastSeq ? 'partial' : 'pulled',
@@ -778,6 +851,7 @@ async function pullSession<Session>(
     ...meta.origin === undefined ? {} : { origin: meta.origin },
   }
   const options = meta.isSeeded ? { inheritedEventCount: meta.inheritedEventCount ?? 0 } : undefined
+  await deps.beforeApply?.(sessionId, safe)
   const handle = await deps.persistence.create(header, options)
   try {
     if (events.length > 0) await handle.append(events)
@@ -786,6 +860,7 @@ async function pullSession<Session>(
     await handle.close()
   }
   await deps.attach?.(sessionId)
+  await deps.afterApply?.(sessionId)
   return {
     sessionId,
     status: safe < remote.lastSeq ? 'partial' : 'pulled',
@@ -817,6 +892,20 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
 
   const reports: PullSessionReport[] = []
   let revision = state.revision
+
+  // 上次崩溃留下的 pending：先把它补完，再继续游标。
+  if (state.pending !== undefined) {
+    try {
+      reports.push(await pullSession(deps, fetchImpl, base, master, state.pending.sessionId))
+      await deps.afterApply?.(state.pending.sessionId)
+    } catch (error: unknown) {
+      const classified = classifySyncError(error)
+      deps.logger?.warn(`dsh-session-sync: 恢复 ${state.pending.sessionId} 失败：${classified.message}`)
+      reports.push({ sessionId: state.pending.sessionId, status: 'error', error: classified.message, kind: classified.kind })
+      return { configured: true, sessions: reports, revision: state.revision }
+    }
+  }
+
   for (let page = 0; page < 20; page += 1) {
     const cursor = await readCursor(fetchImpl, base, config.token, revision)
     let failed = false
@@ -829,9 +918,9 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         reports.push(await pullSession(deps, fetchImpl, base, master, change.sessionId))
       } catch (error: unknown) {
         failed = true
-        const message = error instanceof Error ? error.message : String(error)
-        deps.logger?.warn(`dsh-session-sync: 拉取 ${change.sessionId} 失败：${message}`)
-        reports.push({ sessionId: change.sessionId, status: 'error', error: message })
+        const classified = classifySyncError(error)
+        deps.logger?.warn(`dsh-session-sync: 拉取 ${change.sessionId} 失败：${classified.message}`)
+        reports.push({ sessionId: change.sessionId, status: 'error', error: classified.message, kind: classified.kind })
       }
     }
     for (const tombstone of cursor.tombstones) {

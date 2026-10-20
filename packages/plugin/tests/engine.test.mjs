@@ -4,7 +4,12 @@ import { createDevice } from '../../server/src/http.ts'
 import { openDatabase } from '../../server/src/db.ts'
 import { listenServer } from '../../server/tests/listen.mjs'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
-import { pullOnce, syncOnce } from '../src/engine.ts'
+import {
+  classifySyncError,
+  pullOnce,
+  syncOnce,
+  SyncHttpError,
+} from '../src/engine.ts'
 
 /** 发一个 JSON 请求。 */
 async function call(base, path, options = {}) {
@@ -39,14 +44,20 @@ function fakePersistence(header, state) {
 }
 
 /** 造一个可读写的假本地存储。 */
-function fakeStore(header, initialEvents = []) {
+function fakeStore(header, initialEvents = [], options = {}) {
   const sessions = new Map()
   if (header !== undefined) sessions.set(header.id, { header, events: [...initialEvents] })
   const handleFor = (record) => ({
     header: record.header,
     inheritedEventCount: 0,
     read: async () => ({ events: record.events }),
-    append: async (events) => { record.events.push(...events) },
+    append: async (events) => {
+      if (options.failAppendOnce === true) {
+        options.failAppendOnce = false
+        throw new Error('simulated append failure')
+      }
+      record.events.push(...events)
+    },
     flush: async () => {},
     close: async () => {},
   })
@@ -137,6 +148,71 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
       assert.equal(manifest2.body.value.manifest.safeThroughSeq, 149)
       assert.equal(manifest2.body.value.manifest.frames[4].seqFrom, 120)
       assert.equal(manifest2.body.value.manifest.frames[4].seqTo, 149)
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('错误分类：auth / lease / network / crypto', () => {
+  assert.equal(classifySyncError(new SyncHttpError('unauthorized', 401)).kind, 'auth')
+  const lease = new SyncHttpError('lease held', 409, 'lease-held')
+  assert.equal(classifySyncError(lease).kind, 'lease-held')
+  assert.equal(classifySyncError(new Error('fetch failed')).kind, 'network')
+  assert.equal(classifySyncError(new Error('封帧认证失败（密文、AAD 或密钥不匹配）')).kind, 'crypto')
+  assert.equal(classifySyncError(new SyncHttpError('quota', 507)).retryable, true)
+})
+
+test('拉取引擎：append 失败留下 pending，重启后按 pending 补完', async () => {
+  const temp = createTempHome('plugin-pending')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'pending-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const sessionId = 'session-pending-test'
+      const headerA = {
+        id: sessionId,
+        version: 4,
+        createdAt: 999,
+        isSeeded: false,
+        delegationDepth: 0,
+        agentPreset: 'standard',
+        cwd: 'D:/a',
+      }
+      const eventsA = events(0, 59)
+      const storeA = fakeStore(headerA, eventsA)
+      const config = { serverUrl: base, token: device.token, passphrase: 'pending pass', batchEvents: 20 }
+      assert.equal((await syncOnce({ persistence: storeA, sessions, config, isTailOpen: () => false })).sessions[0].status, 'pushed')
+
+      const storeB = fakeStore(undefined, [], { failAppendOnce: true })
+      let pending
+      const deps = {
+        persistence: storeB,
+        sessions,
+        config,
+        workspacePath: 'D:/b',
+        attach: async () => {},
+        beforeApply: async (id, targetSeq) => {
+          pending = { sessionId: id, targetSeq, at: 1 }
+        },
+        afterApply: async () => { pending = undefined },
+      }
+
+      const first = await pullOnce(deps, { revision: 0 })
+      assert.equal(first.sessions[0].status, 'error')
+      assert.equal(first.sessions[0].kind, 'unknown')
+      assert.ok(pending !== undefined, 'append 失败后应留下 pending')
+      assert.equal(storeB.sessions.get(sessionId).events.length, 0)
+
+      const second = await pullOnce(deps, { revision: 0, pending })
+      assert.equal(second.sessions.some((entry) => entry.status === 'pulled' || entry.status === 'up-to-date'), true)
+      assert.equal(pending, undefined, '恢复成功后应清除 pending')
+      assert.equal(storeB.sessions.get(sessionId).events.length, 60)
+      assert.equal(storeB.sessions.get(sessionId).events.at(-1).seq, 59)
     } finally {
       await close()
       db.close()

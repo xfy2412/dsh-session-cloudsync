@@ -10,14 +10,19 @@ import type { Context } from '@deepseek-ai/cordis'
 import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
+import { join } from 'node:path'
 import {
+  classifySyncError,
   pullOnce,
   syncOnce,
   type CreateHeaderLike,
   type CreateOptions,
   type EngineConfig,
+  type PendingApply,
+  type SyncErrorKind,
   type SyncLogger,
 } from './engine.ts'
+import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
 
 /** 插件在加载器里的名字。 */
 export const name = 'dsh-session-sync'
@@ -83,6 +88,27 @@ interface WorkspaceRegistryLike {
 }
 
 /**
+ * 找出持久化状态文件路径。
+ * @param ctx - 插件上下文。
+ * @returns 路径；找不到 home 时 undefined。
+ */
+function statePathOf(ctx: Context): string | undefined {
+  const homePath = ctx.get('dshHomePath') as unknown
+  if (typeof homePath === 'function') {
+    try {
+      return (homePath as (path: string) => string)('session-sync/state.json')
+    } catch {
+      return undefined
+    }
+  }
+  const home = process.env.DSH_HOME
+  return home === undefined || home === '' ? undefined : join(home, 'session-sync', 'state.json')
+}
+
+/** 不可自动恢复、只应等待配置/人工处理的错误。 */
+const NON_RETRYABLE: ReadonlySet<SyncErrorKind> = new Set(['auth', 'forbidden', 'diverged', 'format', 'crypto', 'gone'])
+
+/**
  * 注册插件。
  * @param ctx - 插件上下文；所有注册都随该 fiber 销毁。
  * @param config - 服务端、凭据与批次参数。
@@ -132,6 +158,27 @@ export function apply(ctx: Context, config: Config): void {
 
   const workspacePath = config.workspacePath ?? ''
   const workspaceRegistry = ctx.get('workspaceRegistry') as unknown as WorkspaceRegistryLike | undefined
+  const statePath = statePathOf(ctx)
+  const initialJournal: PullJournal = statePath === undefined
+    ? { version: STATE_VERSION, revision: 0 }
+    : readPullJournal(statePath)
+  let pullRevision = initialJournal.revision
+  let pending: PendingApply | undefined = initialJournal.pending
+  if (statePath === undefined) logger.info('dsh-session-sync: 找不到 DSH home，拉取状态只保存在内存')
+
+  const persistState = (): void => {
+    if (statePath === undefined) return
+    try {
+      writePullJournal(statePath, {
+        version: STATE_VERSION,
+        revision: pullRevision,
+        ...pending === undefined ? {} : { pending },
+      })
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-sync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   const pullDeps = {
     persistence: {
       stat: (id: string) => ctx.sessionPersistence.stat(id as SessionId),
@@ -152,13 +199,38 @@ export function apply(ctx: Context, config: Config): void {
       await workspace.attachSession(sessionId as SessionId)
     },
     logger,
+    beforeApply: async (sessionId: string, targetSeq: number): Promise<void> => {
+      pending = { sessionId, targetSeq, at: Date.now() }
+      persistState()
+    },
+    afterApply: async (): Promise<void> => {
+      pending = undefined
+      persistState()
+    },
   }
 
-  let running = false
-  let pullRevision = 0
+  const status: {
+    running: boolean
+    lastAttempt: number | undefined
+    lastSuccess: number | undefined
+    lastError: { kind: SyncErrorKind; message: string; at: number } | undefined
+    retryCount: number
+    nextRetryAt: number
+  } = {
+    running: false,
+    lastAttempt: undefined,
+    lastSuccess: undefined,
+    lastError: undefined,
+    retryCount: 0,
+    nextRetryAt: 0,
+  }
+
   const run = async (): Promise<void> => {
-    if (running) return
-    running = true
+    if (status.running) return
+    if (Date.now() < status.nextRetryAt) return
+    status.running = true
+    status.lastAttempt = Date.now()
+    const errors: Array<{ kind: SyncErrorKind; message: string }> = []
     try {
       const report = await syncOnce(deps)
       if (!report.configured) {
@@ -170,23 +242,55 @@ export function apply(ctx: Context, config: Config): void {
         if (pushed.length > 0 || failed.length > 0) {
           logger.info(`dsh-session-sync: 推送 ${pushed.length} 个会话，失败 ${failed.length}，跳过 ${skipped}`)
         }
-        for (const session of failed) logger.warn(`dsh-session-sync: ${session.sessionId} 失败：${session.error ?? '未知错误'}`)
+        for (const session of failed) {
+          const kind = session.kind ?? 'unknown'
+          errors.push({ kind, message: session.error ?? '未知错误' })
+          logger.warn(`dsh-session-sync: ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
+        }
       }
 
-      const pulled = await pullOnce(pullDeps, { revision: pullRevision })
+      const pulled = await pullOnce(pullDeps, pending === undefined
+        ? { revision: pullRevision }
+        : { revision: pullRevision, pending })
       if (pulled.configured) {
-        pullRevision = pulled.revision
-        const applied = pulled.sessions.filter((session) => session.status === 'pulled' || session.status === 'partial')
         const failed = pulled.sessions.filter((session) => session.status === 'error')
+        const applied = pulled.sessions.filter((session) => session.status === 'pulled' || session.status === 'partial')
+        if (failed.length === 0) {
+          pullRevision = pulled.revision
+          persistState()
+        }
         if (applied.length > 0 || failed.length > 0) {
           logger.info(`dsh-session-sync: 拉取 ${applied.length} 个会话，失败 ${failed.length}`)
         }
-        for (const session of failed) logger.warn(`dsh-session-sync: 拉取 ${session.sessionId} 失败：${session.error ?? '未知错误'}`)
+        for (const session of failed) {
+          const kind = session.kind ?? 'unknown'
+          errors.push({ kind, message: session.error ?? '未知错误' })
+          logger.warn(`dsh-session-sync: 拉取 ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
+        }
       }
     } catch (error: unknown) {
-      logger.warn(`dsh-session-sync: 一次同步失败：${error instanceof Error ? error.message : String(error)}`)
+      const classified = classifySyncError(error)
+      errors.push({ kind: classified.kind, message: classified.message })
+      logger.warn(`dsh-session-sync: 一次同步失败（${classified.kind}）：${classified.message}`)
     } finally {
-      running = false
+      status.running = false
+      if (errors.length > 0) {
+        status.retryCount += 1
+        const nonRetryable = errors.some((entry) => NON_RETRYABLE.has(entry.kind))
+        const base = config.intervalMs ?? 60000
+        const delay = nonRetryable
+          ? Math.max(base, 5 * 60_000)
+          : Math.min(base * 2 ** Math.min(status.retryCount, 5), 5 * 60_000)
+        status.nextRetryAt = Date.now() + delay
+        status.lastError = { kind: errors[0]!.kind, message: errors[0]!.message, at: Date.now() }
+        logger.warn(`dsh-session-sync: 将在 ${Math.round(delay / 1000)}s 后重试（retry=${status.retryCount}）`)
+      } else {
+        status.retryCount = 0
+        status.nextRetryAt = 0
+        status.lastSuccess = Date.now()
+        status.lastError = undefined
+        persistState()
+      }
     }
   }
 
