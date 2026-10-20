@@ -14,7 +14,7 @@
 
 给 DeepSeek Harness（DSH）做的**会话云同步**：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。
 
-> **状态：M1/M2 已完成，M3 已完成，M4 进行中。** 帧工具/加密、服务端（含管理台与初始化）、M0 免重启 ingest 已经可跑；M3 的推送/拉取、安全边界、双 home E2E、durable journal 与错误退避已通过。M4 目前完成 A1–A5（可靠状态、手动同步、`status`/`setup`/`workspaces`/`sync` 宿主 API、子代理闭包与工作区白名单），设置页、首启向导与客户端防误操作待做。里程碑见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+> **状态：M1/M2 已完成，M3 已完成，M4 进行中。** 帧工具/加密、服务端（含管理台与初始化）、M0 免重启 ingest 已经可跑；M3 的推送/拉取、安全边界、双 home E2E、durable journal 与错误退避已通过。M4 目前完成 A1–A5 与 B1/B2/B4 的 host 侧（可靠状态、手动同步、`status`/`setup`/`workspaces`/`test`/`sync` API、子代理闭包、工作区白名单、凭据解析），设置页、首启向导与客户端防误操作待做。里程碑见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 支持版本
 

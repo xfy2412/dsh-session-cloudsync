@@ -1,8 +1,8 @@
 # M4 计划：设置、可靠性与客户端防护
 
-> 状态：M3 核心链路已完成（推送/拉取/安全边界/断网降级/双 home 验收）；M4 未开始。本文件是 M4 的唯一清单，ROADMAP 只保留状态摘要。
+> 状态：M3 核心链路已完成（推送/拉取/安全边界/断网降级/双 home 验收）；M4 进行中。本文件是 M4 的唯一清单，ROADMAP 只保留状态摘要。
 >
-> 进度（2026-10-20）：A1–A5 已完成（durable revision + pending journal、错误分类/退避、状态/手动触发 API、子代理闭包；96 tests）；下一步 B1/B2（凭据与设置）。
+> 进度（2026-10-20）：A1–A5 已完成（durable revision + pending journal、错误分类/退避、状态/手动触发 API、子代理闭包）；B1/B2/B4 的 host 侧已完成（凭据解析、volatile 配置、`/test`）；99 tests。下一步 B3/B5 客户端设置页与首启。
 
 ## 1. M4 验收
 
@@ -24,7 +24,7 @@
 | A4 | 客户端可读的状态通道（session projection 或 host service） | A3 |
 | A5 | 子代理闭包：根会话 + 全部后代；推送按后序（子先父后），拉取先建子再挂根；默认开启 | A3 |
 
-> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-sync/status`、`GET /api/session-sync/setup`、`GET /api/session-sync/workspaces`、`POST /api/session-sync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照含 `configured/reason/running/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`，逐会话视图带 `direction/status/batches|applied/tailOpen/kind/error`。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。
+> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-sync/status`、`GET /api/session-sync/setup`、`GET /api/session-sync/workspaces`、`POST /api/session-sync/test`、`POST /api/session-sync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照含 `configured/reason/running/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`，逐会话视图带 `direction/status/batches|applied/tailOpen/kind/error`。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。
 >
 > **A5 已完成**：默认同步子代理闭包（`includeSubagents` 默认 true）；只把 `origin === 'subagent'` 当后代，fork 是独立根；推送按“后代深到浅、根最后”排序；拉取按远端 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入跳过列表。
 
@@ -37,6 +37,13 @@
 | B3 | 设置页：Plugins 页的 `plugins.bundle.config` / `plugins.row.config` + `SettingsForm`；`settings.plugins.tab` 只用于 Built-in inventory，不是第三方插件配置位 | A4、B1、B2 |
 | B4 | Host↔Client 控制通道（测试连接、立即同步、读取状态） | A3 |
 | B5 | 首启引导：连接 → 凭据 → 工作区白名单 → 测试/首次同步；未配置时显示 | B3、B4 |
+
+> 进度：**B1/B2/B4 的 host 侧已完成**。
+>
+> - B1：固定凭据引用 `DSH_SESSION_SYNC_TOKEN` / `DSH_SESSION_SYNC_PASSPHRASE`；每轮同步前 `ctx.credentials.resolve`，凭据优先、YAML `token`/`passphrase` 仅作 bootstrap fallback；`setup` 带 `hasToken/hasPassphrase/tokenSource/passphraseSource/credentialRefs`，不回传值。
+> - B2：非敏感字段已标 `.volatile()`，DSH 设置页可直接生成表单并热更新；`token`/`passphrase` 不放进普通表单。
+> - B4：`GET /status`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 验证服务端可达与 token，不校验口令。
+> - 尚未做：B3 自定义设置页（工作区多选 + 全选 + 凭据卡片）与 B5 首启 overlay。
 
 **官方前端接口（已确认，来自本地 DSH 源码/类型）：**
 
@@ -58,7 +65,7 @@
   - 仅在同步中/有待拉取/有错误时出现；成功后短暂显示再隐藏；
   - 右上角、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
   - 窄屏切底部 sheet；`aria-live="polite"`。
-- **API**：`GET /api/session-sync/setup`、`GET /status`、`GET /workspaces`、`POST /setup`、`/test`、`/sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区标题、根会话数、子代理数、是否选中；「全选」取全部 `path`。
+- **API**：`GET /api/session-sync/setup`、`GET /status`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区标题、根会话数、子代理数、是否选中；「全选」取全部 `path`。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
 - **刷新**：同步中每 1s 轮询 status，空闲停止。
 
 ### C. 客户端防误操作
@@ -98,14 +105,14 @@
 - 同步预览 = `shell.overlay` 顶层气泡；不用标题栏槽位；
 - 首启/状态 API 走 `connection.fetch`，继承 DSH 鉴权；
 - 非敏感配置走 settings，token/passphrase 走 credentials。
+- **凭据已定**：固定引用 `DSH_SESSION_SYNC_TOKEN` / `DSH_SESSION_SYNC_PASSPHRASE`；`ctx.credentials` 优先，YAML `token`/`passphrase` 仅作 bootstrap fallback；每轮同步前解析，不要求重启。非敏感字段标 `.volatile()`，由设置页热更新。
 - **子代理闭包默认开启**（`includeSubagents: true`）：同步根会话及其全部 `origin === 'subagent'` 后代；fork 作为独立根。
 - **工作区白名单空 = 暂不同步**：`workspaceAllowlist` 为空时插件只提供设置/状态 API，不推送、不拉取；首启/设置页的同步列表提供「全选」，选中后把路径写入白名单。
 
 **待拍板：**
 
-1. **凭据存储**：推荐 DSH `ctx.credentials`；profile YAML 只留非敏感项。环境变量作为首次配置 fallback。
-2. **apply journal 粒度**：当前实现是 revision + pending；是否再拆成每 turn 的条目按需要再定。
-3. **重命名时机**：建议 M4 Host 稳定后、D5 之前统一做，避免边改协议边写故障测试。
+1. **apply journal 粒度**：当前实现是 revision + pending；是否再拆成每 turn 的条目按需要再定。
+2. **重命名时机**：建议 M4 Host 稳定后、D5 之前统一做，避免边改协议边写故障测试。
 
 ## 4. 执行顺序
 

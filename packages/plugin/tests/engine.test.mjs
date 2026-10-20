@@ -9,6 +9,7 @@ import {
   pullOnce,
   syncOnce,
   SyncHttpError,
+  testConnection,
 } from '../src/engine.ts'
 
 /** 发一个 JSON 请求。 */
@@ -338,6 +339,42 @@ test('拉取引擎：白名单为空或拉取目标不在白名单时整体不�
   }, { revision: 0 })
   assert.equal(outside.configured, false)
   assert.equal(outside.reason, 'workspacePath 不在同步白名单')
+})
+
+test('连接测试：token 有效时通过，无效时分类为 auth，离线为 network', async () => {
+  const temp = createTempHome('plugin-test-connection')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'test-connection')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const config = { serverUrl: base, token: device.token, passphrase: 'pass' }
+      assert.deepEqual(await testConnection(config), { ok: true })
+
+      const badToken = await testConnection({ ...config, token: 'invalid-token' })
+      assert.equal(badToken.ok, false)
+      assert.equal(badToken.kind, 'auth')
+
+      const offline = await testConnection({
+        serverUrl: 'http://127.0.0.1:1',
+        token: 'token',
+        passphrase: 'pass',
+      })
+      assert.equal(offline.ok, false)
+      assert.equal(offline.kind, 'network')
+
+      assert.deepEqual(await testConnection({ ...config, serverUrl: '' }), {
+        ok: false,
+        kind: 'config',
+        message: 'serverUrl 未配置',
+      })
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
 })
 
 test('错误分类：auth / lease / network / crypto', () => {

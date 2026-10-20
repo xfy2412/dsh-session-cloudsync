@@ -17,6 +17,7 @@ import { buildSessionTree, pathAllowed, pathKeyOf } from './closure.ts'
 import {
   pullOnce,
   syncOnce,
+  testConnection,
   type CreateHeaderLike,
   type CreateOptions,
   type EngineConfig,
@@ -32,7 +33,13 @@ import type { SetupInfo, SyncWorkspaceCandidate, SyncWorkspaceList } from './sta
 export const name = 'dsh-session-sync'
 
 /** 本插件读取的服务；缺任何一个都由加载器在装载期报错，而不是运行期。 */
-export const inject = ['sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry']
+export const inject = ['sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry', 'credentials']
+
+/** token / passphrase 在 DSH 凭据库里的引用名。 */
+const CREDENTIAL_REFS = {
+  token: 'DSH_SESSION_SYNC_TOKEN',
+  passphrase: 'DSH_SESSION_SYNC_PASSPHRASE',
+} as const
 
 /** 插件配置。 */
 export interface Config {
@@ -40,9 +47,9 @@ export interface Config {
   enabled?: boolean
   /** 自部署服务端地址；空表示未配置。 */
   serverUrl?: string
-  /** 设备 token（管理台/CLI 签发）；空表示未配置。 */
+  /** 设备 token；仅作 bootstrap fallback，推荐用 DSH credentials。 */
   token?: string
-  /** 同步口令；不落盘。 */
+  /** 同步口令；仅作 bootstrap fallback，推荐用 DSH credentials。 */
   passphrase?: string
   /** 可选：base64 的 16 字节 KDF 盐；缺省由服务端地址派生。 */
   salt?: string
@@ -64,21 +71,21 @@ export interface Config {
   batchBytes?: number
 }
 
-/** 配置 schema。 */
-export const Config: z<Config> = z.object({
+/** 配置 schema；非敏感字段可被 DSH 设置页直接编辑并热更新。 */
+export const Config = z.object({
   enabled: z.boolean().default(true),
-  serverUrl: z.string().default(''),
+  serverUrl: z.string().default('').volatile(),
   token: z.string().default(''),
   passphrase: z.string().default(''),
   salt: z.string().default(''),
-  deviceName: z.string().default(''),
-  workspacePath: z.string().default(''),
-  workspaceAllowlist: z.array(z.string()).default([]),
-  autoSync: z.boolean().default(true),
-  intervalMs: z.number().min(1000).default(60000),
-  includeSubagents: z.boolean().default(true),
-  batchEvents: z.number().min(1).default(50),
-  batchBytes: z.number().min(1024).default(256 * 1024),
+  deviceName: z.string().default('').volatile(),
+  workspacePath: z.string().default('').volatile(),
+  workspaceAllowlist: z.array(z.string()).default([]).volatile(),
+  autoSync: z.boolean().default(true).volatile(),
+  intervalMs: z.number().min(1000).default(60000).volatile(),
+  includeSubagents: z.boolean().default(true).volatile(),
+  batchEvents: z.number().min(1).default(50).volatile(),
+  batchBytes: z.number().min(1024).default(256 * 1024).volatile(),
 })
 
 /** 活动的会话类型（由 ctx.sessions 推导，避免手写 DSH 内部类型）。 */
@@ -104,6 +111,17 @@ interface ConnectionLike {
   readonly fetch: {
     register(route: HostFetchRoute): () => Promise<void>
   }
+}
+
+/** `ctx.credentials` 的最小结构（类型包不在本插件依赖里）。 */
+interface CredentialsLike {
+  resolve(ref: string): Promise<{ readonly value: string; readonly source: string } | undefined>
+}
+
+/** 运行期可被凭据刷新改写的引擎配置。 */
+type MutableEngineConfig = Omit<EngineConfig, 'token' | 'passphrase'> & {
+  token: string
+  passphrase: string
 }
 
 /**
@@ -151,20 +169,62 @@ export function apply(ctx: Context, config: Config): void {
     return
   }
   const serverUrl = config.serverUrl ?? ''
-  const token = config.token ?? ''
-  const passphrase = config.passphrase ?? ''
+  const configToken = config.token ?? ''
+  const configPassphrase = config.passphrase ?? ''
   const intervalMs = config.intervalMs ?? 60000
   const workspaceAllowlist = [...config.workspaceAllowlist ?? []].filter((path) => path.trim() !== '')
 
-  const engineConfig: EngineConfig = {
+  const engineConfig: MutableEngineConfig = {
     serverUrl,
-    token,
-    passphrase,
+    token: configToken,
+    passphrase: configPassphrase,
     ...config.salt === undefined || config.salt === '' ? {} : { salt: config.salt },
     includeSubagents: config.includeSubagents !== false,
     workspaceAllowlist,
     batchEvents: config.batchEvents ?? 50,
     batchBytes: config.batchBytes ?? 256 * 1024,
+  }
+  let tokenSource: string | null = configToken.trim() === '' ? null : 'config'
+  let passphraseSource: string | null = configPassphrase === '' ? null : 'config'
+  let refreshingSecrets: Promise<void> | undefined
+
+  /**
+   * 从 DSH 凭据库解析 token/口令；凭据缺失时保留 YAML 的 bootstrap 值。
+   * 每轮同步前调用，凭据修改后下一轮即生效。
+   */
+  const refreshSecrets = async (): Promise<void> => {
+    if (refreshingSecrets !== undefined) return refreshingSecrets
+    const credentials = ctx.get('credentials') as CredentialsLike | undefined
+    if (credentials === undefined) return
+    refreshingSecrets = (async () => {
+      const resolve = async (name: string, ref: string): Promise<{ readonly value: string; readonly source: string } | undefined> => {
+        try {
+          return await credentials.resolve(ref)
+        } catch (error: unknown) {
+          logger.warn(`dsh-session-sync: 读取 ${name} 凭据失败：${error instanceof Error ? error.message : String(error)}`)
+          return undefined
+        }
+      }
+      const [tokenValue, passphraseValue] = await Promise.all([
+        resolve('token', CREDENTIAL_REFS.token),
+        resolve('passphrase', CREDENTIAL_REFS.passphrase),
+      ])
+      const credentialToken = tokenValue?.value ?? ''
+      const credentialPassphrase = passphraseValue?.value ?? ''
+      engineConfig.token = credentialToken !== '' ? credentialToken : configToken
+      engineConfig.passphrase = credentialPassphrase !== '' ? credentialPassphrase : configPassphrase
+      tokenSource = credentialToken !== ''
+        ? tokenValue?.source ?? 'credentials'
+        : configToken.trim() !== '' ? 'config' : null
+      passphraseSource = credentialPassphrase !== ''
+        ? passphraseValue?.source ?? 'credentials'
+        : configPassphrase !== '' ? 'config' : null
+    })()
+    try {
+      await refreshingSecrets
+    } finally {
+      refreshingSecrets = undefined
+    }
   }
   const deps = {
     persistence: {
@@ -183,6 +243,12 @@ export function apply(ctx: Context, config: Config): void {
 
   const workspacePath = config.workspacePath ?? ''
   const workspaceRegistry = ctx.get('workspaceRegistry') as unknown as WorkspaceRegistryLike | undefined
+  if (configToken !== '' || configPassphrase !== '') {
+    logger.warn(
+      'dsh-session-sync: token/passphrase 仍写在 YAML；建议迁到 DSH 凭据库'
+      + `（${CREDENTIAL_REFS.token} / ${CREDENTIAL_REFS.passphrase}），YAML 仅作 fallback`,
+    )
+  }
   const statePath = statePathOf(ctx)
   const initialJournal: PullJournal = statePath === undefined
     ? { version: STATE_VERSION, revision: 0 }
@@ -204,8 +270,8 @@ export function apply(ctx: Context, config: Config): void {
 
   const configuration = (): { configured: boolean; reason?: string } => {
     if (serverUrl.trim() === '') return { configured: false, reason: 'serverUrl 未配置' }
-    if (token.trim() === '') return { configured: false, reason: 'token 未配置' }
-    if (passphrase === '') return { configured: false, reason: 'passphrase 未配置' }
+    if (engineConfig.token.trim() === '') return { configured: false, reason: 'token 未配置' }
+    if (engineConfig.passphrase === '') return { configured: false, reason: 'passphrase 未配置' }
     if (workspaceAllowlist.length === 0) return { configured: false, reason: 'workspaceAllowlist 未配置' }
     return { configured: true }
   }
@@ -256,7 +322,8 @@ export function apply(ctx: Context, config: Config): void {
   }
   pullWithDeps = (state) => pullOnce(pullDeps, state)
 
-  const setup = (): SetupInfo => {
+  const setup = async (): Promise<SetupInfo> => {
+    await refreshSecrets()
     const state = configuration()
     return {
       configured: state.configured,
@@ -269,9 +336,17 @@ export function apply(ctx: Context, config: Config): void {
       autoSync: config.autoSync !== false,
       intervalMs,
       includeSubagents: config.includeSubagents !== false,
-      hasToken: token.trim() !== '',
-      hasPassphrase: passphrase !== '',
+      hasToken: engineConfig.token.trim() !== '',
+      hasPassphrase: engineConfig.passphrase !== '',
+      tokenSource,
+      passphraseSource,
+      credentialRefs: { ...CREDENTIAL_REFS },
     }
+  }
+
+  const runSync = async (manual = false): Promise<Awaited<ReturnType<SyncController['run']>>> => {
+    await refreshSecrets()
+    return manual ? controller.run({ manual: true }) : controller.run()
   }
 
   const workspaces = async (): Promise<SyncWorkspaceList> => {
@@ -331,7 +406,11 @@ export function apply(ctx: Context, config: Config): void {
     status: () => controller.snapshot(),
     setup,
     workspaces,
-    syncNow: () => controller.run({ manual: true }),
+    test: async () => {
+      await refreshSecrets()
+      return testConnection(engineConfig)
+    },
+    syncNow: () => runSync(true),
   }
   ctx.inject(['connection'], (connectionCtx) => {
     const connection = connectionCtx.get('connection') as ConnectionLike | undefined
@@ -347,15 +426,17 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
 
-  const current = configuration()
-  if (!current.configured) {
-    logger.info(`dsh-session-sync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
-  } else {
-    void controller.run()
-  }
+  void refreshSecrets().then(() => {
+    const current = configuration()
+    if (!current.configured) {
+      logger.info(`dsh-session-sync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
+    } else {
+      void controller.run()
+    }
+  })
   if (config.autoSync !== false) {
     ctx.effect(() => {
-      const timer = setInterval(() => { void controller.run() }, intervalMs)
+      const timer = setInterval(() => { void runSync() }, intervalMs)
       return () => { clearInterval(timer) }
     })
   }

@@ -92,6 +92,15 @@ export interface SetupInfo {
   readonly hasToken: boolean
   /** 是否已经配置口令；不返回口令本身。 */
   readonly hasPassphrase: boolean
+  /** token 的来源层：凭据 provider 的 source（如 file/env），YAML fallback 为 config；未配置为 null。 */
+  readonly tokenSource: string | null
+  /** 口令的来源层：凭据 provider 的 source（如 file/env），YAML fallback 为 config；未配置为 null。 */
+  readonly passphraseSource: string | null
+  /** 客户端应写入的凭据引用名。 */
+  readonly credentialRefs: {
+    readonly token: string
+    readonly passphrase: string
+  }
 }
 
 /** 同步列表里的一个工作区（或未注册的 cwd 分组）。 */

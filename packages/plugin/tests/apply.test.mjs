@@ -57,6 +57,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
     '/api/session-sync/status',
     '/api/session-sync/setup',
     '/api/session-sync/workspaces',
+    '/api/session-sync/test',
     '/api/session-sync/sync',
   ])
 
@@ -65,7 +66,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
   assert.equal(statusBody.value.configured, false)
   assert.equal(statusBody.value.reason, 'serverUrl 未配置')
 
-  const sync = await connection.routes[3].fetch(new Request('http://host/api/session-sync/sync', { method: 'POST' }))
+  const sync = await connection.routes[4].fetch(new Request('http://host/api/session-sync/sync', { method: 'POST' }))
   const syncBody = JSON.parse(await sync.text())
   assert.equal(syncBody.value.ok, false)
   assert.equal(syncBody.value.code, 'unconfigured')
@@ -89,6 +90,8 @@ test('应用接线：设置信息不回传 token/passphrase', async () => {
   assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
   assert.equal(body.value.hasToken, true)
   assert.equal(body.value.hasPassphrase, true)
+  assert.equal(body.value.tokenSource, 'config')
+  assert.equal(body.value.passphraseSource, 'config')
   assert.equal(JSON.stringify(body).includes('secret-token'), false)
   assert.equal(JSON.stringify(body).includes('secret-passphrase'), false)
 })
@@ -147,6 +150,45 @@ test('应用接线：workspaces 汇总工作区、根会话与子代理计数', 
     subagentSessions: 1,
     selected: true,
   }])
+})
+
+test('应用接线：token/passphrase 优先取 DSH 凭据库', async () => {
+  const connection = fakeConnection()
+  const requested = []
+  const { ctx } = fakeContext(connection, {
+    credentials: {
+      resolve: async (ref) => {
+        requested.push(ref)
+        if (ref === 'DSH_SESSION_SYNC_TOKEN') return { value: 'credential-token', source: 'file' }
+        if (ref === 'DSH_SESSION_SYNC_PASSPHRASE') return { value: 'credential-pass', source: 'env' }
+        return undefined
+      },
+    },
+  })
+  apply(ctx, {
+    enabled: true,
+    serverUrl: 'http://127.0.0.1:1',
+    token: '',
+    passphrase: '',
+    workspacePath: '',
+    workspaceAllowlist: ['D:/work'],
+    autoSync: false,
+  })
+
+  const response = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  const body = JSON.parse(await response.text())
+  assert.equal(body.value.hasToken, true)
+  assert.equal(body.value.hasPassphrase, true)
+  assert.equal(body.value.tokenSource, 'file')
+  assert.equal(body.value.passphraseSource, 'env')
+  assert.deepEqual(body.value.credentialRefs, {
+    token: 'DSH_SESSION_SYNC_TOKEN',
+    passphrase: 'DSH_SESSION_SYNC_PASSPHRASE',
+  })
+  assert.ok(requested.includes('DSH_SESSION_SYNC_TOKEN'))
+  assert.ok(requested.includes('DSH_SESSION_SYNC_PASSPHRASE'))
+  assert.equal(JSON.stringify(body).includes('credential-token'), false)
+  assert.equal(JSON.stringify(body).includes('credential-pass'), false)
 })
 
 test('应用接线：禁用时不注册任何路由', () => {

@@ -7,6 +7,7 @@
  * @module dsh-session-sync/host-api
  */
 import { classifySyncError } from './engine.ts'
+import type { SyncTestResult } from './engine.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { SetupInfo, SyncStatus, SyncWorkspaceList } from './status.ts'
 
@@ -14,10 +15,12 @@ import type { SetupInfo, SyncStatus, SyncWorkspaceList } from './status.ts'
 export interface SyncControl {
   /** 当前状态快照。 */
   status(): SyncStatus
-  /** 非敏感配置，供首启/设置页读取。 */
-  setup(): SetupInfo
+  /** 非敏感配置，供首启/设置页读取；会顺带刷新凭据。 */
+  setup(): Promise<SetupInfo>
   /** 同步列表：工作区、会话计数与当前选中项。 */
   workspaces(): Promise<SyncWorkspaceList>
+  /** 测试服务端地址与 token。 */
+  test(): Promise<SyncTestResult>
   /** 手动触发一轮同步；已在运行时返回 `already-running`。 */
   syncNow(): Promise<SyncRunResult>
 }
@@ -58,7 +61,17 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       path: '/api/session-sync/setup',
       methods: ['GET'],
       requestBody: 'buffered',
-      fetch: async () => json({ ok: true, value: control.setup() }),
+      fetch: async () => {
+        try {
+          return json({ ok: true, value: await control.setup() })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
     },
     {
       path: '/api/session-sync/workspaces',
@@ -67,6 +80,22 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       fetch: async () => {
         try {
           return json({ ok: true, value: await control.workspaces() })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-sync/test',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async () => {
+        try {
+          return json({ ok: true, value: await control.test() })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({

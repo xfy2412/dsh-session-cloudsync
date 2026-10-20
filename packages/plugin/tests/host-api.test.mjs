@@ -19,7 +19,7 @@ function control(overrides = {}) {
       revision: 3,
       sessions: [],
     },
-    setup: () => overrides.setup ?? {
+    setup: async () => overrides.setup ?? {
       configured: true,
       reason: null,
       serverUrl: 'http://127.0.0.1:8787',
@@ -32,6 +32,12 @@ function control(overrides = {}) {
       includeSubagents: true,
       hasToken: true,
       hasPassphrase: true,
+      tokenSource: 'file',
+      passphraseSource: 'file',
+      credentialRefs: {
+        token: 'DSH_SESSION_SYNC_TOKEN',
+        passphrase: 'DSH_SESSION_SYNC_PASSPHRASE',
+      },
     },
     workspaces: overrides.workspaces ?? (async () => ({
       allowlistConfigured: true,
@@ -44,6 +50,7 @@ function control(overrides = {}) {
         selected: true,
       }],
     })),
+    test: overrides.test ?? (async () => ({ ok: true })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
   }
 }
@@ -60,12 +67,13 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/setup/sync 三条精确路由', () => {
+test('宿主 API：注册 status/setup/workspaces/test/sync 五条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-sync/status', ['GET'], 'buffered'],
     ['/api/session-sync/setup', ['GET'], 'buffered'],
     ['/api/session-sync/workspaces', ['GET'], 'buffered'],
+    ['/api/session-sync/test', ['POST'], 'buffered'],
     ['/api/session-sync/sync', ['POST'], 'buffered'],
   ])
 })
@@ -125,6 +133,15 @@ test('宿主 API：workspaces 读取失败时返回 500', async () => {
   const body = await bodyOf(response)
   assert.equal(body.ok, false)
   assert.equal(body.error.message, 'storage unavailable')
+})
+
+test('宿主 API：test 返回连接测试结果', async () => {
+  const routes = createHostApi(control({ test: async () => ({ ok: false, kind: 'auth', message: 'token 无效' }) }))
+  const response = await route(routes, '/api/session-sync/test').fetch(
+    new Request('http://host/api/session-sync/test', { method: 'POST' }),
+  )
+  assert.equal(response.status, 200)
+  assert.deepEqual((await bodyOf(response)).value, { ok: false, kind: 'auth', message: 'token 无效' })
 })
 
 test('宿主 API：sync 返回控制器结果', async () => {

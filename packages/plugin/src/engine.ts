@@ -681,6 +681,42 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   return { configured: true, sessions }
 }
 
+/** 连接测试结果。 */
+export interface SyncTestResult {
+  /** 服务端可达且 token 被接受。 */
+  readonly ok: boolean
+  /** 失败分类。 */
+  readonly kind?: SyncErrorKind
+  /** 可读说明。 */
+  readonly message?: string
+}
+
+/**
+ * 测试服务端地址与 token；不校验口令，也不读写会话。
+ * @param config - 同步配置。
+ * @param fetchImpl - fetch 实现（测试可替换）。
+ * @returns 测试结果；失败不抛异常。
+ */
+export async function testConnection(
+  config: EngineConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SyncTestResult> {
+  if (config.serverUrl.trim() === '') return { ok: false, kind: 'config', message: 'serverUrl 未配置' }
+  if (config.token.trim() === '') return { ok: false, kind: 'config', message: 'token 未配置' }
+  const base = normalizeBase(config.serverUrl)
+  if (base === '') return { ok: false, kind: 'config', message: 'serverUrl 非法' }
+  try {
+    const { status, body } = await requestJson(fetchImpl, base, '/v1/cursor?since=0&limit=1', config.token)
+    if (status === 200) return { ok: true }
+    const error = errorOf(body)
+    const classified = classifySyncError(new SyncHttpError(error.message, status, error.code))
+    return { ok: false, kind: classified.kind, message: classified.message }
+  } catch (error: unknown) {
+    const classified = classifySyncError(error)
+    return { ok: false, kind: classified.kind, message: classified.message }
+  }
+}
+
 /** 游标里的一个会话变更。 */
 interface CursorSession {
   readonly sessionId: string
