@@ -42,7 +42,8 @@
 >
 > - B1：固定凭据引用 `DSH_SESSION_SYNC_TOKEN` / `DSH_SESSION_SYNC_PASSPHRASE`；每轮同步前 `ctx.credentials.resolve`，凭据优先、YAML `token`/`passphrase` 仅作 bootstrap fallback；`setup` 带 `hasToken/hasPassphrase/tokenSource/passphraseSource/credentialRefs`，不回传值。
 > - B2：非敏感字段已标 `.volatile()`，DSH 设置页可直接生成表单并热更新；`token`/`passphrase` 不放进普通表单。默认单次 HTTP 读取超时 10s（`requestTimeoutMs`），避免网络挂死无限等待。
-> - `workspacePath` 是 M4 的单落点临时方案：多工作区映射、按 `workspaceKey` 着陆、未映射不 apply 的设计见 [VAULT.md](VAULT.md)，M4 不展开。
+> - `workspacePath` 是 M4 的开发期单落点占位：插件未公开发布，V2 直接用 [VAULT.md](VAULT.md) 的工作区绑定替换，不做迁移/兼容分支。
+> - 启动对账（候选列表/确认/忽略）与 raw 前缀校验见 [RECONCILE.md](RECONCILE.md)；实现前不能把当前“自动拉取所有远端会话”当作最终 UX。
 > - 宿主每轮 status/setup/sync 都重新读取 `.volatile()` 引用的 `.get()`，所以设置页保存后不必重启插件即可生效；首启/设置页的测试连接也先保存当前输入再测。
 > - B4：`GET /status`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 验证服务端可达与 token，不校验口令。
 > - **B3/B5 已完成**：`client/index.js` 通过 `plugins.bundle.config` 渲染自定义设置页（表单来自 `ctx.configForms.get('session-sync')`），`shell.overlay` 提供首启向导与顶部气泡；非敏感字段走 settings，token/passphrase 走 `remote.credentials`；首启完成后立即触发一轮同步。设置页「测试连接」会先落盘当前字段再测；首启步骤切换带方向动画，并且一旦以未配置姿态打开，后续保存不会把向导抽掉。
@@ -107,7 +108,7 @@
 | E2 | 采集白名单（按工作区路径）；**空配置 = 暂不同步任何会话**；首启/设置页的同步列表提供「全选」；子代理跟随根会话闭包 | A5 |
 | E3 | 更新 ROADMAP/PROTOCOL/SYNC-SAFETY/tests 文档 |
 
-## 3. 已定与待拍板
+## 3. 已定与实施备注
 
 **已定：**
 
@@ -119,10 +120,11 @@
 - **子代理闭包默认开启**（`includeSubagents: true`）：同步根会话及其全部 `origin === 'subagent'` 后代；fork 作为独立根。
 - **工作区白名单空 = 暂不同步**：`workspaceAllowlist` 为空时插件只提供设置/状态 API，不推送、不拉取；首启/设置页的同步列表提供「全选」，选中后把路径写入白名单。
 
-**待拍板：**
+**实施备注：**
 
-1. **apply journal 粒度**：当前实现是 revision + pending；是否再拆成每 turn 的条目按需要再定。
-2. C5 GUI 回归与 D5 逐类故障文案演练的具体用例清单。
+- apply journal 继续用 revision + pending；暂不拆 per-turn 条目，等出现实际需求再定；
+- C5 GUI 回归与 D5 逐类故障文案演练是待执行验证，不是未拍板设计；
+- 启动对账/前缀/workspaceKey 的最终 UX 见 [RECONCILE.md](RECONCILE.md)。
 
 ## 4. 执行顺序
 

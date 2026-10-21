@@ -121,7 +121,12 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 - 清除用 `blocks.set(sessionId, undefined)`；
 - 这比在输入框上盖 div 可靠：键盘、粘贴、快捷方式都绕不过去。
 
-**建议拦截状态**：`applying/pulling`，以及远端有开放尾、本地只 apply 到 `safeThroughSeq` 的会话。发消息才会触发 resume 和补 closers，所以这是防误 resume/分叉的关键一层。
+**拦截状态**：`applying/pulling`、远端有开放尾且本地只 apply 到 `safeThroughSeq`、以及
+本地/远端都存在但尚未同步或 `diverged` 的会话。发消息才会触发 resume 和补 closers，
+所以这是防误 resume/分叉的关键一层。
+
+`diverged`/未同步会话的输入拦截带风险说明；用户勾选“理解强行写入会产生分叉”后才解除
+本地写入。强行写入只允许本地继续，不自动推送、不自动合并。
 
 ### 5.2 会话列表：没有官方 disable，需要自己拦
 
@@ -152,12 +157,13 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 
 ### 5.3 状态从哪里来
 
-客户端需要知道哪些会话处于 `applying` / `openTail` / safe 落后。M4 已落地：
+客户端需要知道哪些会话处于 `applying` / `openTail` / safe 落后 / `diverged`。M4 已落地：
 
 - **宿主 API**：`GET /api/session-sync/status` 提供运行中/上次结果/退避/pending/逐会话 `tailOpen`，以及本轮实时 `live` 视图（`pushing` / `pulling`）；`POST /api/session-sync/sync` 手动触发；客户端轮询即可驱动首版气泡；
 - **apply 中**：`pending.sessionId` 命中时 composer 与列表行都拦；
 - **开放尾**：最近一次推送视图 `tailOpen: true` 的会话拦截列表打开与 composer；
 - **safe 落后**：最近一次推送视图 `remote-ahead` 的会话按 safe 落后处理，拦列表打开与输入；
+- **diverged/未同步**：由 [RECONCILE.md](RECONCILE.md) 的状态机提供给前端；拦输入并展示风险确认；
 - 不写临时同步事件，避免污染会话日志；逐会话 projection 仍可作为后续优化，但当前等价状态已由 `/status` 提供。
 
 ## 6. 已知限制与待验证
@@ -177,6 +183,8 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 - [x] 捕获阶段拦截 `[data-row-key]`，覆盖 click / pointerdown / keydown；
 - [x] 空闲行 `sidebar.session.row.leading` 的同步标记（`id: 'session-sync-mark'`）；
 - [x] 运行中行的 hover 卡片状态说明（`sidebar.session.row.hover` 的 `session-sync-hover`）；
+- [ ] `diverged`/未同步会话的输入拦截、风险说明与“强行写入分叉”确认；
+- [ ] `nonPortable` 会话的本地警告、确认后接收端追加修正与租约推送；
 - [ ] 可选视觉蒙版；
 - [ ] GUI 回归：下拉、拖拽、键盘操作、深链打开都不误 resume；
 - [ ] 强杀拉取 + 启动 reconcile 的端到端测试。

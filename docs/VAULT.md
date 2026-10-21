@@ -3,6 +3,10 @@
 > 状态：**设计稿，未实现**（2026-10-20）。
 > 本文件承接 [DESIGN.md](DESIGN.md) 的 L2 设备台账 / L3 agent 笔记，并替换 M4 的单一
 > `workspacePath` 落点方案。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
+> 会话内部的 cwd 处理另见 [CWD.md](CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
+> 会话身份与启动对账流程见 [RECONCILE.md](RECONCILE.md)，术语见 [GLOSSARY.md](GLOSSARY.md)。
+> 使用协议见 [USAGE-AGREEMENT.md](USAGE-AGREEMENT.md)：只改 DSH 必需的 cwd 元数据，
+> 不改消息与工具调用。
 
 ## 1. 范围
 
@@ -23,7 +27,7 @@ Vault 负责同步**会话事件之外**的加密数据：
 ### 已接受的决策
 
 1. **Vault 粒度**：账号级一个 Vault，内部按设备分 stream；
-2. **工作区 key**：`HMAC(vaultKey, normalized path)`，同路径跨设备自然得到同一个 opaque key；
+2. **工作区 key**：`HMAC(vaultKey, canonicalWorkspacePath)`，同一工作区跨设备自然得到同一个 opaque key；
 3. **未映射行为**：不 apply、不猜落点，标 `unmapped` 等用户选择；
 4. **工具链**：沿用 L2 的 `auto` / `authored` 双源，自动采集不覆盖人工/agent 维护。
 
@@ -153,10 +157,11 @@ device/<deviceId>
 工作区身份由路径派生：
 
 ```text
-pathKey = base64url(HMAC-SHA256(vaultKey, "workspace|" + normalize(path)))[0..24]
+canonicalWorkspacePath = DSH Workspace.path（或 realpath）
+pathKey = base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath))[0..24]
 ```
 
-- 同一规范化路径在不同设备上得到同一个 `pathKey`；
+- 同一 canonical workspace path 在不同设备上得到同一个 `pathKey`；
 - key 不可逆，服务端看不到路径；
 - 路径搬家、跨平台不同根目录需要人工映射，映射后写入本机绑定。
 
@@ -190,7 +195,7 @@ pathKey = base64url(HMAC-SHA256(vaultKey, "workspace|" + normalize(path)))[0..24
 - UI 必须阻止为同一 `localPath` 建立两个“推送身份”的绑定。
 
 会话 manifest 增加可选的明文 `workspaceKey`（opaque，不含路径）；子代理继承根会话的 key。
-没有 key 的旧 manifest 走兼容 fallback。
+未发布阶段只支持带 key 的新 manifest；缺失 key 直接视为 `unmapped`，不猜落点。
 
 ### 3.5 L3 agent 笔记
 
@@ -234,12 +239,11 @@ vaultKey  ──HMAC("workspace|"+path)────▶ workspaceKey
 
 ```text
 session manifest
-  ├─ workspaceKey 有值 ──▶ 查本机 workspace/bind ──▶ 有：落到 localPath
-  │                                            └─ 无：unmapped，不 apply
-  └─ workspaceKey 缺失 ──▶ 旧协议 fallback：workspacePath（若配置）
-                         └─ 否则 unmapped，不 apply
+  └─ workspaceKey ──▶ 查本机 workspace/bind ──▶ 有：落到 localPath
+                                          └─ 无：unmapped，不 apply
 ```
 
+- 不走任何“旧路径 fallback”；没有 key 或没有映射都标 `unmapped`；
 - **绝不**把未映射的远端会话塞进第一个工作区；
 - 状态/气泡显示 `unmapped` 数量和原因；
 - 用户完成映射后，下一轮自动 apply；子代理跟随根会话（子代理 manifest 不重复 key，
@@ -257,18 +261,17 @@ session manifest
 
 ### 5.3 会话级例外
 
-保留可选的 `sessionId → localPath` 覆盖表（先做本机状态，是否进 Vault 后续决定）：
+保留可选的 `sessionId → localPath` 覆盖表；首版只做本机状态，不进 Vault：
 
 - 只用于个别会话需要换落点；
 - 覆盖优先于工作区绑定；
 - 子代理不单独覆盖，仍跟随根。
 
-### 5.4 旧 `workspacePath`
+### 5.4 M4 开发期的 `workspacePath`
 
-- M4 的 `workspacePath` 降级为**旧 manifest fallback**；
-- 新 manifest 有 `workspaceKey` 时忽略 `workspacePath`；
-- 多工作区用户迁移时，UI 提示把旧 fallback 改成显式绑定；
-- 未配置 fallback 且无映射 => 不拉取，不再“默认全放一起”。
+- 当前 M4 的 `workspacePath` 只是**未发布版本的临时代码**，不是需要保留的兼容协议；
+- V2 直接替换为工作区绑定；不迁移旧配置、不保留旧 manifest fallback；
+- 开发数据可以清空重拉；不为此写升级路径。
 
 ## 6. Vault 协议（提议）
 
@@ -299,7 +302,7 @@ GET  /v1/vault/stream/:writer?from=<seq>&limit=<n>
 - cursor 返回记录索引，不返回载荷；
 - 每记录上限 1 MiB，stream 总上限按配额；超限 `507`；
 - 删除用 tombstone 记录，旧记录不物理删除；GC 需要单独设计；
-- 服务端升级是增量的；旧客户端看不到 Vault 也不影响会话同步。
+- 服务端升级是增量的；插件未发布，不需要为旧客户端保留 Vault 兼容分支。
 
 ## 7. 插件版本匹配与一键切换
 
@@ -364,19 +367,21 @@ GET  /v1/vault/stream/:writer?from=<seq>&limit=<n>
 - **版本匹配**：差异列表 + 「匹配插件版本」；
 - **笔记**：按工作区/设备分组，agent 写入入口在后续里程碑。
 
-首启不要求用户理解 `workspacePath`：
+首启和设置页都可以设置工作区映射：
 
-- 选同步工作区后，自动用同路径匹配；
-- 没有匹配的远端工作区进入“待映射”，可稍后处理；
+- 首启选完同步工作区后，展示可用的远端工作区映射步骤；可跳过，稍后在设置页处理；
+- 设置页有常驻的「远端工作区」入口，可随时新增/改绑/重置；
+- 同路径匹配可以预选，默认需确认后才绑定；用户可在设置页开启自动绑定；
+- 没有匹配的远端工作区进入“待映射”，不阻止其他会话同步；
 - 「只推送」= 不建立任何映射，而不是把路径留空。
 
-## 10. 迁移与兼容
+## 10. 兼容性（未发布，无需迁移）
 
-- 当前 M4 仍是单 `workspacePath`；Vault 未落地前不改变其行为，只在文档中标记为临时；
-- 新客户端对旧服务端：Vault 不可用 => 会话同步继续，工作区映射退化为 fallback；
-- 旧客户端对新服务端：忽略 `workspaceKey` 和 Vault 记录；
-- 新 manifest 的 `workspaceKey` 缺失 => 旧协议路径；
-- 引入 `workspaceKey` 不改变会话批次链，只改 manifest 索引；
+- 插件尚未公开发布，没有已发布的历史数据、旧客户端或旧 manifest 需要兼容；
+- 不保留 `workspacePath` fallback、旧 manifest 的 cwd 兼容层或迁移提示；
+- 当前 M4 的实现是开发期行为，可以在 V2 直接替换；开发数据可清空重拉；
+- 仍保留 Vault 记录 schema / `workspaceKey` 的**协议版本字段**，用于发布后的正常演进，
+  这不是迁移负担；
 - Vault 记录/协议版本独立，失败时不影响会话同步。
 
 ## 11. 里程碑建议
@@ -389,22 +394,24 @@ GET  /v1/vault/stream/:writer?from=<seq>&limit=<n>
 | V3 | 会话生产者戳 + 插件版本检测 + 一键匹配 | 精确 spec、用户确认、失败可回退 |
 | V4 | 工具链采集 + L3 笔记 + 压缩/保留策略 | 自动不覆盖 authored；笔记只追加 |
 
-V0–V2 完成前不删除 `workspacePath`；V2 上线时提供迁移提示。
+V0–V2 期间可直接替换 M4 的 `workspacePath`，不需要迁移分支。
 
-## 12. 待拍板
+## 12. 已定
 
-1. **路径规范化**：是否解析 symlink/大小写/UNC？建议只做绝对路径 + 分隔符 + Windows 盘符大小写，
-   不 realpath，避免把同一工作区拆成两个 key；
-2. **远端工作区可读名**：只显示 opaque key，还是允许同步 label（label 在密文里，UI 解密后显示）；
-   建议同步 label，但默认不显示完整路径；
-3. **绑定是否共享**：每设备绑定已定；是否把其他设备的绑定作为推荐展示，需要产品确认；
-4. **同路径自动绑定默认值**：建议默认关闭，首次提示；用户可开启；
-5. **插件版本自动策略**：当前只做检测 + 确认；是否允许“仅补丁版本自动”留到后续；
-6. **Vault 压缩/保留**：设备台账快照何时合并、笔记何时归档、tombstone 保留多久；
-7. **工具链采集白名单**：默认命令集、超时、Windows/Unix 差异。
+1. **路径规范化**：优先使用 DSH workspace 的 canonical path（`Workspace.path` / `realpath`）；
+   没有 workspace 记录时才退回绝对路径归一化。这样同一工作区的符号链接别名不会被拆成
+   两个 key，也与 `attachSession()` 的 cwd/workspace 校验一致；
+2. **远端工作区可读名**：label 在加密载荷里同步，UI 解密后显示；默认不显示完整路径；
+3. **绑定共享**：绑定是每设备自己的；其他设备的绑定只作为 UI 建议，不自动采用；
+4. **插件版本**：默认“检测差异 + 一键切换精确版本”；自动匹配作为后续显式开关；
+5. **Vault 保留**：V0 先保留全量；压缩/归档等体量上来后按实际阈值再做，不进入首版；
+6. **工具链采集**：默认保守白名单 + 超时 + 不拼 shell；具体命令集在实现时定；
+7. **同路径自动绑定**：默认只做同路径**预选**，首次仍需用户确认；用户可在设置页显式开启
+   “同路径自动绑定”，开启后匹配即绑定。
 
 ## 13. 与当前 M4 的关系
 
 - M4 的 [M4-PLAN.md](M4-PLAN.md) 仍按现有单落点实现；
 - 本设计不阻塞 M4 的 C5/D5/E3；
-- 开始 V0 前，先把 M4 的 `workspacePath` 文案标成“旧协议 fallback”，避免用户误以为它支持多工作区。
+- M4 的 `workspacePath` 是开发期实现，V2 直接替换即可，不需要保留兼容文案或迁移路径；
+- 会话内部的 cwd 处理见 [CWD.md](CWD.md)（raw 事件 + 接收端修正）。

@@ -2,6 +2,8 @@
 
 > 状态：M1/M2 已落地；M3 传输模型已定为事件批次并已实现；M4 客户端防护做收口。
 > L2/L3 的加密附加数据层与多工作区映射见 [VAULT.md](VAULT.md)（设计稿）。
+> cwd 处理见 [CWD.md](CWD.md)；会话身份与启动对账见 [RECONCILE.md](RECONCILE.md)；
+> 最终决策过程见 [DECISIONS.md](DECISIONS.md)；术语见 [GLOSSARY.md](GLOSSARY.md)。
 
 ## 目标
 

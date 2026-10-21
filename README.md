@@ -68,6 +68,12 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 - [docs/M4-PLAN.md](docs/M4-PLAN.md)：M4 工作项、依赖顺序与待拍板项。
 - [docs/DESIGN.md](docs/DESIGN.md)：范围、数据分层、并发与加密的取舍。
 - [docs/VAULT.md](docs/VAULT.md)：加密附加数据层、多工作区映射、设备台账与插件版本匹配（设计稿）。
+- [docs/CWD.md](docs/CWD.md)：cwd/工作目录事件处理：header canonical、事件 raw、接收端修正。
+- [docs/DECISIONS.md](docs/DECISIONS.md)：cwd/Canonical 反复讨论后的最终决策记录。
+- [docs/PROMPT-GUIDANCE.md](docs/PROMPT-GUIDANCE.md)：agent 提示词规划：尽量不把会话 cwd 切到工作区外。
+- [docs/RECONCILE.md](docs/RECONCILE.md)：会话身份、raw 前缀校验、默认自动同步与冲突/忽略流程。
+- [docs/GLOSSARY.md](docs/GLOSSARY.md)：术语表（Canonical、生命周期、workspaceKey、对账等）。
+- [docs/USAGE-AGREEMENT.md](docs/USAGE-AGREEMENT.md)：使用协议草案（修改边界、加密边界、风险告知）。
 - [docs/PROTOCOL.md](docs/PROTOCOL.md)：服务端端点与不变量。
 - [docs/SYNC-SAFETY.md](docs/SYNC-SAFETY.md)：开放尾与安全边界、拉取原子性、客户端防误操作。
 - [docs/UI-GUIDELINES.md](docs/UI-GUIDELINES.md)：客户端页面的动效与可访问性约定。
