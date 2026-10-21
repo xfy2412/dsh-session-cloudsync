@@ -136,8 +136,9 @@ export class SyncController {
   }
 
   /** 会话是否因分叉被 Host 侧拦截。 */
-  isBlocked(sessionId: string): boolean {
-    return this.blocked.has(sessionId)
+  isBlocked(sessionId: string, createdAt: number, formatVersion: number): boolean {
+    const entry = this.blocked.get(sessionId)
+    return entry !== undefined && sameLifecycle(entry, createdAt, formatVersion)
   }
 
   /** 清除一个人工处理完成的阻塞项。 */
@@ -148,20 +149,33 @@ export class SyncController {
   }
 
   /** 用户对分叉会话选择忽略或强行写入；两者都解除 Host 写入拦截。 */
-  resolveBlocked(sessionId: string, action: 'ignore' | 'force'): void {
+  resolveBlocked(
+    sessionId: string,
+    action: 'ignore' | 'force',
+    createdAt: number,
+    formatVersion: number,
+  ): void {
     this.blocked.delete(sessionId)
-    this.blockedDecisions.set(sessionId, { sessionId, action, at: this.now() })
+    this.blockedDecisions.set(sessionId, { sessionId, action, at: this.now(), createdAt, formatVersion })
     this.persistNow()
   }
 
   /** 记录分叉；下一次该会话成功同步时自动清除。 */
-  private block(sessionId: string, kind: SyncErrorKind, message: string): void {
+  private block(
+    sessionId: string,
+    kind: SyncErrorKind,
+    message: string,
+    createdAt: number,
+    formatVersion: number,
+  ): void {
     if (kind !== 'diverged') return
-    // 用户已经明确选择忽略/强行写入后，不把同一会话反复锁回去。
-    if (this.blockedDecisions.has(sessionId)) return
+    // 用户已经明确选择忽略/强行写入后，不把同一代会话反复锁回去。
+    const decision = this.blockedDecisions.get(sessionId)
+    if (decision !== undefined && sameLifecycle(decision, createdAt, formatVersion)) return
     const existing = this.blocked.get(sessionId)
-    if (existing !== undefined && existing.message === message) return
-    this.blocked.set(sessionId, { sessionId, kind, message, at: this.now() })
+    if (existing !== undefined && existing.message === message
+      && sameLifecycle(existing, createdAt, formatVersion)) return
+    this.blocked.set(sessionId, { sessionId, kind, message, at: this.now(), createdAt, formatVersion })
     this.persistNow()
   }
 
@@ -322,7 +336,11 @@ export class SyncController {
     }
     for (const session of report.sessions) views.push(pushView(session))
     for (const session of report.sessions) {
-      if (session.status === 'error') this.block(session.sessionId, session.kind ?? 'unknown', session.error ?? '未知错误')
+      if (session.status === 'error'
+        && session.createdAt !== undefined
+        && session.formatVersion !== undefined) {
+        this.block(session.sessionId, session.kind ?? 'unknown', session.error ?? '未知错误', session.createdAt, session.formatVersion)
+      }
     }
     for (const session of failed) {
       const kind = session.kind ?? 'unknown'
@@ -349,7 +367,11 @@ export class SyncController {
       } else if (session.status !== 'error') {
         this.cwdPending.delete(session.sessionId)
       }
-      if (session.status === 'error') this.block(session.sessionId, session.kind ?? 'unknown', session.error ?? '未知错误')
+      if (session.status === 'error'
+        && session.createdAt !== undefined
+        && session.formatVersion !== undefined) {
+        this.block(session.sessionId, session.kind ?? 'unknown', session.error ?? '未知错误', session.createdAt, session.formatVersion)
+      }
       else {
         const hadBlocked = this.blocked.delete(session.sessionId)
         const hadDecision = this.blockedDecisions.delete(session.sessionId)
@@ -362,6 +384,15 @@ export class SyncController {
       this.options.logger?.warn(`dsh-session-sync: 拉取 ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
     }
   }
+}
+
+/** 生命周期匹配；任一方没有完整信息时退回按 sessionId。 */
+function sameLifecycle(
+  entry: { readonly createdAt: number; readonly formatVersion: number },
+  createdAt: number,
+  formatVersion: number,
+): boolean {
+  return entry.createdAt === createdAt && entry.formatVersion === formatVersion
 }
 
 /**

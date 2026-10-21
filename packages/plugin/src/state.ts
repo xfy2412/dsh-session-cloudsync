@@ -84,11 +84,19 @@ function blockedFrom(value: unknown): readonly BlockedSessionState[] | undefined
     const kind = entry['kind']
     const message = entry['message']
     const at = entry['at']
+    const createdAt = entry['createdAt']
+    const formatVersion = entry['formatVersion']
     if (typeof sessionId !== 'string' || sessionId === ''
       || kind !== 'diverged'
       || typeof message !== 'string' || message === ''
-      || !Number.isSafeInteger(at)) continue
-    blocked.push({ sessionId, kind, message, at: at as number })
+      || !Number.isSafeInteger(at)
+      || !Number.isSafeInteger(createdAt)
+      || !Number.isSafeInteger(formatVersion)) continue
+    blocked.push({
+      sessionId, kind, message, at: at as number,
+      createdAt: createdAt as number,
+      formatVersion: formatVersion as number,
+    })
   }
   return blocked.length === 0 ? undefined : blocked
 }
@@ -103,10 +111,18 @@ function decisionsFrom(value: unknown): readonly BlockedDecision[] | undefined {
     const sessionId = entry['sessionId']
     const action = entry['action']
     const at = entry['at']
+    const createdAt = entry['createdAt']
+    const formatVersion = entry['formatVersion']
     if (typeof sessionId !== 'string' || sessionId === ''
       || (action !== 'ignore' && action !== 'force')
-      || !Number.isSafeInteger(at)) continue
-    decisions.push({ sessionId, action, at: at as number })
+      || !Number.isSafeInteger(at)
+      || !Number.isSafeInteger(createdAt)
+      || !Number.isSafeInteger(formatVersion)) continue
+    decisions.push({
+      sessionId, action, at: at as number,
+      createdAt: createdAt as number,
+      formatVersion: formatVersion as number,
+    })
   }
   return decisions.length === 0 ? undefined : decisions
 }

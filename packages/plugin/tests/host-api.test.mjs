@@ -173,10 +173,12 @@ test('宿主 API：cwd 决策按 sessionId/action 调用控制面', async () => 
 test('宿主 API：blocked 决策按 sessionId/action 调用控制面', async () => {
   let seen = ''
   let seenAction = ''
+  let seenCreatedAt
   const routes = createHostApi(control({
-    resolveBlocked: async (sessionId, action) => {
+    resolveBlocked: async (sessionId, action, createdAt) => {
       seen = sessionId
       seenAction = action
+      seenCreatedAt = createdAt
       return { ok: true }
     },
   }))
@@ -184,12 +186,13 @@ test('宿主 API：blocked 决策按 sessionId/action 调用控制面', async ()
     new Request('http://host/api/session-sync/blocked', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'session-blocked', action: 'force' }),
+      body: JSON.stringify({ sessionId: 'session-blocked', action: 'force', createdAt: 42, formatVersion: 4 }),
     }),
   )
   assert.equal(response.status, 200)
   assert.equal(seen, 'session-blocked')
   assert.equal(seenAction, 'force')
+  assert.equal(seenCreatedAt, 42)
   assert.deepEqual((await bodyOf(response)).value, { ok: true })
 })
 

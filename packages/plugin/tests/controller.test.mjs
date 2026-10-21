@@ -121,45 +121,72 @@ test('控制器：从状态文件恢复 cwd 待处理项', () => {
 
 test('控制器：分叉会话进入 blocked、持久化，并在后续成功同步后清除', async () => {
   let report = pullReport([
-    { sessionId: 's-diverged', status: 'error', kind: 'diverged', error: '共享前缀批次 3 不一致（diverged）' },
+    { sessionId: 's-diverged', status: 'error', kind: 'diverged', error: '共享前缀批次 3 不一致（diverged）', createdAt: 10, formatVersion: 4 },
   ], 1)
   const fixture = createController({ pull: async () => report })
   const first = await fixture.controller.run()
   assert.equal(first.ok, false)
   assert.deepEqual(fixture.controller.snapshot().blocked.map((entry) => entry.sessionId), ['s-diverged'])
-  assert.equal(fixture.controller.isBlocked('s-diverged'), true)
+  assert.equal(fixture.controller.isBlocked('s-diverged', 10, 4), true)
   assert.deepEqual(fixture.persists.at(-1).blocked.map((entry) => entry.sessionId), ['s-diverged'])
 
-  fixture.controller.resolveBlocked('s-diverged', 'force')
-  assert.equal(fixture.controller.isBlocked('s-diverged'), false)
+  fixture.controller.resolveBlocked('s-diverged', 'force', 10, 4)
+  assert.equal(fixture.controller.isBlocked('s-diverged', 10, 4), false)
   assert.deepEqual(fixture.controller.snapshot().blocked, [])
   assert.deepEqual(fixture.persists.at(-1).blockedDecisions, [
-    { sessionId: 's-diverged', action: 'force', at: 1_000 },
+    { sessionId: 's-diverged', action: 'force', at: 1_000, createdAt: 10, formatVersion: 4 },
   ])
 
   // 同一分叉再次出现时，不把用户已经强行写入的会话重新锁上。
   const again = await fixture.controller.run({ manual: true })
   assert.equal(again.ok, false)
-  assert.equal(fixture.controller.isBlocked('s-diverged'), false)
+  assert.equal(fixture.controller.isBlocked('s-diverged', 10, 4), false)
 
   report = pullReport([{ sessionId: 's-diverged', status: 'up-to-date' }], 2)
   const second = await fixture.controller.run({ manual: true })
   assert.equal(second.ok, true)
   assert.deepEqual(fixture.controller.snapshot().blocked, [])
-  assert.equal(fixture.controller.isBlocked('s-diverged'), false)
+  assert.equal(fixture.controller.isBlocked('s-diverged', 10, 4), false)
   assert.equal(fixture.persists.at(-1).blockedDecisions, undefined)
+})
+
+test('控制器：blocked 决定按生命周期匹配，不误伤同 id 的新会话', async () => {
+  let report = pullReport([{
+    sessionId: 's-life',
+    status: 'error',
+    kind: 'diverged',
+    error: 'diverged',
+    createdAt: 10,
+    formatVersion: 4,
+  }], 1)
+  const fixture = createController({ pull: async () => report })
+  await fixture.controller.run()
+  assert.equal(fixture.controller.isBlocked('s-life', 10, 4), true)
+  assert.equal(fixture.controller.isBlocked('s-life', 11, 4), false)
+  assert.deepEqual(fixture.controller.snapshot().blocked[0], {
+    sessionId: 's-life',
+    kind: 'diverged',
+    message: 'diverged',
+    at: 1_000,
+    createdAt: 10,
+    formatVersion: 4,
+  })
+
+  fixture.controller.resolveBlocked('s-life', 'force', 10, 4)
+  assert.equal(fixture.controller.isBlocked('s-life', 10, 4), false)
+  assert.deepEqual(fixture.controller.snapshot().blocked, [])
 })
 
 test('控制器：从状态文件恢复 blocked 项', () => {
   const fixture = createController({
     initial: {
       revision: 4,
-      blocked: [{ sessionId: 's-blocked', kind: 'diverged', message: 'old divergence', at: 10 }],
+      blocked: [{ sessionId: 's-blocked', kind: 'diverged', message: 'old divergence', at: 10, createdAt: 10, formatVersion: 4 }],
     },
   })
-  assert.equal(fixture.controller.isBlocked('s-blocked'), true)
+  assert.equal(fixture.controller.isBlocked('s-blocked', 10, 4), true)
   assert.deepEqual(fixture.controller.snapshot().blocked, [
-    { sessionId: 's-blocked', kind: 'diverged', message: 'old divergence', at: 10 },
+    { sessionId: 's-blocked', kind: 'diverged', message: 'old divergence', at: 10, createdAt: 10, formatVersion: 4 },
   ])
 })
 

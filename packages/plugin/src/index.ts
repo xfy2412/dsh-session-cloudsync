@@ -365,6 +365,8 @@ export function apply(ctx: Context, config: Config): void {
       readonly session: {
         readonly header: {
           readonly id: string
+          readonly createdAt: number
+          readonly version: number
           readonly origin?: string
           readonly parentSession?: string
         }
@@ -380,13 +382,18 @@ export function apply(ctx: Context, config: Config): void {
     let header = payload.agent.session.header
     const visited = new Set<string>()
     while (!visited.has(header.id)) {
-      if (controller.isBlocked(header.id)) return { kind: 'reject' as const }
+      if (controller.isBlocked(header.id, header.createdAt, header.version)) return { kind: 'reject' as const }
       visited.add(header.id)
       if (header.origin !== 'subagent' || header.parentSession === undefined) break
-      if (controller.isBlocked(header.parentSession)) return { kind: 'reject' as const }
       const parent = ctx.sessions.get(header.parentSession as SessionId)
-      if (parent === undefined) break
-      header = parent.header
+      if (parent !== undefined) {
+        header = parent.header
+        continue
+      }
+      // 父会话可能还没有恢复；直接读持久化 header，避免子代理绕过根会话的阻塞。
+      const snapshot = await ctx.sessionPersistence.stat(header.parentSession as SessionId)
+      if (snapshot === undefined) break
+      header = snapshot.header
     }
     return next()
   })
@@ -545,8 +552,13 @@ export function apply(ctx: Context, config: Config): void {
       if (result.ok) controller.clearCwdPending(sessionId)
       return result
     },
-    resolveBlocked: async (sessionId: string, action: 'ignore' | 'force') => {
-      controller.resolveBlocked(sessionId, action)
+    resolveBlocked: async (
+      sessionId: string,
+      action: 'ignore' | 'force',
+      createdAt: number,
+      formatVersion: number,
+    ) => {
+      controller.resolveBlocked(sessionId, action, createdAt, formatVersion)
       return { ok: true as const }
     },
   }

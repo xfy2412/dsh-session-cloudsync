@@ -331,10 +331,15 @@ window.__ModuleLoader__.load({
         return result
       }
 
-      async function resolveBlocked(sessionId, action) {
+      async function resolveBlocked(sessionId, action, createdAt, formatVersion) {
         var result = await fetchJson('/blocked', {
           method: 'POST',
-          body: JSON.stringify({ sessionId: sessionId, action: action }),
+          body: JSON.stringify({
+            sessionId: sessionId,
+            action: action,
+            ...createdAt === undefined ? {} : { createdAt: createdAt },
+            ...formatVersion === undefined ? {} : { formatVersion: formatVersion },
+          }),
         })
         await refreshStatus()
         return result
@@ -1230,9 +1235,9 @@ window.__ModuleLoader__.load({
         ]
       }
 
-      function blockedActions(id) {
+      function blockedActions(id, entry) {
         function settle(action) {
-          model.resolveBlocked(id, action).then(function (result) {
+          model.resolveBlocked(id, action, entry && entry.createdAt, entry && entry.formatVersion).then(function (result) {
             if (!result || result.ok !== true) {
               model.toast((result && result.error && result.error.message) || '处理失败', true)
               return
@@ -1253,7 +1258,14 @@ window.__ModuleLoader__.load({
       }
 
       var rows = sessions.map(function (session, index) {
-        var isBlocked = blockedIds.indexOf(session.sessionId) !== -1
+        var blockedEntry = null
+        for (var blockedIndex = 0; blockedIndex < blocked.length; blockedIndex += 1) {
+          if (blocked[blockedIndex] && blocked[blockedIndex].sessionId === session.sessionId) {
+            blockedEntry = blocked[blockedIndex]
+            break
+          }
+        }
+        var isBlocked = blockedEntry !== null
         var tag = isBlocked ? '分叉'
           : session.status === 'error' ? '失败'
             : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
@@ -1263,7 +1275,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + session.sessionId),
           h('span', { className: 'tag' }, tag),
           isBlocked ? h('span', { className: 'dssync-warn', title: '本地与远端历史已分叉，已阻止继续写入' }, '已阻止') : null,
-          isBlocked ? blockedActions(session.sessionId) : null,
+          isBlocked ? blockedActions(session.sessionId, blockedEntry) : null,
           !isBlocked && session.cwdNonPortable ? h('span', {
             className: 'dssync-warn', title: '最后 cwd 在工作区外，跨设备可能无法正确恢复',
           }, 'cwd 外') : null,
@@ -1286,7 +1298,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dssync-st bad' }),
           h('span', { className: 'name' }, '↓ ' + entry.sessionId),
           h('span', { className: 'dssync-warn', title: entry.message || '本地与远端历史已分叉' }, '已阻止'),
-          blockedActions(entry.sessionId))
+          blockedActions(entry.sessionId, entry))
       })
 
       var head = h('div', {

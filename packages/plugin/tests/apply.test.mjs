@@ -11,7 +11,10 @@ function fakeContext(connection, services = {}) {
   const listeners = new Map()
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
-    sessions: { get: () => undefined, flush: async () => true },
+    sessions: {
+      get: (id) => services.sessionHeaders?.[id] === undefined ? undefined : { header: services.sessionHeaders[id] },
+      flush: async () => true,
+    },
     sessionPersistence: services.sessionPersistence ?? {
       list: async () => [],
       stat: async () => undefined,
@@ -99,10 +102,15 @@ test('应用接线：恢复的 blocked 会话在 agent/pre-step 被拒绝', asyn
   writeFileSync(statePath, JSON.stringify({
     version: 1,
     revision: 0,
-    blocked: [{ sessionId: 'blocked-session', kind: 'diverged', message: 'old divergence', at: 1 }],
+    blocked: [{ sessionId: 'blocked-session', kind: 'diverged', message: 'old divergence', at: 1, createdAt: 10, formatVersion: 4 }],
   }))
   const connection = fakeConnection()
-  const { ctx, listeners } = fakeContext(connection, { dshHomePath: () => statePath })
+  const { ctx, listeners } = fakeContext(connection, {
+    dshHomePath: () => statePath,
+    sessionHeaders: {
+      'blocked-session': { id: 'blocked-session', createdAt: 10, version: 4 },
+    },
+  })
   apply(ctx, {
     enabled: true,
     serverUrl: '',
@@ -113,12 +121,20 @@ test('应用接线：恢复的 blocked 会话在 agent/pre-step 被拒绝', asyn
 
   let delegated = false
   const decision = await listeners.get('agent/pre-step')(
-    { agent: { session: { header: { id: 'blocked-session' } } } },
+    { agent: { session: { header: { id: 'blocked-session', createdAt: 10, version: 4 } } } },
     async () => { delegated = true; return { kind: 'enter' } },
   )
   assert.deepEqual(decision, { kind: 'reject' })
   assert.equal(delegated, false)
 
+  const otherLifecycle = await listeners.get('agent/pre-step')(
+    { agent: { session: { header: { id: 'blocked-session', createdAt: 11, version: 4 } } } },
+    async () => { delegated = true; return { kind: 'enter' } },
+  )
+  assert.deepEqual(otherLifecycle, { kind: 'enter' })
+  assert.equal(delegated, true)
+
+  delegated = false
   const childDecision = await listeners.get('agent/pre-step')(
     { agent: { session: { header: { id: 'child-session', origin: 'subagent', parentSession: 'blocked-session' } } } },
     async () => { delegated = true; return { kind: 'enter' } },

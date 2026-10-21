@@ -181,6 +181,9 @@ export interface SessionSyncReport {
   readonly tailOpen?: boolean
   /** 最后 cwd 是否在工作区外；只做本地警告，不影响哈希/同步身份。 */
   readonly cwdNonPortable?: boolean
+  /** 会话生命周期，用于把阻塞决定绑定到具体一代会话。 */
+  readonly createdAt?: number
+  readonly formatVersion?: number
 }
 
 /** 一次同步的总结果。 */
@@ -233,6 +236,8 @@ export interface CwdCorrectionResult {
 /** 一个等待人工处理、不能继续写入的会话。 */
 export interface BlockedSessionState {
   readonly sessionId: string
+  readonly createdAt: number
+  readonly formatVersion: number
   readonly kind: SyncErrorKind
   readonly message: string
   readonly at: number
@@ -241,6 +246,8 @@ export interface BlockedSessionState {
 /** 用户对一个分叉会话的人工决定。 */
 export interface BlockedDecision {
   readonly sessionId: string
+  readonly createdAt: number
+  readonly formatVersion: number
   readonly action: 'ignore' | 'force'
   readonly at: number
 }
@@ -275,6 +282,9 @@ export interface PullSessionReport {
   readonly kind?: SyncErrorKind
   /** 最后 cwd 是否在工作区外；只做本地警告，不影响哈希/同步身份。 */
   readonly cwdNonPortable?: boolean
+  /** 会话生命周期，用于把阻塞决定绑定到具体一代会话。 */
+  readonly createdAt?: number
+  readonly formatVersion?: number
 }
 
 /** 一次拉取的总结果。 */
@@ -908,7 +918,14 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
     } catch (error: unknown) {
       const classified = classifySyncError(error)
       deps.logger?.warn(`dsh-session-sync: ${sessionId} 同步失败：${classified.message}`)
-      sessions.push({ sessionId, status: 'error', error: classified.message, kind: classified.kind })
+      sessions.push({
+        sessionId,
+        status: 'error',
+        error: classified.message,
+        kind: classified.kind,
+        ...entry.snapshot.header.createdAt === undefined ? {} : { createdAt: entry.snapshot.header.createdAt },
+        ...entry.snapshot.header.version === undefined ? {} : { formatVersion: entry.snapshot.header.version },
+      })
       notifyProgress(deps, { sessionId, direction: 'push', phase: 'error', progress: 0, error: classified.message })
     }
   }
@@ -1419,7 +1436,16 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       } catch (error: unknown) {
         const classified = classifySyncError(error)
         deps.logger?.warn(`dsh-session-sync: 拉取 ${item.sessionId} 失败：${classified.message}`)
-        reports.push({ sessionId: item.sessionId, status: 'error', error: classified.message, kind: classified.kind })
+        reports.push({
+          sessionId: item.sessionId,
+          status: 'error',
+          error: classified.message,
+          kind: classified.kind,
+          ...item.loaded.meta === undefined ? {} : {
+            createdAt: item.loaded.meta.createdAt,
+            formatVersion: item.loaded.meta.formatVersion,
+          },
+        })
         notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'error', progress: 0, error: classified.message })
         // 已经调用 beforeApply 的失败会留下 pending；此时必须停下，不能
         // 让下一个会话覆盖唯一一条恢复记录。只读阶段的分叉/格式错误没有

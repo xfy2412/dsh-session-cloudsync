@@ -46,6 +46,8 @@ export interface SyncErrorView {
 export interface BlockedSessionView {
   /** 会话 id。 */
   readonly sessionId: string
+  readonly createdAt: number
+  readonly formatVersion: number
   /** 为什么阻塞；当前只有分叉会进入这里。 */
   readonly kind: SyncErrorKind
   /** 可读原因。 */

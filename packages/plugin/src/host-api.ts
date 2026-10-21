@@ -26,7 +26,12 @@ export interface SyncControl {
   /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
   cwdDecision(sessionId: string, action: 'fix' | 'skip'): Promise<CwdCorrectionResult>
   /** 分叉会话的人工决定：ignore 不再自动提示；force 解除写入拦截。 */
-  resolveBlocked(sessionId: string, action: 'ignore' | 'force'): Promise<{ readonly ok: true }>
+  resolveBlocked(
+    sessionId: string,
+    action: 'ignore' | 'force',
+    createdAt: number,
+    formatVersion: number,
+  ): Promise<{ readonly ok: true }>
 }
 
 /** connection.fetch 接受的精确路由。 */
@@ -153,13 +158,20 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       requestBody: 'buffered',
       fetch: async (request: Request) => {
         try {
-          const body = await request.json() as { readonly sessionId?: unknown; readonly action?: unknown }
+          const body = await request.json() as {
+            readonly sessionId?: unknown
+            readonly action?: unknown
+            readonly createdAt?: unknown
+            readonly formatVersion?: unknown
+          }
           const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
           const action = body.action === 'ignore' ? 'ignore' : body.action === 'force' ? 'force' : ''
-          if (sessionId === '' || action === '') {
-            return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId 与 action=ignore|force' } }, 400)
+          const createdAt = typeof body.createdAt === 'number' && Number.isSafeInteger(body.createdAt) ? body.createdAt : undefined
+          const formatVersion = typeof body.formatVersion === 'number' && Number.isSafeInteger(body.formatVersion) ? body.formatVersion : undefined
+          if (sessionId === '' || action === '' || createdAt === undefined || formatVersion === undefined) {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId、action 与生命周期字段' } }, 400)
           }
-          return json({ ok: true, value: await control.resolveBlocked(sessionId, action) })
+          return json({ ok: true, value: await control.resolveBlocked(sessionId, action, createdAt, formatVersion) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({
