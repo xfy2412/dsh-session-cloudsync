@@ -6,6 +6,7 @@ import { listenServer } from '../../server/tests/listen.mjs'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
 import {
   classifySyncError,
+  correctCwd,
   pullOnce,
   syncOnce,
   SyncHttpError,
@@ -29,6 +30,11 @@ function events(from, to) {
     time: 1000 + from + offset,
     data: { text: `event-${from + offset}` },
   }))
+}
+
+/** 造一条 working-directory/change。 */
+function cwdEvent(seq, cwd) {
+  return { type: 'working-directory/change', seq, time: 2000 + seq, data: { cwd } }
 }
 
 /** 造一个假的持久化服务。 */
@@ -232,6 +238,147 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
         isTailOpen: () => false,
       })
       assert.equal(same.sessions[0].status, 'up-to-date')
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
+  const temp = createTempHome('plugin-nonportable')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'nonportable-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const sessionId = 'session-nonportable-test'
+      const header = {
+        id: sessionId,
+        version: 4,
+        createdAt: 1000,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: 'D:/local',
+      }
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'nonportable pass',
+        workspaceAllowlist: ['D:/local'],
+        batchEvents: 50,
+      }
+      const outside = [...events(0, 2), cwdEvent(3, 'D:/other')]
+      const pushed = await syncOnce({
+        persistence: fakeStore(header, outside),
+        sessions,
+        config,
+        isTailOpen: () => false,
+      })
+      assert.equal(pushed.sessions[0].status, 'pushed')
+      assert.equal(pushed.sessions[0].cwdNonPortable, true)
+
+      // 拉取到另一个工作区根时，最后 cwd 仍在工作区外，只告警且暂不挂载。
+      const attached = []
+      const pulled = await pullOnce({
+        persistence: fakeStore(undefined),
+        sessions,
+        config,
+        workspacePath: 'D:/local',
+        attach: async (id) => { attached.push(id) },
+      }, { revision: 0 })
+      assert.equal(pulled.sessions[0].status, 'pulled')
+      assert.equal(pulled.sessions[0].cwdNonPortable, true)
+      assert.deepEqual(attached, [])
+
+      // 后来的 change 回到工作区内，源端 nonPortable 应清除。
+      const backInside = [...outside, cwdEvent(4, 'D:/local/sub')]
+      const repushed = await syncOnce({
+        persistence: fakeStore(header, backInside),
+        sessions,
+        config,
+        isTailOpen: () => false,
+      })
+      assert.equal(repushed.sessions[0].status, 'pushed')
+      assert.equal(repushed.sessions[0].cwdNonPortable, undefined)
+
+      const pulledInside = await pullOnce({
+        persistence: fakeStore(undefined),
+        sessions,
+        config,
+        workspacePath: 'D:/local',
+      }, { revision: 0 })
+      assert.equal(pulledInside.sessions[0].status, 'pulled')
+      assert.equal(pulledInside.sessions[0].cwdNonPortable, undefined)
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
+  const temp = createTempHome('plugin-correct-cwd')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'correct-cwd-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const sessionId = 'session-correct-cwd-test'
+      const header = {
+        id: sessionId,
+        version: 4,
+        createdAt: 1100,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: 'D:/local',
+      }
+      const outside = [...events(0, 2), cwdEvent(3, 'D:/other')]
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'correct pass',
+        workspaceAllowlist: ['D:/local'],
+        batchEvents: 50,
+      }
+      await syncOnce({
+        persistence: fakeStore(header, outside),
+        sessions,
+        config,
+        isTailOpen: () => false,
+      })
+
+      const target = fakeStore(header, outside)
+      const result = await correctCwd({
+        persistence: target,
+        sessions,
+        config,
+        workspacePath: 'D:/local',
+      }, sessionId)
+      assert.equal(result.ok, true)
+      assert.equal(result.status, 'corrected')
+      const corrected = target.sessions.get(sessionId)
+      assert.equal(corrected.events.length, 5)
+      assert.equal(corrected.events[4].type, 'working-directory/change')
+      assert.equal(corrected.events[4].data.cwd, 'D:/local')
+
+      const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      assert.equal(manifest.body.value.manifest.lastSeq, 4)
+      assert.equal(manifest.body.value.manifest.safeThroughSeq, 4)
+
+      const again = await correctCwd({ persistence: target, sessions, config, workspacePath: 'D:/local' }, sessionId)
+      assert.equal(again.status, 'already-portable')
+
+      // 远端已推进、本地还停在旧边界时不能 append，避免制造分叉。
+      const stale = fakeStore(header, outside)
+      const refused = await correctCwd({ persistence: stale, sessions, config, workspacePath: 'D:/local' }, sessionId)
+      assert.equal(refused.ok, false)
+      assert.equal(refused.status, 'needs-sync')
+      assert.equal(stale.sessions.get(sessionId).events.length, 4)
     } finally {
       await close()
       db.close()

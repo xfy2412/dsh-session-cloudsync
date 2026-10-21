@@ -96,6 +96,29 @@ test('控制器：成功一轮更新状态、revision 与逐会话视图', async
   assert.deepEqual(fixture.persists.at(-1), { revision: 7 })
 })
 
+test('控制器：cwd 警告保留到用户处理，clear 后消失', async () => {
+  let report = pullReport([{ sessionId: 's-cwd', status: 'pulled', cwdNonPortable: true }], 1)
+  const fixture = createController({ pull: async () => report })
+  await fixture.controller.run()
+  assert.deepEqual(fixture.controller.snapshot().cwdPending, ['s-cwd'])
+  assert.equal(fixture.controller.snapshot().sessions[0].cwdNonPortable, true)
+  assert.deepEqual(fixture.persists.at(-1), { revision: 1, cwdPending: ['s-cwd'] })
+
+  // 下一轮没有这条会话时仍保留，避免提示在 revision 推进后丢失。
+  report = pullReport([], 2)
+  await fixture.controller.run()
+  assert.deepEqual(fixture.controller.snapshot().cwdPending, ['s-cwd'])
+
+  fixture.controller.clearCwdPending('s-cwd')
+  assert.deepEqual(fixture.controller.snapshot().cwdPending, [])
+  assert.deepEqual(fixture.persists.at(-1), { revision: 2 })
+})
+
+test('控制器：从状态文件恢复 cwd 待处理项', () => {
+  const fixture = createController({ initial: { revision: 4, cwdPending: ['s-restored'] } })
+  assert.deepEqual(fixture.controller.snapshot().cwdPending, ['s-restored'])
+})
+
 test('控制器：推送错误进入退避，自动轮次跳过，手动轮次立即重试', async () => {
   let pushCalls = 0
   let fail = true

@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { SyncController } from './controller.ts'
 import { buildSessionTree, pathAllowed, pathKeyOf } from './closure.ts'
 import {
+  correctCwd as correctSessionCwd,
   pullOnce,
   syncOnce,
   testConnection,
@@ -317,6 +318,7 @@ export function apply(ctx: Context, config: Config): void {
         version: STATE_VERSION,
         revision: state.revision,
         ...state.pending === undefined ? {} : { pending: state.pending },
+        ...state.cwdPending === undefined || state.cwdPending.length === 0 ? {} : { cwdPending: state.cwdPending },
       })
     } catch (error: unknown) {
       logger.warn(`dsh-session-sync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
@@ -345,6 +347,7 @@ export function apply(ctx: Context, config: Config): void {
     initial: {
       revision: initialJournal.revision,
       ...initialJournal.pending === undefined ? {} : { pending: initialJournal.pending },
+      ...initialJournal.cwdPending === undefined ? {} : { cwdPending: initialJournal.cwdPending },
     },
     logger,
   })
@@ -468,6 +471,22 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
+  const fixCwd = async (sessionId: string) => {
+    refreshConfig()
+    await refreshSecrets()
+    const result = await correctSessionCwd({
+      persistence: pullDeps.persistence,
+      sessions: deps.sessions,
+      config: engineConfig,
+      workspacePath,
+      logger,
+    }, sessionId)
+    if (result.ok && (result.status === 'corrected' || result.status === 'already-portable')) {
+      await pullDeps.attach(sessionId)
+    }
+    return result
+  }
+
   const control: SyncControl = {
     status: () => controller.snapshot(),
     setup,
@@ -477,6 +496,16 @@ export function apply(ctx: Context, config: Config): void {
       return testConnection(engineConfig)
     },
     syncNow: () => runSync(true),
+    cwdDecision: async (sessionId: string, action: 'fix' | 'skip') => {
+      if (action === 'skip') {
+        await pullDeps.attach(sessionId)
+        controller.clearCwdPending(sessionId)
+        return { ok: true, status: 'attached' as const }
+      }
+      const result = await fixCwd(sessionId)
+      if (result.ok) controller.clearCwdPending(sessionId)
+      return result
+    },
   }
   ctx.inject(['connection'], (connectionCtx) => {
     const connection = connectionCtx.get('connection') as ConnectionLike | undefined

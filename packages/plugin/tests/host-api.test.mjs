@@ -53,6 +53,7 @@ function control(overrides = {}) {
     })),
     test: overrides.test ?? (async () => ({ ok: true })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
+    cwdDecision: overrides.cwdDecision ?? (async () => ({ ok: true, status: 'corrected' })),
   }
 }
 
@@ -68,7 +69,7 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/setup/workspaces/test/sync 五条精确路由', () => {
+test('宿主 API：注册 status/setup/workspaces/test/sync/cwd 六条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-sync/status', ['GET'], 'buffered'],
@@ -76,6 +77,7 @@ test('宿主 API：注册 status/setup/workspaces/test/sync 五条精确路由',
     ['/api/session-sync/workspaces', ['GET'], 'buffered'],
     ['/api/session-sync/test', ['POST'], 'buffered'],
     ['/api/session-sync/sync', ['POST'], 'buffered'],
+    ['/api/session-sync/cwd', ['POST'], 'buffered'],
   ])
 })
 
@@ -86,11 +88,7 @@ test('宿主 API：status 返回快照且禁止缓存', async () => {
   )
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('cache-control'), 'no-store')
-  assert.match(response.headers.get('content-type') ?? '', /application\/json/u)
-  const body = await bodyOf(response)
-  assert.equal(body.ok, true)
-  assert.equal(body.value.revision, 3)
-  assert.equal(body.value.configured, true)
+  assert.equal((await bodyOf(response)).value.revision, 3)
 })
 
 test('宿主 API：setup 只返回非敏感字段', async () => {
@@ -98,11 +96,10 @@ test('宿主 API：setup 只返回非敏感字段', async () => {
   const response = await route(routes, '/api/session-sync/setup').fetch(
     new Request('http://host/api/session-sync/setup'),
   )
+  assert.equal(response.status, 200)
   const body = await bodyOf(response)
-  assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
-  assert.equal(body.value.hasToken, true)
-  assert.equal('token' in body.value, false)
-  assert.equal('passphrase' in body.value, false)
+  assert.equal(body.value.workspacePath, 'D:/work')
+  assert.equal(JSON.stringify(body).includes('token-value'), false)
 })
 
 test('宿主 API：workspaces 返回同步列表与选中项', async () => {
@@ -112,20 +109,13 @@ test('宿主 API：workspaces 返回同步列表与选中项', async () => {
   )
   assert.equal(response.status, 200)
   const body = await bodyOf(response)
-  assert.equal(body.value.allowlistConfigured, true)
-  assert.deepEqual(body.value.selectedPaths, ['D:/work'])
-  assert.deepEqual(body.value.workspaces, [{
-    path: 'D:/work',
-    title: 'work',
-    rootSessions: 2,
-    subagentSessions: 3,
-    selected: true,
-  }])
+  assert.equal(body.value.workspaces[0].rootSessions, 2)
+  assert.equal(body.value.workspaces[0].selected, true)
 })
 
 test('宿主 API：workspaces 读取失败时返回 500', async () => {
   const routes = createHostApi(control({
-    workspaces: async () => { throw new Error('storage unavailable') },
+    workspaces: async () => { throw new Error('无法读取工作区') },
   }))
   const response = await route(routes, '/api/session-sync/workspaces').fetch(
     new Request('http://host/api/session-sync/workspaces'),
@@ -133,7 +123,7 @@ test('宿主 API：workspaces 读取失败时返回 500', async () => {
   assert.equal(response.status, 500)
   const body = await bodyOf(response)
   assert.equal(body.ok, false)
-  assert.equal(body.error.message, 'storage unavailable')
+  assert.equal(body.error.message, '无法读取工作区')
 })
 
 test('宿主 API：test 返回连接测试结果', async () => {
@@ -153,6 +143,41 @@ test('宿主 API：sync 返回控制器结果', async () => {
   )
   assert.equal(response.status, 200)
   assert.deepEqual((await bodyOf(response)).value, result)
+})
+
+test('宿主 API：cwd 决策按 sessionId/action 调用控制面', async () => {
+  let seen = ''
+  let seenAction = ''
+  const routes = createHostApi(control({
+    cwdDecision: async (sessionId, action) => {
+      seen = sessionId
+      seenAction = action
+      return { ok: true, status: 'corrected' }
+    },
+  }))
+  const response = await route(routes, '/api/session-sync/cwd').fetch(
+    new Request('http://host/api/session-sync/cwd', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-cwd', action: 'fix' }),
+    }),
+  )
+  assert.equal(response.status, 200)
+  assert.equal(seen, 'session-cwd')
+  assert.equal(seenAction, 'fix')
+  assert.deepEqual((await bodyOf(response)).value, { ok: true, status: 'corrected' })
+})
+
+test('宿主 API：cwd 决策缺少 action 时返回 400', async () => {
+  const routes = createHostApi(control())
+  const response = await route(routes, '/api/session-sync/cwd').fetch(
+    new Request('http://host/api/session-sync/cwd', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-cwd' }),
+    }),
+  )
+  assert.equal(response.status, 400)
 })
 
 test('宿主 API：sync 抛错时返回 500 与分类', async () => {

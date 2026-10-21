@@ -59,6 +59,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
     '/api/session-sync/workspaces',
     '/api/session-sync/test',
     '/api/session-sync/sync',
+    '/api/session-sync/cwd',
   ])
 
   const status = await connection.routes[0].fetch(new Request('http://host/api/session-sync/status'))

@@ -79,6 +79,7 @@ window.__ModuleLoader__.load({
       '.dssync-toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,10px);z-index:2147483001;max-width:min(520px,calc(100vw - 32px));padding:10px 14px;border:1px solid var(--dssync-line-strong);border-radius:10px;background:var(--dsw-alias-bg-layer-2,rgba(34,34,36,.97));box-shadow:0 16px 40px rgba(0,0,0,.42);color:var(--dssync-text);font-size:12.5px;line-height:1.5;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}',
       '.dssync-toast.on{opacity:1;transform:translate(-50%,0)}',
       '.dssync-toast.bad{color:#ffb1b1;border-color:rgba(239,68,68,.32)}',
+      '.dssync-warn{color:var(--dsw-alias-state-warn-primary,#f0b64a);font-size:10.5px;line-height:1;border:1px solid rgba(240,182,74,.35);border-radius:999px;padding:3px 6px;white-space:nowrap}',
       /* onboarding */
       '.dssync-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:28px;background:rgba(8,8,10,.58);backdrop-filter:blur(7px);animation:dssync-overlay-in .24s ease both}',
       '.dssync-wizard{width:min(680px,100%);max-height:calc(100vh - 56px);overflow:auto;scrollbar-gutter:stable;border:1px solid var(--dssync-line-strong);border-radius:18px;background:var(--dsw-alias-bg-layer-1,#1d1d1f);box-shadow:0 28px 80px rgba(0,0,0,.5);padding:26px 28px 22px;animation:dssync-wizard-in .32s cubic-bezier(.16,1,.3,1) both}',
@@ -321,6 +322,15 @@ window.__ModuleLoader__.load({
         return fetchJson('/test', { method: 'POST', body: '{}' })
       }
 
+      async function correctCwd(sessionId, action) {
+        var result = await fetchJson('/cwd', {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: sessionId, action: action || 'fix' }),
+        })
+        await refreshStatus()
+        return result
+      }
+
       function toast(text, bad) {
         if (toastTimer !== null) clearTimeout(toastTimer)
         patch({ toast: { text: text, bad: bad === true, at: Date.now() } })
@@ -343,6 +353,7 @@ window.__ModuleLoader__.load({
         refreshWorkspaces: refreshWorkspaces,
         syncNow: syncNow,
         testConnection: testConnection,
+        correctCwd: correctCwd,
         toast: toast,
         dispose: dispose,
       }
@@ -373,16 +384,18 @@ window.__ModuleLoader__.load({
       if (status === null) return 'warn'
       if (status.running) return 'syncing'
       if (status.lastError !== null) return 'bad'
+      if (Array.isArray(status.cwdPending) && status.cwdPending.length > 0) return 'warn'
       if (status.configured) return 'ok'
       return 'warn'
     }
 
-    /** 一个会话当前的同步保护状态：正在应用 / 开放尾。 */
+    /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策。 */
     function sessionState(status, sessionId) {
-      if (status === null) return { pending: false, tail: false, lag: false }
+      if (status === null) return { pending: false, tail: false, lag: false, cwd: false }
       var pending = status.pending !== null && status.pending !== undefined && status.pending.sessionId === sessionId
       var tail = false
       var lag = false
+      var cwd = Array.isArray(status.cwdPending) && status.cwdPending.indexOf(sessionId) !== -1
       if (Array.isArray(status.sessions)) {
         tail = status.sessions.some(function (view) {
           return view.sessionId === sessionId && view.direction === 'push' && view.tailOpen === true
@@ -391,7 +404,7 @@ window.__ModuleLoader__.load({
           return view.sessionId === sessionId && view.direction === 'push' && view.status === 'remote-ahead'
         })
       }
-      return { pending: pending, tail: tail, lag: lag }
+      return { pending: pending, tail: tail, lag: lag, cwd: cwd }
     }
 
     function sessionBlockReason(status, sessionId) {
@@ -399,6 +412,7 @@ window.__ModuleLoader__.load({
       if (state.pending) return '正在应用云端写入，暂不能继续这个会话'
       if (state.tail) return '这个会话有未闭合的同步尾巴，先完成当前轮次再打开'
       if (state.lag) return '这个会话的安全边界还落后于远端，暂不能继续'
+      if (state.cwd) return '这个会话最后 cwd 在工作区外，请先在同步气泡中修正或选择仍然导入'
       return null
     }
 
@@ -1078,16 +1092,18 @@ window.__ModuleLoader__.load({
         ? []
         : (status.running && Array.isArray(status.live) && status.live.length > 0 ? status.live : status.sessions)
       var sessions = Array.isArray(rawSessions) ? rawSessions.slice() : []
+      var cwdPending = status && Array.isArray(status.cwdPending) ? status.cwdPending : []
       var total = sessions.length
       var done = sessions.filter(function (session) {
         return session.status !== 'error' && session.status !== 'pulling' && session.status !== 'pushing'
       }).length
       var failed = sessions.some(function (session) { return session.status === 'error' })
       var running = status && status.running
-      var title = failed ? '同步失败' : running ? '正在同步' : '同步完成'
+      var title = failed ? '同步失败' : running ? '正在同步' : cwdPending.length > 0 ? '需要处理' : '同步完成'
       var subtitle = failed ? '有会话未完成，已暂停'
         : running ? (total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
-          : total === 0 ? '还没有同步记录' : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
+          : cwdPending.length > 0 ? cwdPending.length + ' 个会话 cwd 在工作区外，等待处理'
+            : total === 0 ? '还没有同步记录' : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
       var dot = statusDot(status)
       var segments = sessions.map(function (session, index) {
         var bad = session.status === 'error'
@@ -1160,6 +1176,37 @@ window.__ModuleLoader__.load({
       var openClass = open && !collapsed ? ' open' : ''
       var collapsedClass = collapsed ? ' collapsed' : ''
       var badClass = failed ? ' bad' : ''
+      function cwdActions(id) {
+        return [
+          h('button', {
+            className: 'dssync-mini', type: 'button', key: id + ':fix',
+            onClick: function (event) {
+              event.stopPropagation()
+              model.correctCwd(id).then(function (result) {
+                if (!result || result.ok !== true) {
+                  model.toast((result && result.message) || '修正失败', true)
+                  return
+                }
+                model.toast(result.status === 'already-portable' ? '已在工作区内' : '已修正并同步 cwd')
+              }).catch(function (error) { model.toast(errorText(error), true) })
+            },
+          }, '修正 cwd'),
+          h('button', {
+            className: 'dssync-mini', type: 'button', key: id + ':skip',
+            onClick: function (event) {
+              event.stopPropagation()
+              model.correctCwd(id, 'skip').then(function (result) {
+                if (!result || result.ok !== true) {
+                  model.toast((result && result.message) || '导入失败', true)
+                  return
+                }
+                model.toast('已按原 cwd 导入')
+              }).catch(function (error) { model.toast(errorText(error), true) })
+            },
+          }, '仍然导入'),
+        ]
+      }
+
       var rows = sessions.map(function (session, index) {
         var tag = session.status === 'error' ? '失败'
           : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
@@ -1167,7 +1214,19 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'dssync-rowline', key: session.sessionId + ':' + session.direction + ':' + index },
           h('span', { className: 'dssync-st ' + (session.status === 'error' ? 'bad' : tag === '已完成' ? 'ok' : tag === '同步中' ? 'run' : '') }),
           h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + session.sessionId),
-          h('span', { className: 'tag' }, tag))
+          h('span', { className: 'tag' }, tag),
+          session.cwdNonPortable ? h('span', {
+            className: 'dssync-warn', title: '最后 cwd 在工作区外，跨设备可能无法正确恢复',
+          }, 'cwd 外') : null,
+          session.cwdNonPortable ? cwdActions(session.sessionId) : null)
+      })
+      var seenSessions = new Set(sessions.map(function (session) { return session.sessionId }))
+      var pendingRows = cwdPending.filter(function (id) { return !seenSessions.has(id) }).map(function (id) {
+        return h('div', { className: 'dssync-rowline', key: id + ':pending' },
+          h('span', { className: 'dssync-st run' }),
+          h('span', { className: 'name' }, '↓ ' + id),
+          h('span', { className: 'dssync-warn' }, 'cwd 外'),
+          cwdActions(id))
       })
 
       var head = h('div', {
@@ -1196,7 +1255,7 @@ window.__ModuleLoader__.load({
 
       var panel = h('div', { className: 'dssync-collapse' },
         h('div', { className: 'dssync-collapse-in' },
-          h('div', { className: 'dssync-panel' }, rows.length > 0 ? rows : h('div', { className: 'dssync-note' }, '暂无会话记录')),
+          h('div', { className: 'dssync-panel' }, rows.length > 0 || pendingRows.length > 0 ? rows.concat(pendingRows) : h('div', { className: 'dssync-note' }, '暂无会话记录')),
           status && status.lastError ? h('div', { className: 'dssync-error' }, status.lastError.message + (status.retryCount > 0 ? ' · 已重试 ' + status.retryCount + ' 次' : '')) : null,
           h('div', { className: 'dssync-foot' },
             h('span', null, running ? '正在同步…' : failed ? '已暂停' : '全部完成'),

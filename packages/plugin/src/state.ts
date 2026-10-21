@@ -18,6 +18,7 @@ export interface PullJournal {
   readonly version: 1
   readonly revision: number
   readonly pending?: PendingApply
+  readonly cwdPending?: readonly string[]
 }
 
 /**
@@ -36,9 +37,24 @@ export function readPullJournal(file: string): PullJournal {
   const record = parsed as Record<string, unknown>
   const revision = record['revision']
   if (!Number.isSafeInteger(revision) || (revision as number) < 0) return { version: STATE_VERSION, revision: 0 }
+  const cwdPending = Array.isArray(record['cwdPending'])
+    ? record['cwdPending'].filter((id): id is string => typeof id === 'string' && id !== '')
+    : undefined
   const pending = record['pending']
-  if (pending === undefined) return { version: STATE_VERSION, revision: revision as number }
-  if (pending === null || typeof pending !== 'object' || Array.isArray(pending)) return { version: STATE_VERSION, revision: revision as number }
+  if (pending === undefined) {
+    return {
+      version: STATE_VERSION,
+      revision: revision as number,
+      ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
+    }
+  }
+  if (pending === null || typeof pending !== 'object' || Array.isArray(pending)) {
+    return {
+      version: STATE_VERSION,
+      revision: revision as number,
+      ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
+    }
+  }
   const entry = pending as Record<string, unknown>
   const sessionId = entry['sessionId']
   const targetSeq = entry['targetSeq']
@@ -52,6 +68,7 @@ export function readPullJournal(file: string): PullJournal {
     version: STATE_VERSION,
     revision: revision as number,
     pending: { sessionId, targetSeq: targetSeq as number, at: at as number },
+    ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
   }
 }
 

@@ -7,7 +7,7 @@
  * @module dsh-session-sync/host-api
  */
 import { classifySyncError } from './engine.ts'
-import type { SyncTestResult } from './engine.ts'
+import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { SetupInfo, SyncStatus, SyncWorkspaceList } from './status.ts'
 
@@ -23,6 +23,8 @@ export interface SyncControl {
   test(): Promise<SyncTestResult>
   /** 手动触发一轮同步；已在运行时返回 `already-running`。 */
   syncNow(): Promise<SyncRunResult>
+  /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
+  cwdDecision(sessionId: string, action: 'fix' | 'skip'): Promise<CwdCorrectionResult>
 }
 
 /** connection.fetch 接受的精确路由。 */
@@ -112,6 +114,28 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       fetch: async () => {
         try {
           return json({ ok: true, value: await control.syncNow() })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-sync/cwd',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as { readonly sessionId?: unknown; readonly action?: unknown }
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+          const action = body.action === 'skip' ? 'skip' : body.action === 'fix' ? 'fix' : ''
+          if (sessionId === '' || action === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId 与 action=fix|skip' } }, 400)
+          }
+          return json({ ok: true, value: await control.cwdDecision(sessionId, action) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({

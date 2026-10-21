@@ -24,6 +24,8 @@ export interface SessionSyncView {
   readonly bytes?: number
   /** 本地尾巴是否有未闭合的 turn。 */
   readonly tailOpen?: boolean
+  /** 最后 cwd 是否在工作区外；只做本地警告，不影响哈希/同步身份。 */
+  readonly cwdNonPortable?: boolean
   /** 失败分类。 */
   readonly kind?: SyncErrorKind
   /** 失败说明。 */
@@ -64,6 +66,8 @@ export interface SyncStatus {
   readonly revision: number
   /** 最近一轮的逐会话结果；尚未执行过为空数组。 */
   readonly sessions: readonly SessionSyncView[]
+  /** 等待用户决定 cwd 修正/跳过的会话 id。 */
+  readonly cwdPending: readonly string[]
   /** 当前一轮的实时逐会话阶段；空闲时为空数组。 */
   readonly live: readonly SessionSyncView[]
 }

@@ -7,6 +7,7 @@
  *
  * @module dsh-session-sync/engine
  */
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import {
   DEFAULT_BATCH_BYTES,
   DEFAULT_BATCH_EVENTS,
@@ -40,7 +41,7 @@ export interface SnapshotLike {
 
 /** 读句柄的最小接口。 */
 export interface ReadHandleLike {
-  readonly header: SessionHeaderLike & { readonly id: string }
+  readonly header: SessionHeaderLike & { readonly id: string; readonly cwd?: string }
   readonly inheritedEventCount?: number
   read(): Promise<{ readonly events: readonly SyncEvent[] }>
   close(): Promise<void>
@@ -178,6 +179,8 @@ export interface SessionSyncReport {
   readonly kind?: SyncErrorKind
   /** 本地尾巴是否还有未闭合的 turn；只在读到事件后可知。 */
   readonly tailOpen?: boolean
+  /** 最后 cwd 是否在工作区外；只做本地警告，不影响哈希/同步身份。 */
+  readonly cwdNonPortable?: boolean
 }
 
 /** 一次同步的总结果。 */
@@ -209,6 +212,24 @@ export interface PullDeps<Session> {
   readonly onProgress?: (progress: SyncProgress) => void
 }
 
+/** 接收端 cwd 修正的依赖。 */
+export interface CorrectCwdDeps<Session> {
+  readonly persistence: PullPersistenceLike
+  readonly sessions: SessionsLike<Session>
+  readonly config: EngineConfig
+  /** 本机目标工作区根；必须是已存在的 canonical workspace path。 */
+  readonly workspacePath: string
+  readonly fetch?: typeof fetch
+  readonly logger?: SyncLogger
+}
+
+/** 接收端 cwd 修正结果。 */
+export interface CwdCorrectionResult {
+  readonly ok: boolean
+  readonly status: 'corrected' | 'already-portable' | 'needs-sync' | 'lease-held' | 'attached' | 'error'
+  readonly message?: string
+}
+
 /** 一次未完成的拉取。 */
 export interface PendingApply {
   readonly sessionId: string
@@ -222,6 +243,8 @@ export interface PullState {
   readonly revision: number
   /** 上次崩溃前未完成的会话。 */
   readonly pending?: PendingApply
+  /** 等待用户决定 cwd 修正/跳过的会话 id。 */
+  readonly cwdPending?: readonly string[]
 }
 
 /** 单个会话的拉取结果。 */
@@ -231,6 +254,8 @@ export interface PullSessionReport {
   readonly applied?: number
   readonly error?: string
   readonly kind?: SyncErrorKind
+  /** 最后 cwd 是否在工作区外；只做本地警告，不影响哈希/同步身份。 */
+  readonly cwdNonPortable?: boolean
 }
 
 /** 一次拉取的总结果。 */
@@ -579,6 +604,46 @@ export function safeThroughSeqOf(events: readonly SyncEvent[], tailOpen: boolean
 }
 
 /**
+ * 取会话最后一条 `working-directory/change` 的 cwd。
+ * @param events - 完整事件。
+ * @returns 最后 cwd；没有 change 事件时为 undefined。
+ */
+export function lastWorkingDirectoryOf(events: readonly SyncEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as { readonly type?: unknown; readonly data?: unknown }
+    if (event.type !== 'working-directory/change') continue
+    if (event.data === null || typeof event.data !== 'object') continue
+    const cwd = (event.data as { readonly cwd?: unknown }).cwd
+    if (typeof cwd === 'string') return cwd
+  }
+  return undefined
+}
+
+/**
+ * cwd 是否位于工作区根之下（根自身也算）。
+ * @param root - 本地工作区根。
+ * @param cwd - 待检查路径。
+ * @returns 是否在根内。
+ */
+export function cwdInsideWorkspace(root: string, cwd: string): boolean {
+  if (root === '' || cwd === '') return false
+  if (!isAbsolute(root) || !isAbsolute(cwd)) return false
+  const rel = relative(resolve(root), resolve(cwd))
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+/**
+ * 最后 cwd 是否在工作区外；没有 cwd 事件时视为 portable。
+ * @param events - 完整事件。
+ * @param root - 本地工作区根。
+ * @returns 是否 nonPortable。
+ */
+export function cwdNonPortableOf(events: readonly SyncEvent[], root: string): boolean {
+  const cwd = lastWorkingDirectoryOf(events)
+  return cwd !== undefined && !cwdInsideWorkspace(root, cwd)
+}
+
+/**
  * 发一次实时阶段；回调异常不能打断同步。
  * @param deps - 带可选 onProgress 的依赖。
  * @param progress - 当前阶段。
@@ -706,11 +771,12 @@ async function syncSession<Session>(
   const meta = headerMetaOf(handle.header, handle.inheritedEventCount)
   const localLast = events.length === 0 ? -1 : events[events.length - 1]!.seq
   const tailOpen = deps.isTailOpen?.(events) ?? false
+  const cwdNonPortable = cwdNonPortableOf(events, handle.header.cwd ?? '')
   let safeThroughSeq = safeThroughSeqOf(events, tailOpen)
   const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
 
   if (remote !== undefined && remote.deletedAt !== undefined) {
-    return { sessionId, status: 'skipped', error: '远端已有墓碑', tailOpen }
+    return { sessionId, status: 'skipped', error: '远端已有墓碑', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
   }
   if (remote !== undefined) {
     if (remote.createdAt !== meta.createdAt) throw new Error('远端会话的 createdAt 与本地不一致')
@@ -718,7 +784,7 @@ async function syncSession<Session>(
     const head = remote.frames[0]
     if (head === undefined || head.chainHash !== headerChainHash(meta)) throw new Error('远端会话头与本地不一致（diverged）')
     await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, events)
-    if (localLast < remote.lastSeq) return { sessionId, status: 'remote-ahead', tailOpen }
+    if (localLast < remote.lastSeq) return { sessionId, status: 'remote-ahead', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
     if (remote.safeThroughSeq !== undefined) safeThroughSeq = Math.max(safeThroughSeq, remote.safeThroughSeq)
   }
 
@@ -739,7 +805,7 @@ async function syncSession<Session>(
     baseChainHash = null
   } else {
     const batches = planEventBatches(events, remote.lastSeq, batchOptions(deps.config))
-    if (batches.length === 0) return { sessionId, status: 'up-to-date', tailOpen }
+    if (batches.length === 0) return { sessionId, status: 'up-to-date', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
     batches.forEach((batch, offset) => {
       sealedEntries.push(sealEventBatch(batch.events, sessionId, remote.frames.length + offset, sessionKey))
     })
@@ -751,7 +817,7 @@ async function syncSession<Session>(
   for (const entry of sealedEntries) await uploadBlob(fetchImpl, base, deps.config.token, entry)
 
   const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId)
-  if (!leased) return { sessionId, status: 'lease-held', tailOpen }
+  if (!leased) return { sessionId, status: 'lease-held', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
   try {
     await appendFrames(fetchImpl, base, deps.config.token, sessionId, {
       baseIndex,
@@ -772,6 +838,7 @@ async function syncSession<Session>(
     batches: pushedBatches,
     bytes: sealedEntries.reduce((total, entry) => total + entry.ref.bytes, 0),
     tailOpen,
+    ...cwdNonPortable ? { cwdNonPortable } : {},
   }
 }
 
@@ -1059,22 +1126,25 @@ async function pullSession<Session>(
       if (headerChainHash(localMeta) !== headerRef.chainHash) throw new Error('本地会话头与远端不一致（diverged）')
       const localLast = read.events.length === 0 ? -1 : read.events[read.events.length - 1]!.seq
       await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events)
-      if (localLast > safe) return { sessionId, status: 'local-ahead' }
+      const localCwdNonPortable = cwdNonPortableOf(read.events, deps.workspacePath)
+      if (localLast > safe) return { sessionId, status: 'local-ahead', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
       if (localLast === safe) {
-        await deps.attach?.(sessionId)
-        return { sessionId, status: 'up-to-date' }
+        if (!localCwdNonPortable) await deps.attach?.(sessionId)
+        return { sessionId, status: 'up-to-date', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
       }
       const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, localLast, safe, sessionKey)
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
       await deps.beforeApply?.(sessionId, safe)
       await handle.append(events)
       await handle.flush()
-      await deps.attach?.(sessionId)
+      const nextCwdNonPortable = cwdNonPortableOf([...read.events, ...events], deps.workspacePath)
+      if (!nextCwdNonPortable) await deps.attach?.(sessionId)
       await deps.afterApply?.(sessionId)
       return {
         sessionId,
         status: safe < remote.lastSeq ? 'partial' : 'pulled',
         applied: events.length,
+        ...nextCwdNonPortable ? { cwdNonPortable: true } : {},
       }
     } finally {
       await handle.close()
@@ -1102,12 +1172,116 @@ async function pullSession<Session>(
   } finally {
     await handle.close()
   }
-  await deps.attach?.(sessionId)
+  const cwdNonPortable = cwdNonPortableOf(events, deps.workspacePath)
+  if (!cwdNonPortable) await deps.attach?.(sessionId)
   await deps.afterApply?.(sessionId)
   return {
     sessionId,
     status: safe < remote.lastSeq ? 'partial' : 'pulled',
     applied: events.length,
+    ...cwdNonPortable ? { cwdNonPortable: true } : {},
+  }
+}
+
+/**
+ * 接收端把当前 cwd 修正到本地工作区根。
+ *
+ * 这是 append-only 操作：不重写历史；先申请租约，确认远端没有推进，再追加并推送。
+ * 如果本地已 portable、会话正在运行、或远端还有未同步事件，则不修改。
+ * @param deps - 修正依赖。
+ * @param sessionId - 会话 id。
+ * @returns 修正结果。
+ */
+export async function correctCwd<Session>(
+  deps: CorrectCwdDeps<Session>,
+  sessionId: string,
+): Promise<CwdCorrectionResult> {
+  if (deps.workspacePath.trim() === '' || !isAbsolute(deps.workspacePath)) {
+    return { ok: false, status: 'error', message: 'workspacePath 未配置或不是绝对路径' }
+  }
+  if (deps.sessions.get(sessionId) !== undefined) {
+    return { ok: false, status: 'error', message: '会话正在运行，不能修改 cwd' }
+  }
+  const local = await deps.persistence.stat(sessionId)
+  if (local === undefined) return { ok: false, status: 'error', message: '本地会话不存在' }
+
+  const base = normalizeBase(deps.config.serverUrl)
+  if (base === '') return { ok: false, status: 'error', message: 'serverUrl 非法' }
+  const master = deriveMasterKey(deps.config.passphrase, resolveSalt(deps.config, base))
+  const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
+  const handle = await deps.persistence.open(sessionId, 'write')
+  try {
+    const read = await handle.read()
+    const events = read.events
+    const last = lastWorkingDirectoryOf(events)
+    const localLast = events.length === 0 ? -1 : events[events.length - 1]!.seq
+    const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
+    if (last === undefined || cwdInsideWorkspace(deps.workspacePath, last)) {
+      // 本地已经 portable；如果远端还落后，说明上次修正只落了本地，必须先推送。
+      if (remote === undefined || (remote.deletedAt === undefined && remote.lastSeq === localLast)) {
+        return { ok: true, status: 'already-portable' }
+      }
+      return { ok: false, status: 'needs-sync', message: '本地已有未推送的 cwd 事件，请先完成同步' }
+    }
+    if (remote === undefined || remote.deletedAt !== undefined) {
+      return { ok: false, status: 'error', message: '远端会话不存在或已删除' }
+    }
+    if (remote.lastSeq !== localLast || remote.tailOpen === true
+      || (remote.safeThroughSeq ?? remote.lastSeq) !== remote.lastSeq) {
+      return { ok: false, status: 'needs-sync', message: '远端还有未同步事件，请先完成同步' }
+    }
+
+    const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId)
+    if (!leased) return { ok: false, status: 'lease-held', message: '会话租约被占用' }
+    try {
+      // 租约内再读一次，防止 manifest 在租约前被别的设备推进。
+      const current = await readManifest(fetchImpl, base, deps.config.token, sessionId)
+      if (current === undefined || current.deletedAt !== undefined
+        || current.lastSeq !== localLast || current.tailOpen === true
+        || (current.safeThroughSeq ?? current.lastSeq) !== current.lastSeq) {
+        return { ok: false, status: 'needs-sync', message: '会话已变化，请先重新同步' }
+      }
+      if (current.createdAt !== handle.header.createdAt || current.formatVersion !== handle.header.version) {
+        return { ok: false, status: 'needs-sync', message: '远端会话头已变化，请先重新同步' }
+      }
+      const headerRef = current.frames[0]
+      if (headerRef === undefined
+        || headerRef.chainHash !== headerChainHash(headerMetaOf(handle.header, handle.inheritedEventCount))) {
+        return { ok: false, status: 'needs-sync', message: '远端会话头与本地不一致，请先重新同步' }
+      }
+      await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKeyOf(master, sessionId), current, events)
+
+      const lastTime = (events[events.length - 1] as { readonly time?: unknown } | undefined)?.time
+      const correction = {
+        type: 'working-directory/change',
+        seq: localLast + 1,
+        time: Math.max(Date.now(), (typeof lastTime === 'number' && Number.isFinite(lastTime) ? lastTime : 0) + 1),
+        data: { cwd: deps.workspacePath },
+      }
+      await handle.append([correction])
+      await handle.flush()
+
+      const sealed = sealEventBatch([correction], sessionId, current.frames.length, sessionKeyOf(master, sessionId))
+      await uploadBlob(fetchImpl, base, deps.config.token, sealed)
+      const baseFrame = current.frames[current.frames.length - 1]
+      if (baseFrame === undefined) throw new Error('manifest 缺少最后一个批次')
+      await appendFrames(fetchImpl, base, deps.config.token, sessionId, {
+        baseIndex: current.frames.length - 1,
+        baseChainHash: baseFrame.chainHash,
+        createdAt: handle.header.createdAt,
+        formatVersion: handle.header.version,
+        frames: [sealed.ref],
+        tailOpen: false,
+        safeThroughSeq: correction.seq,
+      })
+      return { ok: true, status: 'corrected' }
+    } finally {
+      await releaseLease(fetchImpl, base, deps.config.token, sessionId).catch(() => {})
+    }
+  } catch (error: unknown) {
+    return { ok: false, status: 'error', message: error instanceof Error ? error.message : String(error) }
+  } finally {
+    await handle.close()
   }
 }
 

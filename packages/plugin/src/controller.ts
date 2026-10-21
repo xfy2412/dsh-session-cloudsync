@@ -87,6 +87,7 @@ export class SyncController {
   private nextRetryAt = 0
   private sessions: readonly SessionSyncView[] = []
   private live: readonly SessionSyncView[] = []
+  private readonly cwdPending = new Set<string>()
 
   /**
    * @param options - 引擎、持久化与时钟注入点。
@@ -96,6 +97,7 @@ export class SyncController {
     this.nonRetryable = options.nonRetryable ?? DEFAULT_NON_RETRYABLE
     this.revision = options.initial?.revision ?? 0
     this.pending = options.initial?.pending
+    for (const sessionId of options.initial?.cwdPending ?? []) this.cwdPending.add(sessionId)
   }
 
   /** 当前客户端可读快照。 */
@@ -113,8 +115,15 @@ export class SyncController {
       pending: this.pending ?? null,
       revision: this.revision,
       sessions: this.sessions,
+      cwdPending: [...this.cwdPending],
       live: this.live,
     }
+  }
+
+  /** 用户已处理某个 cwd 决策后清除警告。 */
+  clearCwdPending(sessionId: string): void {
+    this.cwdPending.delete(sessionId)
+    this.persistNow()
   }
 
   /**
@@ -226,6 +235,7 @@ export class SyncController {
     return {
       revision: this.revision,
       ...this.pending === undefined ? {} : { pending: this.pending },
+      ...this.cwdPending.size === 0 ? {} : { cwdPending: [...this.cwdPending] },
     }
   }
 
@@ -289,6 +299,13 @@ export class SyncController {
       this.options.logger?.info(`dsh-session-sync: 拉取 ${applied.length} 个会话，失败 ${failed.length}`)
     }
     for (const session of report.sessions) views.push(pullView(session))
+    for (const session of report.sessions) {
+      if (session.cwdNonPortable === true) {
+        this.cwdPending.add(session.sessionId)
+      } else if (session.status !== 'error') {
+        this.cwdPending.delete(session.sessionId)
+      }
+    }
     for (const session of failed) {
       const kind = session.kind ?? 'unknown'
       errors.push({ kind, message: session.error ?? '未知错误' })
@@ -310,6 +327,7 @@ function pushView(session: SessionSyncReport): SessionSyncView {
     ...session.batches === undefined ? {} : { batches: session.batches },
     ...session.bytes === undefined ? {} : { bytes: session.bytes },
     ...session.tailOpen === undefined ? {} : { tailOpen: session.tailOpen },
+    ...session.cwdNonPortable === undefined ? {} : { cwdNonPortable: session.cwdNonPortable },
     ...session.kind === undefined ? {} : { kind: session.kind },
     ...session.error === undefined ? {} : { error: session.error },
   }
@@ -326,6 +344,7 @@ function pullView(session: PullSessionReport): SessionSyncView {
     direction: 'pull',
     status: session.status,
     ...session.applied === undefined ? {} : { applied: session.applied },
+    ...session.cwdNonPortable === undefined ? {} : { cwdNonPortable: session.cwdNonPortable },
     ...session.kind === undefined ? {} : { kind: session.kind },
     ...session.error === undefined ? {} : { error: session.error },
   }
