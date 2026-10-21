@@ -162,6 +162,85 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
   }
 })
 
+test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允许跨界批次', async () => {
+  const temp = createTempHome('plugin-prefix')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'prefix-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const sessionId = 'session-prefix-test'
+      const header = {
+        id: sessionId,
+        version: 4,
+        createdAt: 900,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: 'D:/local',
+      }
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'prefix pass',
+        workspaceAllowlist: ['D:/local'],
+        batchEvents: 50,
+      }
+      const source = fakeStore(header, events(0, 119))
+      const first = await syncOnce({ persistence: source, sessions, config, isTailOpen: () => false })
+      assert.equal(first.sessions[0].status, 'pushed')
+
+      // 推送方向：本地 120 条，但第 50 条内容不同；不能把远端当成同一历史。
+      const divergent = events(0, 119)
+      divergent[50].data.text = 'tampered'
+      const pushDiverged = await syncOnce({
+        persistence: fakeStore(header, divergent),
+        sessions,
+        config,
+        isTailOpen: () => false,
+      })
+      assert.equal(pushDiverged.sessions[0].status, 'error')
+      assert.equal(pushDiverged.sessions[0].kind, 'diverged')
+
+      // 拉取方向：本地只到 59，但第 50 条不同；跨界的远端批次也必须比较重叠段。
+      const localDiverged = events(0, 59)
+      localDiverged[50].data.text = 'tampered'
+      const pullDiverged = await pullOnce({
+        persistence: fakeStore(header, localDiverged),
+        sessions,
+        config,
+        workspacePath: 'D:/local',
+      }, { revision: 0 })
+      assert.equal(pullDiverged.sessions[0].status, 'error')
+      assert.equal(pullDiverged.sessions[0].kind, 'diverged')
+
+      // 本地只到 59 且完全相同：跨界批次通过，拉取 60..119。
+      const localAhead = fakeStore(header, events(0, 59))
+      const pulled = await pullOnce({
+        persistence: localAhead,
+        sessions,
+        config,
+        workspacePath: 'D:/local',
+      }, { revision: 0 })
+      assert.equal(pulled.sessions[0].status, 'pulled')
+      assert.equal(localAhead.sessions.get(sessionId).events.length, 120)
+
+      // 本地和远端完全一致：up-to-date。
+      const same = await syncOnce({
+        persistence: fakeStore(header, events(0, 119)),
+        sessions,
+        config,
+        isTailOpen: () => false,
+      })
+      assert.equal(same.sessions[0].status, 'up-to-date')
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
 test('推送引擎：白名单为空时整体不执行', async () => {
   const header = { id: 'session-no-allowlist', version: 4, createdAt: 1, isSeeded: false, delegationDepth: 0, cwd: 'D:/work' }
   const report = await syncOnce({

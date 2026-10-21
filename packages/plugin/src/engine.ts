@@ -10,6 +10,7 @@
 import {
   DEFAULT_BATCH_BYTES,
   DEFAULT_BATCH_EVENTS,
+  eventBatchHash,
   headerChainHash,
   headerMetaOf,
   openEventBatch,
@@ -21,6 +22,7 @@ import {
   type SessionHeaderMeta,
   type SyncEvent,
 } from '../../shared/src/batches.ts'
+import { stableStringify } from '../../shared/src/chain.ts'
 import { deriveMasterKey, sha256 } from '../../shared/src/crypto.ts'
 import {
   sessionKeyOf,
@@ -333,6 +335,7 @@ export function classifySyncError(error: unknown): ClassifiedSyncError {
     return { kind: 'unknown', message, retryable: true }
   }
   if (/认证失败|keyId|明文哈希|解密|密钥/u.test(message)) return { kind: 'crypto', message, retryable: false }
+  if (/diverged|分叉/u.test(message)) return { kind: 'diverged', message, retryable: false }
   if (/seq|manifest|格式|会话头|批次/u.test(message)) return { kind: 'format', message, retryable: false }
   if (/fetch failed|ECONN|ETIMEDOUT|timeout|network|socket|ENOTFOUND/u.test(message)) return { kind: 'network', message, retryable: true }
   if (/未配置|配置/u.test(message)) return { kind: 'config', message, retryable: false }
@@ -592,6 +595,83 @@ function notifyProgress(
 }
 
 /**
+ * 按远端批次边界收集本地连续事件；缺 seq 视为分叉。
+ * @param bySeq - 本地事件索引。
+ * @param seqFrom - 起始 seq。
+ * @param seqTo - 结束 seq。
+ * @returns 连续事件。
+ */
+function localEventRange(
+  bySeq: ReadonlyMap<number, SyncEvent>,
+  seqFrom: number,
+  seqTo: number,
+): SyncEvent[] {
+  const events: SyncEvent[] = []
+  for (let seq = seqFrom; seq <= seqTo; seq += 1) {
+    const event = bySeq.get(seq)
+    if (event === undefined) throw new Error(`本地缺少事件 seq ${seq}（diverged）`)
+    events.push(event)
+  }
+  return events
+}
+
+/**
+ * 校验远端共享前缀与本地 raw 事件一致。
+ *
+ * 本地和远端都不做 cwd 投影，因此直接按远端批次边界对 raw 事件算哈希。
+ * 本地末尾落在远端批次中间时，下载该批次并比较重叠事件，不能跳过校验。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端基地址。
+ * @param token - 设备 token。
+ * @param sessionId - 会话 id。
+ * @param sessionKey - 会话密钥。
+ * @param remote - 远端 manifest。
+ * @param localEvents - 本地完整事件。
+ */
+async function verifySharedPrefix(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  sessionId: string,
+  sessionKey: Buffer,
+  remote: RemoteManifest,
+  localEvents: readonly SyncEvent[],
+): Promise<void> {
+  const localLast = localEvents.length === 0 ? -1 : localEvents[localEvents.length - 1]!.seq
+  if (localLast < 0) return
+
+  const bySeq = new Map<number, SyncEvent>()
+  for (const event of localEvents) {
+    if (bySeq.has(event.seq)) throw new Error(`本地事件 seq ${event.seq} 重复（diverged）`)
+    bySeq.set(event.seq, event)
+  }
+
+  // 第 0 个引用是会话头，不是事件批次。
+  for (const frame of remote.frames.slice(1)) {
+    if (frame.seqFrom > localLast) break
+    if (frame.seqTo <= localLast) {
+      const local = localEventRange(bySeq, frame.seqFrom, frame.seqTo)
+      if (eventBatchHash(local) !== frame.chainHash) {
+        throw new Error(`共享前缀批次 ${frame.index} 不一致（diverged）`)
+      }
+      continue
+    }
+
+    // 本地末尾落在这个远端批次中间：下载该批次，比较重叠段。
+    const sealed = await downloadBlob(fetchImpl, base, token, frame.blobSha256)
+    const remoteEvents = openEventBatch(sealed, frame, sessionId, sessionKey)
+    for (const remoteEvent of remoteEvents) {
+      if (remoteEvent.seq > localLast) break
+      const local = bySeq.get(remoteEvent.seq)
+      if (local === undefined) throw new Error(`本地缺少事件 seq ${remoteEvent.seq}（diverged）`)
+      if (stableStringify(local) !== stableStringify(remoteEvent)) {
+        throw new Error(`共享前缀事件 seq ${remoteEvent.seq} 不一致（diverged）`)
+      }
+    }
+  }
+}
+
+/**
  * 同步一个会话。
  * @param deps - 引擎依赖。
  * @param fetchImpl - fetch 实现。
@@ -637,6 +717,7 @@ async function syncSession<Session>(
     if (remote.formatVersion !== meta.formatVersion) throw new Error('远端会话的格式代际与本地不一致')
     const head = remote.frames[0]
     if (head === undefined || head.chainHash !== headerChainHash(meta)) throw new Error('远端会话头与本地不一致（diverged）')
+    await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, events)
     if (localLast < remote.lastSeq) return { sessionId, status: 'remote-ahead', tailOpen }
     if (remote.safeThroughSeq !== undefined) safeThroughSeq = Math.max(safeThroughSeq, remote.safeThroughSeq)
   }
@@ -977,6 +1058,7 @@ async function pullSession<Session>(
       const localMeta = headerMetaOf(handle.header, handle.inheritedEventCount)
       if (headerChainHash(localMeta) !== headerRef.chainHash) throw new Error('本地会话头与远端不一致（diverged）')
       const localLast = read.events.length === 0 ? -1 : read.events[read.events.length - 1]!.seq
+      await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events)
       if (localLast > safe) return { sessionId, status: 'local-ahead' }
       if (localLast === safe) {
         await deps.attach?.(sessionId)
