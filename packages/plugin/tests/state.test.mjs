@@ -21,12 +21,14 @@ test('状态文件：缺失/损坏返回空状态，写入可读回', () => {
     revision: 7,
     pending: { sessionId: 'session-x', targetSeq: 10, at: 123 },
     cwdPending: ['session-y'],
+    blocked: [{ sessionId: 'session-z', kind: 'diverged', message: 'old divergence', at: 456 }],
   })
   assert.deepEqual(readPullJournal(file), {
     version: STATE_VERSION,
     revision: 7,
     pending: { sessionId: 'session-x', targetSeq: 10, at: 123 },
     cwdPending: ['session-y'],
+    blocked: [{ sessionId: 'session-z', kind: 'diverged', message: 'old divergence', at: 456 }],
   })
   assert.ok(readFileSync(file, 'utf8').endsWith('\n'))
 })

@@ -8,6 +8,7 @@
  */
 import {
   classifySyncError,
+  type BlockedSessionState,
   type PullReport,
   type PullSessionReport,
   type PullState,
@@ -17,7 +18,7 @@ import {
   type SyncProgress,
   type SyncReport,
 } from './engine.ts'
-import type { SessionSyncView, SyncErrorView, SyncStatus } from './status.ts'
+import type { BlockedSessionView, SessionSyncView, SyncErrorView, SyncStatus } from './status.ts'
 
 /** 默认不自动重试、只等待配置或人工处理的错误。 */
 export const DEFAULT_NON_RETRYABLE: ReadonlySet<SyncErrorKind> = new Set([
@@ -88,6 +89,7 @@ export class SyncController {
   private sessions: readonly SessionSyncView[] = []
   private live: readonly SessionSyncView[] = []
   private readonly cwdPending = new Set<string>()
+  private readonly blocked = new Map<string, BlockedSessionState>()
 
   /**
    * @param options - 引擎、持久化与时钟注入点。
@@ -98,6 +100,7 @@ export class SyncController {
     this.revision = options.initial?.revision ?? 0
     this.pending = options.initial?.pending
     for (const sessionId of options.initial?.cwdPending ?? []) this.cwdPending.add(sessionId)
+    for (const entry of options.initial?.blocked ?? []) this.blocked.set(entry.sessionId, entry)
   }
 
   /** 当前客户端可读快照。 */
@@ -116,6 +119,7 @@ export class SyncController {
       revision: this.revision,
       sessions: this.sessions,
       cwdPending: [...this.cwdPending],
+      blocked: [...this.blocked.values()] as readonly BlockedSessionView[],
       live: this.live,
     }
   }
@@ -123,6 +127,26 @@ export class SyncController {
   /** 用户已处理某个 cwd 决策后清除警告。 */
   clearCwdPending(sessionId: string): void {
     this.cwdPending.delete(sessionId)
+    this.persistNow()
+  }
+
+  /** 会话是否因分叉被 Host 侧拦截。 */
+  isBlocked(sessionId: string): boolean {
+    return this.blocked.has(sessionId)
+  }
+
+  /** 清除一个人工处理完成的阻塞项。 */
+  clearBlocked(sessionId: string): void {
+    if (!this.blocked.delete(sessionId)) return
+    this.persistNow()
+  }
+
+  /** 记录分叉；下一次该会话成功同步时自动清除。 */
+  private block(sessionId: string, kind: SyncErrorKind, message: string): void {
+    if (kind !== 'diverged') return
+    const existing = this.blocked.get(sessionId)
+    if (existing !== undefined && existing.message === message) return
+    this.blocked.set(sessionId, { sessionId, kind, message, at: this.now() })
     this.persistNow()
   }
 
@@ -236,6 +260,7 @@ export class SyncController {
       revision: this.revision,
       ...this.pending === undefined ? {} : { pending: this.pending },
       ...this.cwdPending.size === 0 ? {} : { cwdPending: [...this.cwdPending] },
+      ...this.blocked.size === 0 ? {} : { blocked: [...this.blocked.values()] },
     }
   }
 
@@ -280,6 +305,9 @@ export class SyncController {
       this.options.logger?.info(`dsh-session-sync: 推送 ${pushed.length} 个会话，失败 ${failed.length}，跳过 ${skipped}`)
     }
     for (const session of report.sessions) views.push(pushView(session))
+    for (const session of report.sessions) {
+      if (session.status === 'error') this.block(session.sessionId, session.kind ?? 'unknown', session.error ?? '未知错误')
+    }
     for (const session of failed) {
       const kind = session.kind ?? 'unknown'
       errors.push({ kind, message: session.error ?? '未知错误' })
@@ -305,6 +333,8 @@ export class SyncController {
       } else if (session.status !== 'error') {
         this.cwdPending.delete(session.sessionId)
       }
+      if (session.status === 'error') this.block(session.sessionId, session.kind ?? 'unknown', session.error ?? '未知错误')
+      else if (this.blocked.delete(session.sessionId)) this.persistNow()
     }
     for (const session of failed) {
       const kind = session.kind ?? 'unknown'

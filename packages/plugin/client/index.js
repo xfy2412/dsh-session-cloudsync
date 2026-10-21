@@ -384,18 +384,23 @@ window.__ModuleLoader__.load({
       if (status === null) return 'warn'
       if (status.running) return 'syncing'
       if (status.lastError !== null) return 'bad'
+      if (Array.isArray(status.blocked) && status.blocked.length > 0) return 'bad'
       if (Array.isArray(status.cwdPending) && status.cwdPending.length > 0) return 'warn'
       if (status.configured) return 'ok'
       return 'warn'
     }
 
-    /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策。 */
+    /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策 / 已分叉。 */
     function sessionState(status, sessionId) {
-      if (status === null) return { pending: false, tail: false, lag: false, cwd: false }
+      if (status === null) return { pending: false, tail: false, lag: false, cwd: false, blocked: false, blockedReason: '' }
       var pending = status.pending !== null && status.pending !== undefined && status.pending.sessionId === sessionId
       var tail = false
       var lag = false
       var cwd = Array.isArray(status.cwdPending) && status.cwdPending.indexOf(sessionId) !== -1
+      var blocked = null
+      if (Array.isArray(status.blocked)) {
+        blocked = status.blocked.find(function (entry) { return entry && entry.sessionId === sessionId }) || null
+      }
       if (Array.isArray(status.sessions)) {
         tail = status.sessions.some(function (view) {
           return view.sessionId === sessionId && view.direction === 'push' && view.tailOpen === true
@@ -404,11 +409,16 @@ window.__ModuleLoader__.load({
           return view.sessionId === sessionId && view.direction === 'push' && view.status === 'remote-ahead'
         })
       }
-      return { pending: pending, tail: tail, lag: lag, cwd: cwd }
+      return {
+        pending: pending, tail: tail, lag: lag, cwd: cwd,
+        blocked: blocked !== null,
+        blockedReason: blocked && blocked.message ? blocked.message : '',
+      }
     }
 
     function sessionBlockReason(status, sessionId) {
       var state = sessionState(status, sessionId)
+      if (state.blocked) return '这个会话的本地与远端历史已分叉，已阻止继续写入；请先人工处理'
       if (state.pending) return '正在应用云端写入，暂不能继续这个会话'
       if (state.tail) return '这个会话有未闭合的同步尾巴，先完成当前轮次再打开'
       if (state.lag) return '这个会话的安全边界还落后于远端，暂不能继续'
@@ -1093,17 +1103,20 @@ window.__ModuleLoader__.load({
         : (status.running && Array.isArray(status.live) && status.live.length > 0 ? status.live : status.sessions)
       var sessions = Array.isArray(rawSessions) ? rawSessions.slice() : []
       var cwdPending = status && Array.isArray(status.cwdPending) ? status.cwdPending : []
+      var blocked = status && Array.isArray(status.blocked) ? status.blocked : []
+      var blockedIds = blocked.map(function (entry) { return entry.sessionId })
       var total = sessions.length
       var done = sessions.filter(function (session) {
         return session.status !== 'error' && session.status !== 'pulling' && session.status !== 'pushing'
       }).length
       var failed = sessions.some(function (session) { return session.status === 'error' })
       var running = status && status.running
-      var title = failed ? '同步失败' : running ? '正在同步' : cwdPending.length > 0 ? '需要处理' : '同步完成'
+      var title = failed ? '同步失败' : running ? '正在同步' : cwdPending.length > 0 || blocked.length > 0 ? '需要处理' : '同步完成'
       var subtitle = failed ? '有会话未完成，已暂停'
         : running ? (total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
-          : cwdPending.length > 0 ? cwdPending.length + ' 个会话 cwd 在工作区外，等待处理'
-            : total === 0 ? '还没有同步记录' : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
+          : blocked.length > 0 ? blocked.length + ' 个会话历史分叉，已阻止继续写入'
+            : cwdPending.length > 0 ? cwdPending.length + ' 个会话 cwd 在工作区外，等待处理'
+              : total === 0 ? '还没有同步记录' : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
       var dot = statusDot(status)
       var segments = sessions.map(function (session, index) {
         var bad = session.status === 'error'
@@ -1208,25 +1221,38 @@ window.__ModuleLoader__.load({
       }
 
       var rows = sessions.map(function (session, index) {
-        var tag = session.status === 'error' ? '失败'
-          : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
-            : session.status === 'pulling' || session.status === 'pushing' || running ? '同步中' : '等待'
+        var isBlocked = blockedIds.indexOf(session.sessionId) !== -1
+        var tag = isBlocked ? '分叉'
+          : session.status === 'error' ? '失败'
+            : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
+              : session.status === 'pulling' || session.status === 'pushing' || running ? '同步中' : '等待'
         return h('div', { className: 'dssync-rowline', key: session.sessionId + ':' + session.direction + ':' + index },
-          h('span', { className: 'dssync-st ' + (session.status === 'error' ? 'bad' : tag === '已完成' ? 'ok' : tag === '同步中' ? 'run' : '') }),
+          h('span', { className: 'dssync-st ' + (isBlocked || session.status === 'error' ? 'bad' : tag === '已完成' ? 'ok' : tag === '同步中' ? 'run' : '') }),
           h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + session.sessionId),
           h('span', { className: 'tag' }, tag),
-          session.cwdNonPortable ? h('span', {
+          isBlocked ? h('span', { className: 'dssync-warn', title: '本地与远端历史已分叉，已阻止继续写入' }, '已阻止') : null,
+          !isBlocked && session.cwdNonPortable ? h('span', {
             className: 'dssync-warn', title: '最后 cwd 在工作区外，跨设备可能无法正确恢复',
           }, 'cwd 外') : null,
-          session.cwdNonPortable ? cwdActions(session.sessionId) : null)
+          !isBlocked && session.cwdNonPortable ? cwdActions(session.sessionId) : null)
       })
       var seenSessions = new Set(sessions.map(function (session) { return session.sessionId }))
-      var pendingRows = cwdPending.filter(function (id) { return !seenSessions.has(id) }).map(function (id) {
+      var pendingRows = cwdPending.filter(function (id) {
+        return !seenSessions.has(id) && blockedIds.indexOf(id) === -1
+      }).map(function (id) {
         return h('div', { className: 'dssync-rowline', key: id + ':pending' },
           h('span', { className: 'dssync-st run' }),
           h('span', { className: 'name' }, '↓ ' + id),
           h('span', { className: 'dssync-warn' }, 'cwd 外'),
           cwdActions(id))
+      })
+      var blockedRows = blocked.filter(function (entry) {
+        return !seenSessions.has(entry.sessionId)
+      }).map(function (entry) {
+        return h('div', { className: 'dssync-rowline', key: entry.sessionId + ':blocked' },
+          h('span', { className: 'dssync-st bad' }),
+          h('span', { className: 'name' }, '↓ ' + entry.sessionId),
+          h('span', { className: 'dssync-warn', title: entry.message || '本地与远端历史已分叉' }, '已阻止'))
       })
 
       var head = h('div', {
@@ -1255,10 +1281,12 @@ window.__ModuleLoader__.load({
 
       var panel = h('div', { className: 'dssync-collapse' },
         h('div', { className: 'dssync-collapse-in' },
-          h('div', { className: 'dssync-panel' }, rows.length > 0 || pendingRows.length > 0 ? rows.concat(pendingRows) : h('div', { className: 'dssync-note' }, '暂无会话记录')),
+          h('div', { className: 'dssync-panel' }, rows.length > 0 || pendingRows.length > 0 || blockedRows.length > 0
+            ? rows.concat(pendingRows, blockedRows)
+            : h('div', { className: 'dssync-note' }, '暂无会话记录')),
           status && status.lastError ? h('div', { className: 'dssync-error' }, status.lastError.message + (status.retryCount > 0 ? ' · 已重试 ' + status.retryCount + ' 次' : '')) : null,
           h('div', { className: 'dssync-foot' },
-            h('span', null, running ? '正在同步…' : failed ? '已暂停' : '全部完成'),
+            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blocked.length > 0 ? '有分叉待处理' : cwdPending.length > 0 ? '有 cwd 待处理' : '全部完成'),
             h('span', { className: 'spacer' }),
             h('button', { className: 'dssync-mini', type: 'button', onClick: function () {
               model.syncNow().then(function (result) {

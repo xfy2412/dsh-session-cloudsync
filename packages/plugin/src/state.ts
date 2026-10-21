@@ -8,7 +8,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { PendingApply } from './engine.ts'
+import type { BlockedSessionState, PendingApply } from './engine.ts'
 
 /** 状态文件格式版本。 */
 export const STATE_VERSION = 1
@@ -19,6 +19,7 @@ export interface PullJournal {
   readonly revision: number
   readonly pending?: PendingApply
   readonly cwdPending?: readonly string[]
+  readonly blocked?: readonly BlockedSessionState[]
 }
 
 /**
@@ -40,20 +41,17 @@ export function readPullJournal(file: string): PullJournal {
   const cwdPending = Array.isArray(record['cwdPending'])
     ? record['cwdPending'].filter((id): id is string => typeof id === 'string' && id !== '')
     : undefined
+  const blocked = blockedFrom(record['blocked'])
+  const extra = {
+    ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
+    ...blocked === undefined ? {} : { blocked },
+  }
   const pending = record['pending']
   if (pending === undefined) {
-    return {
-      version: STATE_VERSION,
-      revision: revision as number,
-      ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
-    }
+    return { version: STATE_VERSION, revision: revision as number, ...extra }
   }
   if (pending === null || typeof pending !== 'object' || Array.isArray(pending)) {
-    return {
-      version: STATE_VERSION,
-      revision: revision as number,
-      ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
-    }
+    return { version: STATE_VERSION, revision: revision as number, ...extra }
   }
   const entry = pending as Record<string, unknown>
   const sessionId = entry['sessionId']
@@ -62,14 +60,34 @@ export function readPullJournal(file: string): PullJournal {
   if (typeof sessionId !== 'string' || sessionId === ''
     || !Number.isSafeInteger(targetSeq) || (targetSeq as number) < -1
     || !Number.isSafeInteger(at)) {
-    return { version: STATE_VERSION, revision: revision as number }
+    return { version: STATE_VERSION, revision: revision as number, ...extra }
   }
   return {
     version: STATE_VERSION,
     revision: revision as number,
     pending: { sessionId, targetSeq: targetSeq as number, at: at as number },
-    ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
+    ...extra,
   }
+}
+
+/** 只接受当前已定义的阻塞类型，损坏记录静默丢弃。 */
+function blockedFrom(value: unknown): readonly BlockedSessionState[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const blocked: BlockedSessionState[] = []
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+    const entry = item as Record<string, unknown>
+    const sessionId = entry['sessionId']
+    const kind = entry['kind']
+    const message = entry['message']
+    const at = entry['at']
+    if (typeof sessionId !== 'string' || sessionId === ''
+      || kind !== 'diverged'
+      || typeof message !== 'string' || message === ''
+      || !Number.isSafeInteger(at)) continue
+    blocked.push({ sessionId, kind, message, at: at as number })
+  }
+  return blocked.length === 0 ? undefined : blocked
 }
 
 /**

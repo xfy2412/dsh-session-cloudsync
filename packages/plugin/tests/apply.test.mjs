@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../src/index.ts'
 
 /** 造一个只提供最小能力的宿主上下文。 */
 function fakeContext(connection, services = {}) {
   const disposers = []
+  const listeners = new Map()
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
     sessions: { get: () => undefined, flush: async () => true },
@@ -15,6 +19,10 @@ function fakeContext(connection, services = {}) {
       create: async () => { throw new Error('不应创建会话') },
     },
     get: (name) => name === 'connection' ? connection : services[name],
+    on: (event, listener) => {
+      listeners.set(event, listener)
+      return () => { listeners.delete(event) }
+    },
     effect: (fn) => {
       const disposer = fn()
       disposers.push(disposer)
@@ -22,7 +30,7 @@ function fakeContext(connection, services = {}) {
     },
     inject: (_deps, callback) => { callback(ctx) },
   }
-  return { ctx, disposers }
+  return { ctx, disposers, listeners }
 }
 
 /** 造一个记录路由的 connection 服务。 */
@@ -44,7 +52,7 @@ function fakeConnection() {
 
 test('应用接线：未配置时仍注册状态/设置/手动同步路由', async () => {
   const connection = fakeConnection()
-  const { ctx } = fakeContext(connection)
+  const { ctx, listeners } = fakeContext(connection)
   apply(ctx, {
     enabled: true,
     serverUrl: '',
@@ -52,6 +60,15 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
     passphrase: '',
     autoSync: false,
   })
+
+  assert.equal(typeof listeners.get('agent/pre-step'), 'function')
+  let delegated = false
+  const decision = await listeners.get('agent/pre-step')(
+    { agent: { session: { header: { id: 'not-blocked' } } } },
+    async () => { delegated = true; return { kind: 'enter' } },
+  )
+  assert.equal(delegated, true)
+  assert.deepEqual(decision, { kind: 'enter' })
 
   assert.deepEqual(connection.routes.map((route) => route.path), [
     '/api/session-sync/status',
@@ -72,6 +89,41 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
   assert.equal(syncBody.value.ok, false)
   assert.equal(syncBody.value.code, 'unconfigured')
   assert.equal(syncBody.value.message, 'serverUrl 未配置')
+})
+
+test('应用接线：恢复的 blocked 会话在 agent/pre-step 被拒绝', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-sync-apply-'))
+  const statePath = join(dir, 'session-sync', 'state.json')
+  mkdirSync(join(dir, 'session-sync'), { recursive: true })
+  writeFileSync(statePath, JSON.stringify({
+    version: 1,
+    revision: 0,
+    blocked: [{ sessionId: 'blocked-session', kind: 'diverged', message: 'old divergence', at: 1 }],
+  }))
+  const connection = fakeConnection()
+  const { ctx, listeners } = fakeContext(connection, { dshHomePath: () => statePath })
+  apply(ctx, {
+    enabled: true,
+    serverUrl: '',
+    token: '',
+    passphrase: '',
+    autoSync: false,
+  })
+
+  let delegated = false
+  const decision = await listeners.get('agent/pre-step')(
+    { agent: { session: { header: { id: 'blocked-session' } } } },
+    async () => { delegated = true; return { kind: 'enter' } },
+  )
+  assert.deepEqual(decision, { kind: 'reject' })
+  assert.equal(delegated, false)
+
+  const childDecision = await listeners.get('agent/pre-step')(
+    { agent: { session: { header: { id: 'child-session', origin: 'subagent', parentSession: 'blocked-session' } } } },
+    async () => { delegated = true; return { kind: 'enter' } },
+  )
+  assert.deepEqual(childDecision, { kind: 'reject' })
+  assert.equal(delegated, false)
 })
 
 test('应用接线：Schemastery volatile 引用按 .get() 读取', async () => {

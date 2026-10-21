@@ -319,6 +319,7 @@ export function apply(ctx: Context, config: Config): void {
         revision: state.revision,
         ...state.pending === undefined ? {} : { pending: state.pending },
         ...state.cwdPending === undefined || state.cwdPending.length === 0 ? {} : { cwdPending: state.cwdPending },
+        ...state.blocked === undefined || state.blocked.length === 0 ? {} : { blocked: state.blocked },
       })
     } catch (error: unknown) {
       logger.warn(`dsh-session-sync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
@@ -348,8 +349,44 @@ export function apply(ctx: Context, config: Config): void {
       revision: initialJournal.revision,
       ...initialJournal.pending === undefined ? {} : { pending: initialJournal.pending },
       ...initialJournal.cwdPending === undefined ? {} : { cwdPending: initialJournal.cwdPending },
+      ...initialJournal.blocked === undefined ? {} : { blocked: initialJournal.blocked },
     },
     logger,
+  })
+
+  // 分叉会话已经无法安全确定远端历史；Host 侧在模型 step 前拒绝，
+  // 避免只有 client composer 提示、实际仍能继续写本地。
+  // dsh-agent 只提供事件类型、不是本插件的运行时依赖；这里只声明用到的
+  // 最小监听形状，避免为了一个类型引入额外 peer。
+  type PreStepPayloadLike = {
+    readonly agent: {
+      readonly session: {
+        readonly header: {
+          readonly id: string
+          readonly origin?: string
+          readonly parentSession?: string
+        }
+      }
+    }
+  }
+  const onPreStep = ctx.on.bind(ctx) as unknown as (
+    event: 'agent/pre-step',
+    listener: (payload: PreStepPayloadLike, next: () => Promise<unknown>) => Promise<unknown>,
+  ) => () => void
+  onPreStep('agent/pre-step', async (payload, next) => {
+    // 根会话分叉时，子代理也不能继续跑；沿 durable header 的 subagent 链往上查。
+    let header = payload.agent.session.header
+    const visited = new Set<string>()
+    while (!visited.has(header.id)) {
+      if (controller.isBlocked(header.id)) return { kind: 'reject' as const }
+      visited.add(header.id)
+      if (header.origin !== 'subagent' || header.parentSession === undefined) break
+      if (controller.isBlocked(header.parentSession)) return { kind: 'reject' as const }
+      const parent = ctx.sessions.get(header.parentSession as SessionId)
+      if (parent === undefined) break
+      header = parent.header
+    }
+    return next()
   })
 
   const pullDeps = {

@@ -42,6 +42,18 @@ export interface SyncErrorView {
   readonly at: number
 }
 
+/** 一个需要人工处理、不能继续写入的会话。 */
+export interface BlockedSessionView {
+  /** 会话 id。 */
+  readonly sessionId: string
+  /** 为什么阻塞；当前只有分叉会进入这里。 */
+  readonly kind: SyncErrorKind
+  /** 可读原因。 */
+  readonly message: string
+  /** 记录时间（epoch ms）。 */
+  readonly at: number
+}
+
 /** 客户端轮询的完整同步状态。 */
 export interface SyncStatus {
   /** serverUrl / token / passphrase 是否齐全。 */
@@ -68,6 +80,8 @@ export interface SyncStatus {
   readonly sessions: readonly SessionSyncView[]
   /** 等待用户决定 cwd 修正/跳过的会话 id。 */
   readonly cwdPending: readonly string[]
+  /** 已分叉、必须人工处理的会话；这些会话不能继续写入。 */
+  readonly blocked: readonly BlockedSessionView[]
   /** 当前一轮的实时逐会话阶段；空闲时为空数组。 */
   readonly live: readonly SessionSyncView[]
 }

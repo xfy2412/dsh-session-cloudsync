@@ -230,6 +230,14 @@ export interface CwdCorrectionResult {
   readonly message?: string
 }
 
+/** 一个等待人工处理、不能继续写入的会话。 */
+export interface BlockedSessionState {
+  readonly sessionId: string
+  readonly kind: SyncErrorKind
+  readonly message: string
+  readonly at: number
+}
+
 /** 一次未完成的拉取。 */
 export interface PendingApply {
   readonly sessionId: string
@@ -245,6 +253,8 @@ export interface PullState {
   readonly pending?: PendingApply
   /** 等待用户决定 cwd 修正/跳过的会话 id。 */
   readonly cwdPending?: readonly string[]
+  /** 已分叉、等待人工处理的会话。 */
+  readonly blocked?: readonly BlockedSessionState[]
 }
 
 /** 单个会话的拉取结果。 */

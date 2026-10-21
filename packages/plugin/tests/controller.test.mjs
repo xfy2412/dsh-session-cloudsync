@@ -119,6 +119,37 @@ test('控制器：从状态文件恢复 cwd 待处理项', () => {
   assert.deepEqual(fixture.controller.snapshot().cwdPending, ['s-restored'])
 })
 
+test('控制器：分叉会话进入 blocked、持久化，并在后续成功同步后清除', async () => {
+  let report = pullReport([
+    { sessionId: 's-diverged', status: 'error', kind: 'diverged', error: '共享前缀批次 3 不一致（diverged）' },
+  ], 1)
+  const fixture = createController({ pull: async () => report })
+  const first = await fixture.controller.run()
+  assert.equal(first.ok, false)
+  assert.deepEqual(fixture.controller.snapshot().blocked.map((entry) => entry.sessionId), ['s-diverged'])
+  assert.equal(fixture.controller.isBlocked('s-diverged'), true)
+  assert.deepEqual(fixture.persists.at(-1).blocked.map((entry) => entry.sessionId), ['s-diverged'])
+
+  report = pullReport([{ sessionId: 's-diverged', status: 'up-to-date' }], 2)
+  const second = await fixture.controller.run({ manual: true })
+  assert.equal(second.ok, true)
+  assert.deepEqual(fixture.controller.snapshot().blocked, [])
+  assert.equal(fixture.controller.isBlocked('s-diverged'), false)
+})
+
+test('控制器：从状态文件恢复 blocked 项', () => {
+  const fixture = createController({
+    initial: {
+      revision: 4,
+      blocked: [{ sessionId: 's-blocked', kind: 'diverged', message: 'old divergence', at: 10 }],
+    },
+  })
+  assert.equal(fixture.controller.isBlocked('s-blocked'), true)
+  assert.deepEqual(fixture.controller.snapshot().blocked, [
+    { sessionId: 's-blocked', kind: 'diverged', message: 'old divergence', at: 10 },
+  ])
+})
+
 test('控制器：推送错误进入退避，自动轮次跳过，手动轮次立即重试', async () => {
   let pushCalls = 0
   let fail = true
