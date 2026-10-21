@@ -194,6 +194,16 @@ test('宿主 API：blocked 决策按 sessionId/action 调用控制面', async ()
   assert.equal(seenAction, 'force')
   assert.equal(seenCreatedAt, 42)
   assert.deepEqual((await bodyOf(response)).value, { ok: true })
+
+  const restored = await route(routes, '/api/session-sync/blocked').fetch(
+    new Request('http://host/api/session-sync/blocked', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-blocked', action: 'restore', createdAt: 42, formatVersion: 4 }),
+    }),
+  )
+  assert.equal(restored.status, 200)
+  assert.equal(seenAction, 'restore')
 })
 
 test('宿主 API：cwd 决策缺少 action 时返回 400', async () => {

@@ -125,6 +125,7 @@ export class SyncController {
       sessions: this.sessions,
       cwdPending: [...this.cwdPending],
       blocked: [...this.blocked.values()] as readonly BlockedSessionView[],
+      blockedDecisions: [...this.blockedDecisions.values()],
       live: this.live,
     }
   }
@@ -155,8 +156,26 @@ export class SyncController {
     createdAt: number,
     formatVersion: number,
   ): void {
+    const blocked = this.blocked.get(sessionId)
+    const message = blocked?.message ?? this.blockedDecisions.get(sessionId)?.message ?? '历史已分叉'
     this.blocked.delete(sessionId)
-    this.blockedDecisions.set(sessionId, { sessionId, action, at: this.now(), createdAt, formatVersion })
+    this.blockedDecisions.set(sessionId, { sessionId, action, message, at: this.now(), createdAt, formatVersion })
+    this.persistNow()
+  }
+
+  /** 撤销忽略/强行写入，恢复 Host 侧硬阻塞。 */
+  restoreBlocked(sessionId: string, createdAt: number, formatVersion: number): void {
+    const decision = this.blockedDecisions.get(sessionId)
+    if (decision === undefined || !sameLifecycle(decision, createdAt, formatVersion)) return
+    this.blockedDecisions.delete(sessionId)
+    this.blocked.set(sessionId, {
+      sessionId,
+      createdAt,
+      formatVersion,
+      kind: 'diverged',
+      message: decision.message,
+      at: this.now(),
+    })
     this.persistNow()
   }
 

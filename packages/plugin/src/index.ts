@@ -554,11 +554,12 @@ export function apply(ctx: Context, config: Config): void {
     },
     resolveBlocked: async (
       sessionId: string,
-      action: 'ignore' | 'force',
+      action: 'ignore' | 'force' | 'restore',
       createdAt: number,
       formatVersion: number,
     ) => {
-      controller.resolveBlocked(sessionId, action, createdAt, formatVersion)
+      if (action === 'restore') controller.restoreBlocked(sessionId, createdAt, formatVersion)
+      else controller.resolveBlocked(sessionId, action, createdAt, formatVersion)
       return { ok: true as const }
     },
   }

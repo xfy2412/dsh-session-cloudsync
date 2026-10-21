@@ -401,6 +401,7 @@ window.__ModuleLoader__.load({
       if (status.lastError !== null) return 'bad'
       if (Array.isArray(status.blocked) && status.blocked.length > 0) return 'bad'
       if (Array.isArray(status.cwdPending) && status.cwdPending.length > 0) return 'warn'
+      if (Array.isArray(status.blockedDecisions) && status.blockedDecisions.length > 0) return 'warn'
       if (status.configured) return 'ok'
       return 'warn'
     }
@@ -1119,7 +1120,9 @@ window.__ModuleLoader__.load({
       var sessions = Array.isArray(rawSessions) ? rawSessions.slice() : []
       var cwdPending = status && Array.isArray(status.cwdPending) ? status.cwdPending : []
       var blocked = status && Array.isArray(status.blocked) ? status.blocked : []
+      var decisions = status && Array.isArray(status.blockedDecisions) ? status.blockedDecisions : []
       var blockedIds = blocked.map(function (entry) { return entry.sessionId })
+      var decisionIds = decisions.map(function (entry) { return entry.sessionId })
       var total = sessions.length
       var done = sessions.filter(function (session) {
         return session.status !== 'error' && session.status !== 'pulling' && session.status !== 'pushing'
@@ -1131,7 +1134,8 @@ window.__ModuleLoader__.load({
         : running ? (total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
           : blocked.length > 0 ? blocked.length + ' 个会话历史分叉，已阻止继续写入'
             : cwdPending.length > 0 ? cwdPending.length + ' 个会话 cwd 在工作区外，等待处理'
-              : total === 0 ? '还没有同步记录' : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
+              : decisions.length > 0 ? decisions.length + ' 个会话已忽略或强行写入'
+                : total === 0 ? '还没有同步记录' : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
       var dot = statusDot(status)
       var segments = sessions.map(function (session, index) {
         var bad = session.status === 'error'
@@ -1257,6 +1261,24 @@ window.__ModuleLoader__.load({
         ]
       }
 
+      function decisionActions(id, entry) {
+        return [
+          h('button', {
+            className: 'dssync-mini', type: 'button', key: id + ':restore',
+            onClick: function (event) {
+              event.stopPropagation()
+              model.resolveBlocked(id, 'restore', entry.createdAt, entry.formatVersion).then(function (result) {
+                if (!result || result.ok !== true) {
+                  model.toast((result && result.error && result.error.message) || '恢复失败', true)
+                  return
+                }
+                model.toast('已恢复分叉拦截')
+              }).catch(function (error) { model.toast(errorText(error), true) })
+            },
+          }, '恢复拦截'),
+        ]
+      }
+
       var rows = sessions.map(function (session, index) {
         var blockedEntry = null
         for (var blockedIndex = 0; blockedIndex < blocked.length; blockedIndex += 1) {
@@ -1265,25 +1287,37 @@ window.__ModuleLoader__.load({
             break
           }
         }
+        var decisionEntry = null
+        for (var decisionIndex = 0; decisionIndex < decisions.length; decisionIndex += 1) {
+          if (decisions[decisionIndex] && decisions[decisionIndex].sessionId === session.sessionId) {
+            decisionEntry = decisions[decisionIndex]
+            break
+          }
+        }
         var isBlocked = blockedEntry !== null
+        var isResolved = decisionEntry !== null
+        var decisionTag = isResolved ? (decisionEntry.action === 'ignore' ? '已忽略' : '已强行写入') : ''
         var tag = isBlocked ? '分叉'
-          : session.status === 'error' ? '失败'
-            : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
-              : session.status === 'pulling' || session.status === 'pushing' || running ? '同步中' : '等待'
+          : isResolved ? decisionTag
+            : session.status === 'error' ? '失败'
+              : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
+                : session.status === 'pulling' || session.status === 'pushing' || running ? '同步中' : '等待'
         return h('div', { className: 'dssync-rowline', key: session.sessionId + ':' + session.direction + ':' + index },
-          h('span', { className: 'dssync-st ' + (isBlocked || session.status === 'error' ? 'bad' : tag === '已完成' ? 'ok' : tag === '同步中' ? 'run' : '') }),
+          h('span', { className: 'dssync-st ' + (isBlocked || session.status === 'error' ? 'bad' : isResolved ? 'run' : tag === '已完成' ? 'ok' : tag === '同步中' ? 'run' : '') }),
           h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + session.sessionId),
           h('span', { className: 'tag' }, tag),
           isBlocked ? h('span', { className: 'dssync-warn', title: '本地与远端历史已分叉，已阻止继续写入' }, '已阻止') : null,
           isBlocked ? blockedActions(session.sessionId, blockedEntry) : null,
-          !isBlocked && session.cwdNonPortable ? h('span', {
+          isResolved ? h('span', { className: 'dssync-warn', title: decisionEntry.message }, decisionTag) : null,
+          isResolved ? decisionActions(session.sessionId, decisionEntry) : null,
+          !isBlocked && !isResolved && session.cwdNonPortable ? h('span', {
             className: 'dssync-warn', title: '最后 cwd 在工作区外，跨设备可能无法正确恢复',
           }, 'cwd 外') : null,
-          !isBlocked && session.cwdNonPortable ? cwdActions(session.sessionId) : null)
+          !isBlocked && !isResolved && session.cwdNonPortable ? cwdActions(session.sessionId) : null)
       })
       var seenSessions = new Set(sessions.map(function (session) { return session.sessionId }))
       var pendingRows = cwdPending.filter(function (id) {
-        return !seenSessions.has(id) && blockedIds.indexOf(id) === -1
+        return !seenSessions.has(id) && blockedIds.indexOf(id) === -1 && decisionIds.indexOf(id) === -1
       }).map(function (id) {
         return h('div', { className: 'dssync-rowline', key: id + ':pending' },
           h('span', { className: 'dssync-st run' }),
@@ -1299,6 +1333,16 @@ window.__ModuleLoader__.load({
           h('span', { className: 'name' }, '↓ ' + entry.sessionId),
           h('span', { className: 'dssync-warn', title: entry.message || '本地与远端历史已分叉' }, '已阻止'),
           blockedActions(entry.sessionId, entry))
+      })
+      var decisionRows = decisions.filter(function (entry) {
+        return !seenSessions.has(entry.sessionId)
+      }).map(function (entry) {
+        var label = entry.action === 'ignore' ? '已忽略' : '已强行写入'
+        return h('div', { className: 'dssync-rowline', key: entry.sessionId + ':decision' },
+          h('span', { className: 'dssync-st run' }),
+          h('span', { className: 'name' }, '↓ ' + entry.sessionId),
+          h('span', { className: 'dssync-warn', title: entry.message }, label),
+          decisionActions(entry.sessionId, entry))
       })
 
       var head = h('div', {
@@ -1327,12 +1371,12 @@ window.__ModuleLoader__.load({
 
       var panel = h('div', { className: 'dssync-collapse' },
         h('div', { className: 'dssync-collapse-in' },
-          h('div', { className: 'dssync-panel' }, rows.length > 0 || pendingRows.length > 0 || blockedRows.length > 0
-            ? rows.concat(pendingRows, blockedRows)
+          h('div', { className: 'dssync-panel' }, rows.length > 0 || pendingRows.length > 0 || blockedRows.length > 0 || decisionRows.length > 0
+            ? rows.concat(pendingRows, blockedRows, decisionRows)
             : h('div', { className: 'dssync-note' }, '暂无会话记录')),
           status && status.lastError ? h('div', { className: 'dssync-error' }, status.lastError.message + (status.retryCount > 0 ? ' · 已重试 ' + status.retryCount + ' 次' : '')) : null,
           h('div', { className: 'dssync-foot' },
-            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blocked.length > 0 ? '有分叉待处理' : cwdPending.length > 0 ? '有 cwd 待处理' : '全部完成'),
+            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blocked.length > 0 ? '有分叉待处理' : cwdPending.length > 0 ? '有 cwd 待处理' : decisions.length > 0 ? '有已忽略会话' : '全部完成'),
             h('span', { className: 'spacer' }),
             h('button', { className: 'dssync-mini', type: 'button', onClick: function () {
               model.syncNow().then(function (result) {

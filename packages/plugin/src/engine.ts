@@ -249,6 +249,7 @@ export interface BlockedDecision {
   readonly createdAt: number
   readonly formatVersion: number
   readonly action: 'ignore' | 'force'
+  readonly message: string
   readonly at: number
 }
 

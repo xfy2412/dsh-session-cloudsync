@@ -22,7 +22,7 @@ test('状态文件：缺失/损坏返回空状态，写入可读回', () => {
     pending: { sessionId: 'session-x', targetSeq: 10, at: 123 },
     cwdPending: ['session-y'],
     blocked: [{ sessionId: 'session-z', kind: 'diverged', message: 'old divergence', at: 456, createdAt: 10, formatVersion: 4 }],
-    blockedDecisions: [{ sessionId: 'session-z', action: 'force', at: 789, createdAt: 10, formatVersion: 4 }],
+    blockedDecisions: [{ sessionId: 'session-z', action: 'force', message: 'old divergence', at: 789, createdAt: 10, formatVersion: 4 }],
   })
   assert.deepEqual(readPullJournal(file), {
     version: STATE_VERSION,
@@ -30,7 +30,7 @@ test('状态文件：缺失/损坏返回空状态，写入可读回', () => {
     pending: { sessionId: 'session-x', targetSeq: 10, at: 123 },
     cwdPending: ['session-y'],
     blocked: [{ sessionId: 'session-z', kind: 'diverged', message: 'old divergence', at: 456, createdAt: 10, formatVersion: 4 }],
-    blockedDecisions: [{ sessionId: 'session-z', action: 'force', at: 789, createdAt: 10, formatVersion: 4 }],
+    blockedDecisions: [{ sessionId: 'session-z', action: 'force', message: 'old divergence', at: 789, createdAt: 10, formatVersion: 4 }],
   })
   assert.ok(readFileSync(file, 'utf8').endsWith('\n'))
 })

@@ -113,15 +113,18 @@ function decisionsFrom(value: unknown): readonly BlockedDecision[] | undefined {
     const at = entry['at']
     const createdAt = entry['createdAt']
     const formatVersion = entry['formatVersion']
+    const message = entry['message']
     if (typeof sessionId !== 'string' || sessionId === ''
       || (action !== 'ignore' && action !== 'force')
       || !Number.isSafeInteger(at)
       || !Number.isSafeInteger(createdAt)
-      || !Number.isSafeInteger(formatVersion)) continue
+      || !Number.isSafeInteger(formatVersion)
+      || typeof message !== 'string' || message === '') continue
     decisions.push({
       sessionId, action, at: at as number,
       createdAt: createdAt as number,
       formatVersion: formatVersion as number,
+      message,
     })
   }
   return decisions.length === 0 ? undefined : decisions

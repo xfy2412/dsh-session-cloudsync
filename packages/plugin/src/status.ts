@@ -56,6 +56,16 @@ export interface BlockedSessionView {
   readonly at: number
 }
 
+/** 一个已经由用户决定、当前不再硬阻塞的会话。 */
+export interface BlockedDecisionView {
+  readonly sessionId: string
+  readonly createdAt: number
+  readonly formatVersion: number
+  readonly action: 'ignore' | 'force'
+  readonly message: string
+  readonly at: number
+}
+
 /** 客户端轮询的完整同步状态。 */
 export interface SyncStatus {
   /** serverUrl / token / passphrase 是否齐全。 */
@@ -84,6 +94,8 @@ export interface SyncStatus {
   readonly cwdPending: readonly string[]
   /** 已分叉、必须人工处理的会话；这些会话不能继续写入。 */
   readonly blocked: readonly BlockedSessionView[]
+  /** 用户已选择忽略/强行写入的会话；可以恢复为阻塞。 */
+  readonly blockedDecisions: readonly BlockedDecisionView[]
   /** 当前一轮的实时逐会话阶段；空闲时为空数组。 */
   readonly live: readonly SessionSyncView[]
 }

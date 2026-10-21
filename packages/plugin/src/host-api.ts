@@ -25,10 +25,10 @@ export interface SyncControl {
   syncNow(): Promise<SyncRunResult>
   /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
   cwdDecision(sessionId: string, action: 'fix' | 'skip'): Promise<CwdCorrectionResult>
-  /** 分叉会话的人工决定：ignore 不再自动提示；force 解除写入拦截。 */
+  /** 分叉会话的人工决定：ignore 不再自动提示；force 解除写入拦截；restore 恢复阻塞。 */
   resolveBlocked(
     sessionId: string,
-    action: 'ignore' | 'force',
+    action: 'ignore' | 'force' | 'restore',
     createdAt: number,
     formatVersion: number,
   ): Promise<{ readonly ok: true }>
@@ -165,7 +165,11 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             readonly formatVersion?: unknown
           }
           const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
-          const action = body.action === 'ignore' ? 'ignore' : body.action === 'force' ? 'force' : ''
+          const action = body.action === 'ignore'
+            ? 'ignore'
+            : body.action === 'force'
+              ? 'force'
+              : body.action === 'restore' ? 'restore' : ''
           const createdAt = typeof body.createdAt === 'number' && Number.isSafeInteger(body.createdAt) ? body.createdAt : undefined
           const formatVersion = typeof body.formatVersion === 'number' && Number.isSafeInteger(body.formatVersion) ? body.formatVersion : undefined
           if (sessionId === '' || action === '' || createdAt === undefined || formatVersion === undefined) {

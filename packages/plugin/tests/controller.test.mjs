@@ -134,7 +134,7 @@ test('控制器：分叉会话进入 blocked、持久化，并在后续成功同
   assert.equal(fixture.controller.isBlocked('s-diverged', 10, 4), false)
   assert.deepEqual(fixture.controller.snapshot().blocked, [])
   assert.deepEqual(fixture.persists.at(-1).blockedDecisions, [
-    { sessionId: 's-diverged', action: 'force', at: 1_000, createdAt: 10, formatVersion: 4 },
+    { sessionId: 's-diverged', action: 'force', message: '共享前缀批次 3 不一致（diverged）', at: 1_000, createdAt: 10, formatVersion: 4 },
   ])
 
   // 同一分叉再次出现时，不把用户已经强行写入的会话重新锁上。
@@ -175,6 +175,28 @@ test('控制器：blocked 决定按生命周期匹配，不误伤同 id 的新�
   fixture.controller.resolveBlocked('s-life', 'force', 10, 4)
   assert.equal(fixture.controller.isBlocked('s-life', 10, 4), false)
   assert.deepEqual(fixture.controller.snapshot().blocked, [])
+})
+
+test('控制器：忽略后可以从状态恢复为阻塞', async () => {
+  const fixture = createController({
+    pull: async () => pullReport([{
+      sessionId: 's-restore',
+      status: 'error',
+      kind: 'diverged',
+      error: 'diverged',
+      createdAt: 20,
+      formatVersion: 4,
+    }], 1),
+  })
+  await fixture.controller.run()
+  fixture.controller.resolveBlocked('s-restore', 'ignore', 20, 4)
+  assert.equal(fixture.controller.isBlocked('s-restore', 20, 4), false)
+  assert.equal(fixture.controller.snapshot().blockedDecisions[0].action, 'ignore')
+
+  fixture.controller.restoreBlocked('s-restore', 20, 4)
+  assert.equal(fixture.controller.isBlocked('s-restore', 20, 4), true)
+  assert.deepEqual(fixture.controller.snapshot().blockedDecisions, [])
+  assert.equal(fixture.controller.snapshot().blocked[0].message, 'diverged')
 })
 
 test('控制器：从状态文件恢复 blocked 项', () => {
