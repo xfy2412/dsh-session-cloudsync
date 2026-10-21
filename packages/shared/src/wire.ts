@@ -3,7 +3,7 @@
  *
  * 服务端与插件共用这张表，避免"同一个错误在两边映射成不同状态码"。
  *
- * @module @dsh-session-sync/shared/wire
+ * @module @dsh-session-cloudsync/shared/wire
  */
 import type { SyncErrorCode } from './protocol.ts'
 

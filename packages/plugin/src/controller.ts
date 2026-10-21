@@ -4,7 +4,7 @@
  * 控制器不碰 DSH 服务，只拿三个注入点：push、pull、persist。这样它既能在
  * 宿主里跑，也能在测试里用假的引擎驱动；`index.ts` 只负责把真实服务接进来。
  *
- * @module dsh-session-sync/controller
+ * @module dsh-session-cloudsync/controller
  */
 import {
   classifySyncError,
@@ -281,7 +281,7 @@ export class SyncController {
     } catch (error: unknown) {
       const classified = classifySyncError(error)
       errors.push({ kind: classified.kind, message: classified.message })
-      this.options.logger?.warn(`dsh-session-sync: 一次同步失败（${classified.kind}）：${classified.message}`)
+      this.options.logger?.warn(`dsh-session-cloudsync: 一次同步失败（${classified.kind}）：${classified.message}`)
     }
 
     this.running = false
@@ -334,7 +334,7 @@ export class SyncController {
     this.nextRetryAt = finished + delay
     const first = errors[0]!
     this.lastError = { kind: first.kind, message: first.message, at: finished }
-    this.options.logger?.warn(`dsh-session-sync: 将在 ${Math.round(delay / 1000)}s 后重试（retry=${this.retryCount}）`)
+    this.options.logger?.warn(`dsh-session-cloudsync: 将在 ${Math.round(delay / 1000)}s 后重试（retry=${this.retryCount}）`)
     return { ok: false, message: first.message, status: this.snapshot() }
   }
 
@@ -351,7 +351,7 @@ export class SyncController {
     const failed = report.sessions.filter((session) => session.status === 'error')
     const skipped = report.sessions.length - pushed.length - failed.length
     if (pushed.length > 0 || failed.length > 0) {
-      this.options.logger?.info(`dsh-session-sync: 推送 ${pushed.length} 个会话，失败 ${failed.length}，跳过 ${skipped}`)
+      this.options.logger?.info(`dsh-session-cloudsync: 推送 ${pushed.length} 个会话，失败 ${failed.length}，跳过 ${skipped}`)
     }
     for (const session of report.sessions) views.push(pushView(session))
     for (const session of report.sessions) {
@@ -364,7 +364,7 @@ export class SyncController {
     for (const session of failed) {
       const kind = session.kind ?? 'unknown'
       errors.push({ kind, message: session.error ?? '未知错误' })
-      this.options.logger?.warn(`dsh-session-sync: ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
+      this.options.logger?.warn(`dsh-session-cloudsync: ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
     }
   }
 
@@ -377,7 +377,7 @@ export class SyncController {
     const failed = report.sessions.filter((session) => session.status === 'error')
     const applied = report.sessions.filter((session) => session.status === 'pulled' || session.status === 'partial')
     if (applied.length > 0 || failed.length > 0) {
-      this.options.logger?.info(`dsh-session-sync: 拉取 ${applied.length} 个会话，失败 ${failed.length}`)
+      this.options.logger?.info(`dsh-session-cloudsync: 拉取 ${applied.length} 个会话，失败 ${failed.length}`)
     }
     for (const session of report.sessions) views.push(pullView(session))
     for (const session of report.sessions) {
@@ -400,7 +400,7 @@ export class SyncController {
     for (const session of failed) {
       const kind = session.kind ?? 'unknown'
       errors.push({ kind, message: session.error ?? '未知错误' })
-      this.options.logger?.warn(`dsh-session-sync: 拉取 ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
+      this.options.logger?.warn(`dsh-session-cloudsync: 拉取 ${session.sessionId} 失败（${kind}）：${session.error ?? '未知错误'}`)
     }
   }
 }

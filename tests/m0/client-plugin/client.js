@@ -2,7 +2,7 @@
 //
 // 关键结论候选：ctx.get('sessions').refresh() 会重拉会话列表基线（不是整页刷新）。
 window.__ModuleLoader__.load({
-  id: 'dsh-session-sync-m0-client',
+  id: 'dsh-session-cloudsync-m0-client',
   factory() {
     return {
       inject: ['sessions'],

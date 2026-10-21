@@ -36,15 +36,15 @@
 
 | 原型里的东西 | 宿主/客户端实现 |
 |---|---|
-| 初始数据 | `GET /api/session-sync/setup`、`GET /workspaces`、`GET /status` |
-| 测试连接 | `POST /api/session-sync/test` |
-| 立即同步 | `POST /api/session-sync/sync` |
-| 保存连接/范围/行为 | `ctx.remote.settings.update('session-sync', patch)` |
-| 保存 token/口令 | `ctx.remote.credentials.set('DSH_SESSION_SYNC_TOKEN' / 'DSH_SESSION_SYNC_PASSPHRASE', value)` |
-| 设置页挂载 | `plugins.bundle.config`，key = `dsh-session-sync` |
+| 初始数据 | `GET /api/session-cloudsync/setup`、`GET /workspaces`、`GET /status` |
+| 测试连接 | `POST /api/session-cloudsync/test` |
+| 立即同步 | `POST /api/session-cloudsync/sync` |
+| 保存连接/范围/行为 | `ctx.remote.settings.update('session-cloudsync', patch)` |
+| 保存 token/口令 | `ctx.remote.credentials.set('DSH_SESSION_CLOUDSYNC_TOKEN' / 'DSH_SESSION_CLOUDSYNC_PASSPHRASE', value)` |
+| 设置页挂载 | `plugins.bundle.config`，key = `dsh-session-cloudsync` |
 | 首启/气泡 | `shell.overlay`（list slot，可点击穿透，条目内再开 pointer events） |
 
-设置页的命名空间来自 `cordis.patch.yml` 里插入的 row id `session-sync`；如果将来改 row id，这里和 `ctx.remote.settings.update` 的 ns 要一起改。
+设置页的命名空间来自 `cordis.patch.yml` 里插入的 row id `session-cloudsync`；如果将来改 row id，这里和 `ctx.remote.settings.update` 的 ns 要一起改。
 
 ## 注意
 

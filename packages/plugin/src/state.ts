@@ -4,7 +4,7 @@
  * 文件很小，写入用临时文件 + rename 原子替换；解析失败视为空状态，避免
  * 一个损坏的 state.json 阻塞整个插件。
  *
- * @module dsh-session-sync/state
+ * @module dsh-session-cloudsync/state
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'

@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-session-sync/shared",
+  "name": "@dsh-session-cloudsync/shared",
   "version": "0.0.0",
   "private": true,
   "type": "module",

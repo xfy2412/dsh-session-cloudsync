@@ -36,8 +36,8 @@ function control(overrides = {}) {
       tokenSource: 'file',
       passphraseSource: 'file',
       credentialRefs: {
-        token: 'DSH_SESSION_SYNC_TOKEN',
-        passphrase: 'DSH_SESSION_SYNC_PASSPHRASE',
+        token: 'DSH_SESSION_CLOUDSYNC_TOKEN',
+        passphrase: 'DSH_SESSION_CLOUDSYNC_PASSPHRASE',
       },
     },
     workspaces: overrides.workspaces ?? (async () => ({
@@ -73,20 +73,20 @@ async function bodyOf(response) {
 test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked 七条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
-    ['/api/session-sync/status', ['GET'], 'buffered'],
-    ['/api/session-sync/setup', ['GET'], 'buffered'],
-    ['/api/session-sync/workspaces', ['GET'], 'buffered'],
-    ['/api/session-sync/test', ['POST'], 'buffered'],
-    ['/api/session-sync/sync', ['POST'], 'buffered'],
-    ['/api/session-sync/cwd', ['POST'], 'buffered'],
-    ['/api/session-sync/blocked', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/status', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/setup', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/workspaces', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/test', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/cwd', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/blocked', ['POST'], 'buffered'],
   ])
 })
 
 test('宿主 API：status 返回快照且禁止缓存', async () => {
   const routes = createHostApi(control())
-  const response = await route(routes, '/api/session-sync/status').fetch(
-    new Request('http://host/api/session-sync/status'),
+  const response = await route(routes, '/api/session-cloudsync/status').fetch(
+    new Request('http://host/api/session-cloudsync/status'),
   )
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('cache-control'), 'no-store')
@@ -95,8 +95,8 @@ test('宿主 API：status 返回快照且禁止缓存', async () => {
 
 test('宿主 API：setup 只返回非敏感字段', async () => {
   const routes = createHostApi(control())
-  const response = await route(routes, '/api/session-sync/setup').fetch(
-    new Request('http://host/api/session-sync/setup'),
+  const response = await route(routes, '/api/session-cloudsync/setup').fetch(
+    new Request('http://host/api/session-cloudsync/setup'),
   )
   assert.equal(response.status, 200)
   const body = await bodyOf(response)
@@ -106,8 +106,8 @@ test('宿主 API：setup 只返回非敏感字段', async () => {
 
 test('宿主 API：workspaces 返回同步列表与选中项', async () => {
   const routes = createHostApi(control())
-  const response = await route(routes, '/api/session-sync/workspaces').fetch(
-    new Request('http://host/api/session-sync/workspaces'),
+  const response = await route(routes, '/api/session-cloudsync/workspaces').fetch(
+    new Request('http://host/api/session-cloudsync/workspaces'),
   )
   assert.equal(response.status, 200)
   const body = await bodyOf(response)
@@ -119,8 +119,8 @@ test('宿主 API：workspaces 读取失败时返回 500', async () => {
   const routes = createHostApi(control({
     workspaces: async () => { throw new Error('无法读取工作区') },
   }))
-  const response = await route(routes, '/api/session-sync/workspaces').fetch(
-    new Request('http://host/api/session-sync/workspaces'),
+  const response = await route(routes, '/api/session-cloudsync/workspaces').fetch(
+    new Request('http://host/api/session-cloudsync/workspaces'),
   )
   assert.equal(response.status, 500)
   const body = await bodyOf(response)
@@ -130,8 +130,8 @@ test('宿主 API：workspaces 读取失败时返回 500', async () => {
 
 test('宿主 API：test 返回连接测试结果', async () => {
   const routes = createHostApi(control({ test: async () => ({ ok: false, kind: 'auth', message: 'token 无效' }) }))
-  const response = await route(routes, '/api/session-sync/test').fetch(
-    new Request('http://host/api/session-sync/test', { method: 'POST' }),
+  const response = await route(routes, '/api/session-cloudsync/test').fetch(
+    new Request('http://host/api/session-cloudsync/test', { method: 'POST' }),
   )
   assert.equal(response.status, 200)
   assert.deepEqual((await bodyOf(response)).value, { ok: false, kind: 'auth', message: 'token 无效' })
@@ -140,8 +140,8 @@ test('宿主 API：test 返回连接测试结果', async () => {
 test('宿主 API：sync 返回控制器结果', async () => {
   const result = { ok: false, code: 'already-running', message: '同步正在进行', status: { running: true } }
   const routes = createHostApi(control({ syncNow: async () => result }))
-  const response = await route(routes, '/api/session-sync/sync').fetch(
-    new Request('http://host/api/session-sync/sync', { method: 'POST' }),
+  const response = await route(routes, '/api/session-cloudsync/sync').fetch(
+    new Request('http://host/api/session-cloudsync/sync', { method: 'POST' }),
   )
   assert.equal(response.status, 200)
   assert.deepEqual((await bodyOf(response)).value, result)
@@ -157,8 +157,8 @@ test('宿主 API：cwd 决策按 sessionId/action 调用控制面', async () => 
       return { ok: true, status: 'corrected' }
     },
   }))
-  const response = await route(routes, '/api/session-sync/cwd').fetch(
-    new Request('http://host/api/session-sync/cwd', {
+  const response = await route(routes, '/api/session-cloudsync/cwd').fetch(
+    new Request('http://host/api/session-cloudsync/cwd', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId: 'session-cwd', action: 'fix' }),
@@ -182,8 +182,8 @@ test('宿主 API：blocked 决策按 sessionId/action 调用控制面', async ()
       return { ok: true }
     },
   }))
-  const response = await route(routes, '/api/session-sync/blocked').fetch(
-    new Request('http://host/api/session-sync/blocked', {
+  const response = await route(routes, '/api/session-cloudsync/blocked').fetch(
+    new Request('http://host/api/session-cloudsync/blocked', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId: 'session-blocked', action: 'force', createdAt: 42, formatVersion: 4 }),
@@ -195,8 +195,8 @@ test('宿主 API：blocked 决策按 sessionId/action 调用控制面', async ()
   assert.equal(seenCreatedAt, 42)
   assert.deepEqual((await bodyOf(response)).value, { ok: true })
 
-  const restored = await route(routes, '/api/session-sync/blocked').fetch(
-    new Request('http://host/api/session-sync/blocked', {
+  const restored = await route(routes, '/api/session-cloudsync/blocked').fetch(
+    new Request('http://host/api/session-cloudsync/blocked', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId: 'session-blocked', action: 'restore', createdAt: 42, formatVersion: 4 }),
@@ -208,8 +208,8 @@ test('宿主 API：blocked 决策按 sessionId/action 调用控制面', async ()
 
 test('宿主 API：cwd 决策缺少 action 时返回 400', async () => {
   const routes = createHostApi(control())
-  const response = await route(routes, '/api/session-sync/cwd').fetch(
-    new Request('http://host/api/session-sync/cwd', {
+  const response = await route(routes, '/api/session-cloudsync/cwd').fetch(
+    new Request('http://host/api/session-cloudsync/cwd', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId: 'session-cwd' }),
@@ -222,8 +222,8 @@ test('宿主 API：sync 抛错时返回 500 与分类', async () => {
   const routes = createHostApi(control({
     syncNow: async () => { throw new SyncHttpError('服务端 503', 503) },
   }))
-  const response = await route(routes, '/api/session-sync/sync').fetch(
-    new Request('http://host/api/session-sync/sync', { method: 'POST' }),
+  const response = await route(routes, '/api/session-cloudsync/sync').fetch(
+    new Request('http://host/api/session-cloudsync/sync', { method: 'POST' }),
   )
   assert.equal(response.status, 500)
   const body = await bodyOf(response)

@@ -7,7 +7,7 @@
 //   M0_SESSION_ID 会话 id（默认 session-m0-ingest）
 //   M0_WORKSPACE  工作区目录名（默认 m0-workspace，位于 <DSH_HOME> 下）
 //   M0_TITLE      会话标题（默认 M0 ingest probe）
-export const name = 'dsh-session-sync-m0'
+export const name = 'dsh-session-cloudsync-m0'
 
 export const inject = ['sessions', 'sessionPersistence', 'workspaceRegistry', 'webServer']
 

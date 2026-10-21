@@ -65,7 +65,7 @@ function inventory() {
     workspaces,
     sessionDirs,
     bundles: profile?.dsh?.profile?.bundles ?? [],
-    e2eInstalled: existsSync(join(tempHome, 'profiles', 'web', 'node_modules', 'dsh-session-sync-m0-e2e')),
+    e2eInstalled: existsSync(join(tempHome, 'profiles', 'web', 'node_modules', 'dsh-session-cloudsync-m0-e2e')),
   }
 }
 

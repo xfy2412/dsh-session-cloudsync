@@ -8,7 +8,7 @@
  * 会话 manifest 以**整份 JSON** 存在 `sessions.manifest_json`；服务端不解析
  * 事件内容，只校验形状与哈希。`revision` 是全局单调计数器，供 cursor 增量。
  *
- * @module @dsh-session-sync/server/db
+ * @module @dsh-session-cloudsync/server/db
  */
 import { randomBytes } from 'node:crypto'
 import { mkdirSync } from 'node:fs'

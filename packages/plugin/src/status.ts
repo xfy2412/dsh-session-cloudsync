@@ -1,10 +1,10 @@
 /**
  * 同步状态快照：宿主内部状态到客户端可读 JSON 的稳定投影。
  *
- * 快照只含非敏感字段，可以直接由 `/api/session-sync/status` 返回；token /
+ * 快照只含非敏感字段，可以直接由 `/api/session-cloudsync/status` 返回；token /
  * passphrase 永远不出现在这里。
  *
- * @module dsh-session-sync/status
+ * @module dsh-session-cloudsync/status
  */
 import type { PendingApply, SyncErrorKind } from './engine.ts'
 

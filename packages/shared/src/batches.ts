@@ -5,7 +5,7 @@
  * 这样服务端现有“首条目 seq=-1、后续 seq 连续”的链校验不需要改，同时把
  * `cwd` 从哈希里排除，跨设备不会因为本地路径不同而分叉。
  *
- * @module @dsh-session-sync/shared/batches
+ * @module @dsh-session-cloudsync/shared/batches
  */
 import { sha256 } from './crypto.ts'
 import { stableStringify } from './chain.ts'

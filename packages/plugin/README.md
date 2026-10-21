@@ -1,4 +1,4 @@
-# dsh-session-sync
+# dsh-session-cloudsync
 
 DSH 会话云同步插件：自部署服务端、端到端加密，同步根会话与子代理闭包。
 
@@ -30,8 +30,8 @@ requestTimeoutMs: 10000  # 单次 HTTP 读取超时；避免挂死
 
 token 与同步口令写在 DSH 凭据库，引用名固定：
 
-- `DSH_SESSION_SYNC_TOKEN`
-- `DSH_SESSION_SYNC_PASSPHRASE`
+- `DSH_SESSION_CLOUDSYNC_TOKEN`
+- `DSH_SESSION_CLOUDSYNC_PASSPHRASE`
 
 YAML 里的 `token` / `passphrase` 只作为 bootstrap fallback；插件每轮同步前重新解析凭据。
 

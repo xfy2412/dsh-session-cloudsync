@@ -74,21 +74,21 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
   assert.deepEqual(decision, { kind: 'enter' })
 
   assert.deepEqual(connection.routes.map((route) => route.path), [
-    '/api/session-sync/status',
-    '/api/session-sync/setup',
-    '/api/session-sync/workspaces',
-    '/api/session-sync/test',
-    '/api/session-sync/sync',
-    '/api/session-sync/cwd',
-    '/api/session-sync/blocked',
+    '/api/session-cloudsync/status',
+    '/api/session-cloudsync/setup',
+    '/api/session-cloudsync/workspaces',
+    '/api/session-cloudsync/test',
+    '/api/session-cloudsync/sync',
+    '/api/session-cloudsync/cwd',
+    '/api/session-cloudsync/blocked',
   ])
 
-  const status = await connection.routes[0].fetch(new Request('http://host/api/session-sync/status'))
+  const status = await connection.routes[0].fetch(new Request('http://host/api/session-cloudsync/status'))
   const statusBody = JSON.parse(await status.text())
   assert.equal(statusBody.value.configured, false)
   assert.equal(statusBody.value.reason, 'serverUrl 未配置')
 
-  const sync = await connection.routes[4].fetch(new Request('http://host/api/session-sync/sync', { method: 'POST' }))
+  const sync = await connection.routes[4].fetch(new Request('http://host/api/session-cloudsync/sync', { method: 'POST' }))
   const syncBody = JSON.parse(await sync.text())
   assert.equal(syncBody.value.ok, false)
   assert.equal(syncBody.value.code, 'unconfigured')
@@ -97,8 +97,8 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
 
 test('应用接线：恢复的 blocked 会话在 agent/pre-step 被拒绝', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-sync-apply-'))
-  const statePath = join(dir, 'session-sync', 'state.json')
-  mkdirSync(join(dir, 'session-sync'), { recursive: true })
+  const statePath = join(dir, 'session-cloudsync', 'state.json')
+  mkdirSync(join(dir, 'session-cloudsync'), { recursive: true })
   writeFileSync(statePath, JSON.stringify({
     version: 1,
     revision: 0,
@@ -162,7 +162,7 @@ test('应用接线：Schemastery volatile 引用按 .get() 读取', async () => 
     batchBytes: ref(1024),
   })
 
-  const setup = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  const setup = await connection.routes[1].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await setup.text())
   assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
   assert.equal(body.value.deviceName, 'dev-box')
@@ -192,12 +192,12 @@ test('应用接线：volatile 引用原地更新后 setup/status 立即读到新
     batchBytes: 1024,
   })
 
-  const first = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  const first = await connection.routes[1].fetch(new Request('http://host/api/session-cloudsync/setup'))
   assert.equal((JSON.parse(await first.text())).value.reason, 'serverUrl 未配置')
 
   values.serverUrl = 'http://127.0.0.1:8787'
   values.allowlist = ['D:/work']
-  const second = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  const second = await connection.routes[1].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await second.text())
   assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
   assert.equal(body.value.configured, true)
@@ -216,7 +216,7 @@ test('应用接线：设置信息不回传 token/passphrase', async () => {
     autoSync: false,
   })
 
-  const response = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  const response = await connection.routes[1].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await response.text())
   assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
   assert.equal(body.value.hasToken, true)
@@ -270,7 +270,7 @@ test('应用接线：workspaces 汇总工作区、根会话与子代理计数', 
     autoSync: false,
   })
 
-  const response = await connection.routes[2].fetch(new Request('http://host/api/session-sync/workspaces'))
+  const response = await connection.routes[2].fetch(new Request('http://host/api/session-cloudsync/workspaces'))
   const body = JSON.parse(await response.text())
   assert.equal(body.value.allowlistConfigured, true)
   assert.deepEqual(body.value.selectedPaths, ['D:/work'])
@@ -290,8 +290,8 @@ test('应用接线：token/passphrase 优先取 DSH 凭据库', async () => {
     credentials: {
       resolve: async (ref) => {
         requested.push(ref)
-        if (ref === 'DSH_SESSION_SYNC_TOKEN') return { value: 'credential-token', source: 'file' }
-        if (ref === 'DSH_SESSION_SYNC_PASSPHRASE') return { value: 'credential-pass', source: 'env' }
+        if (ref === 'DSH_SESSION_CLOUDSYNC_TOKEN') return { value: 'credential-token', source: 'file' }
+        if (ref === 'DSH_SESSION_CLOUDSYNC_PASSPHRASE') return { value: 'credential-pass', source: 'env' }
         return undefined
       },
     },
@@ -306,18 +306,18 @@ test('应用接线：token/passphrase 优先取 DSH 凭据库', async () => {
     autoSync: false,
   })
 
-  const response = await connection.routes[1].fetch(new Request('http://host/api/session-sync/setup'))
+  const response = await connection.routes[1].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await response.text())
   assert.equal(body.value.hasToken, true)
   assert.equal(body.value.hasPassphrase, true)
   assert.equal(body.value.tokenSource, 'file')
   assert.equal(body.value.passphraseSource, 'env')
   assert.deepEqual(body.value.credentialRefs, {
-    token: 'DSH_SESSION_SYNC_TOKEN',
-    passphrase: 'DSH_SESSION_SYNC_PASSPHRASE',
+    token: 'DSH_SESSION_CLOUDSYNC_TOKEN',
+    passphrase: 'DSH_SESSION_CLOUDSYNC_PASSPHRASE',
   })
-  assert.ok(requested.includes('DSH_SESSION_SYNC_TOKEN'))
-  assert.ok(requested.includes('DSH_SESSION_SYNC_PASSPHRASE'))
+  assert.ok(requested.includes('DSH_SESSION_CLOUDSYNC_TOKEN'))
+  assert.ok(requested.includes('DSH_SESSION_CLOUDSYNC_PASSPHRASE'))
   assert.equal(JSON.stringify(body).includes('credential-token'), false)
   assert.equal(JSON.stringify(body).includes('credential-pass'), false)
 })

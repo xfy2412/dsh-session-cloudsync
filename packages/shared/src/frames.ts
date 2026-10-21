@@ -5,7 +5,7 @@
  * 本项目的同步单位就是帧，所以这里所有函数都围绕"原始帧字节"工作，
  * 绝不对已提交的内容重新编码。
  *
- * @module @dsh-session-sync/shared/frames
+ * @module @dsh-session-cloudsync/shared/frames
  */
 import { createHash } from 'node:crypto'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'

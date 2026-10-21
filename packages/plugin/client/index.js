@@ -1,4 +1,4 @@
-// dsh-session-sync 浏览器半边。
+// dsh-session-cloudsync 浏览器半边。
 //
 // - `plugins.bundle.config`：Plugins 页里的自定义设置页（连接、凭据、工作区、同步行为）。
 // - `shell.overlay`：首启向导 + 顶部同步气泡。
@@ -7,7 +7,7 @@
 // 本文件是手写 JS，不参与 `scripts/build.mjs` 的 TypeScript 转换；加载形态与
 // dsh-time-reminder 一致。
 window.__ModuleLoader__.load({
-  id: 'dsh-session-sync',
+  id: 'dsh-session-cloudsync',
   factory: function (require) {
     var React = require('react')
     var h = React.createElement
@@ -16,12 +16,12 @@ window.__ModuleLoader__.load({
     var useRef = React.useRef
     var useState = React.useState
 
-    var API = '/api/session-sync'
-    var SETTINGS_NS = 'session-sync'
+    var API = '/api/session-cloudsync'
+    var SETTINGS_NS = 'session-cloudsync'
     /** 与宿主 src/index.ts 的 CREDENTIAL_REFS 保持一致。 */
     var CREDENTIAL_REFS = {
-      token: 'DSH_SESSION_SYNC_TOKEN',
-      passphrase: 'DSH_SESSION_SYNC_PASSPHRASE',
+      token: 'DSH_SESSION_CLOUDSYNC_TOKEN',
+      passphrase: 'DSH_SESSION_CLOUDSYNC_PASSPHRASE',
     }
     var INTERVALS = [
       { ms: 15000, label: '15 秒' },
@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
       { ms: 60000, label: '1 分钟' },
       { ms: 300000, label: '5 分钟' },
     ]
-    var ONBOARD_DISMISSED = 'dsh-session-sync.onboarding.dismissed'
+    var ONBOARD_DISMISSED = 'dsh-session-cloudsync.onboarding.dismissed'
 
     var CSS = [
       '.dssync{--dssync-accent:#5686fe;--dssync-accent-soft:rgba(86,134,254,.14);--dssync-line:var(--dsw-alias-border-l2,rgba(127,127,127,.24));--dssync-line-strong:var(--dsw-alias-border-l4,rgba(127,127,127,.42));--dssync-text:var(--dsw-alias-label-primary,inherit);--dssync-muted:var(--dsw-alias-label-secondary,rgba(220,220,230,.7));--dssync-faint:var(--dsw-alias-label-tertiary,rgba(220,220,230,.46));color:var(--dssync-text);font-size:14px;line-height:1.55}',
@@ -1444,11 +1444,11 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       var model = createModel()
       var style = document.createElement('style')
-      style.dataset.plugin = 'dsh-session-sync'
+      style.dataset.plugin = 'dsh-session-cloudsync'
       style.textContent = CSS
       document.head.appendChild(style)
-      ctx.effect(function () { return function () { style.remove() } }, 'dsh-session-sync: styles')
-      ctx.effect(function () { return function () { model.dispose() } }, 'dsh-session-sync: model')
+      ctx.effect(function () { return function () { style.remove() } }, 'dsh-session-cloudsync: styles')
+      ctx.effect(function () { return function () { model.dispose() } }, 'dsh-session-cloudsync: model')
       model.refreshAll()
 
       var credentials = ctx.get('remote.credentials')
@@ -1523,32 +1523,32 @@ window.__ModuleLoader__.load({
           document.removeEventListener('pointerdown', interceptRow, true)
           document.removeEventListener('keydown', interceptKeydown, true)
         }
-      }, 'dsh-session-sync: row interception')
+      }, 'dsh-session-cloudsync: row interception')
 
       ctx.slots.inject('conversation.input.dock', function () {
         return ctx.slots.register({
-          name: 'conversation.input.dock', id: 'session-sync-guard', order: 90,
+          name: 'conversation.input.dock', id: 'session-cloudsync-guard', order: 90,
           inject: function () { return { model: model, setBlock: setBlock } },
         }, SyncComposerGuard)
       })
 
       ctx.slots.inject('sidebar.session.row.leading', function () {
         return ctx.slots.register({
-          name: 'sidebar.session.row.leading', id: 'session-sync-mark', order: 50,
+          name: 'sidebar.session.row.leading', id: 'session-cloudsync-mark', order: 50,
           inject: function () { return { model: model } },
         }, SyncRowMark)
       })
 
       ctx.slots.inject('sidebar.session.row.hover', function () {
         return ctx.slots.register({
-          name: 'sidebar.session.row.hover', id: 'session-sync-hover', order: 50,
+          name: 'sidebar.session.row.hover', id: 'session-cloudsync-hover', order: 50,
           inject: function () { return { model: model } },
         }, SyncRowHover)
       })
 
       ctx.slots.inject('plugins.bundle.config', function () {
         return ctx.slots.register({
-          name: 'plugins.bundle.config', key: 'dsh-session-sync',
+          name: 'plugins.bundle.config', key: 'dsh-session-cloudsync',
           inject: function () {
             return {
               model: model,
@@ -1563,11 +1563,11 @@ window.__ModuleLoader__.load({
 
       ctx.slots.inject('shell.overlay', function* () {
         yield ctx.slots.register({
-          name: 'shell.overlay', id: 'dsh-session-sync-onboarding', order: 20,
+          name: 'shell.overlay', id: 'dsh-session-cloudsync-onboarding', order: 20,
           inject: function () { return { model: model, setCredential: setCredential, writeSettings: writeSettings } },
         }, Onboarding)
         yield ctx.slots.register({
-          name: 'shell.overlay', id: 'dsh-session-sync-bubble', order: 30,
+          name: 'shell.overlay', id: 'dsh-session-cloudsync-bubble', order: 30,
           inject: function () { return { model: model, openSettings: openSettings } },
         }, Bubble)
       })

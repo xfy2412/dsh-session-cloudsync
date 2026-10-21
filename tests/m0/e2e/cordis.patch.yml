@@ -1,3 +1,3 @@
 - insert:
-    - id: session-sync-m0-e2e
-      name: dsh-session-sync-m0-e2e
+    - id: session-cloudsync-m0-e2e
+      name: dsh-session-cloudsync-m0-e2e

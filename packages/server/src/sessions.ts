@@ -4,7 +4,7 @@
  * 所有写操作都在 `BEGIN IMMEDIATE` 事务里完成；append 只校验元数据与 blob
  * 存在性，不解析密文内容。链的完整性由客户端负责，服务端只保证"前缀延续"。
  *
- * @module @dsh-session-sync/server/sessions
+ * @module @dsh-session-cloudsync/server/sessions
  */
 import { existsSync } from 'node:fs'
 import { assertChain, buildManifest, manifestDigest } from '../../shared/src/chain.ts'

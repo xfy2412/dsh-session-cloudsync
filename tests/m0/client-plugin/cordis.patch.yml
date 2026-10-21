@@ -1,3 +1,3 @@
 - insert:
-    - id: session-sync-m0-client
-      name: dsh-session-sync-m0-client
+    - id: session-cloudsync-m0-client
+      name: dsh-session-cloudsync-m0-client

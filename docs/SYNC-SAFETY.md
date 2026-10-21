@@ -54,7 +54,7 @@ interface SessionSummary {
 ## 2.1 同步范围：工作区白名单与子代理闭包
 
 - `workspaceAllowlist` 是**工作区路径**列表。**空列表 = 暂不同步任何会话**；插件仍加载并注册设置/状态 API，`status.configured=false`，原因是 `workspaceAllowlist 未配置`。
-- 首启/设置页的同步列表由 `GET /api/session-sync/workspaces` 提供：每个工作区带 `title`、根会话数、子代理数、是否选中；「全选」就是把全部 `path` 写进白名单。
+- 首启/设置页的同步列表由 `GET /api/session-cloudsync/workspaces` 提供：每个工作区带 `title`、根会话数、子代理数、是否选中；「全选」就是把全部 `path` 写进白名单。
 - 推送按根会话的 `cwd` 判定白名单；子代理后代跟随根，不单独判定。只有 `origin === 'subagent'` 算后代；fork 虽然也有 `parentSession`，但它是独立根。
 - 推送顺序是**后代深到浅、根最后**；拉取按远端封好的 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入 `skipped`，不会静默丢进同步链。
 - 拉取要求 `workspacePath` 也在白名单里（拉取目标必须是已选工作区之一）。远端会话头不携带 `cwd`（跨设备路径不稳定），所以当前所有远端会话都落到 `workspacePath`；多工作区各自回填属于后续工作。
@@ -159,7 +159,7 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 
 客户端需要知道哪些会话处于 `applying` / `openTail` / safe 落后 / `diverged`。M4 已落地：
 
-- **宿主 API**：`GET /api/session-sync/status` 提供运行中/上次结果/退避/pending/逐会话 `tailOpen`，以及本轮实时 `live` 视图（`pushing` / `pulling`）；`POST /api/session-sync/sync` 手动触发；客户端轮询即可驱动首版气泡；
+- **宿主 API**：`GET /api/session-cloudsync/status` 提供运行中/上次结果/退避/pending/逐会话 `tailOpen`，以及本轮实时 `live` 视图（`pushing` / `pulling`）；`POST /api/session-cloudsync/sync` 手动触发；客户端轮询即可驱动首版气泡；
 - **apply 中**：`pending.sessionId` 命中时 composer 与列表行都拦；
 - **开放尾**：最近一次推送视图 `tailOpen: true` 的会话拦截列表打开与 composer；
 - **safe 落后**：最近一次推送视图 `remote-ahead` 的会话按 safe 落后处理，拦列表打开与输入；
@@ -181,8 +181,8 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 - [x] 等价 `syncState` 状态通道（`/status` 的 `pending` / `live` / `tailOpen` / `remote-ahead`）落地；
 - [x] `ctx.conversation.blocks.set` 对 `applying` / `openTail` / safe 落后三种状态生效；
 - [x] 捕获阶段拦截 `[data-row-key]`，覆盖 click / pointerdown / keydown；
-- [x] 空闲行 `sidebar.session.row.leading` 的同步标记（`id: 'session-sync-mark'`）；
-- [x] 运行中行的 hover 卡片状态说明（`sidebar.session.row.hover` 的 `session-sync-hover`）；
+- [x] 空闲行 `sidebar.session.row.leading` 的同步标记（`id: 'session-cloudsync-mark'`）；
+- [x] 运行中行的 hover 卡片状态说明（`sidebar.session.row.hover` 的 `session-cloudsync-hover`）；
 - [ ] `diverged`/未同步会话的输入拦截、风险说明与“强行写入分叉”确认；
 - [ ] `nonPortable` 会话的本地警告、确认后接收端追加修正与租约推送；
 - [ ] 可选视觉蒙版；

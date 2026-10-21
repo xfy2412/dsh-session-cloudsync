@@ -24,7 +24,7 @@
 | A4 | 客户端可读的状态通道（session projection 或 host service） | A3 |
 | A5 | 子代理闭包：根会话 + 全部后代；推送按后序（子先父后），拉取先建子再挂根；默认开启 | A3 |
 
-> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-sync/status`、`GET /api/session-sync/setup`、`GET /api/session-sync/workspaces`、`POST /api/session-sync/test`、`POST /api/session-sync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照含 `configured/reason/running/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`，逐会话视图带 `direction/status/batches|applied/tailOpen/kind/error`。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。
+> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-cloudsync/status`、`GET /api/session-cloudsync/setup`、`GET /api/session-cloudsync/workspaces`、`POST /api/session-cloudsync/test`、`POST /api/session-cloudsync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照含 `configured/reason/running/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`，逐会话视图带 `direction/status/batches|applied/tailOpen/kind/error`。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。
 >
 > **A5 已完成**：默认同步子代理闭包（`includeSubagents` 默认 true）；只把 `origin === 'subagent'` 当后代，fork 是独立根；推送按“后代深到浅、根最后”排序；拉取按远端 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入跳过列表。
 
@@ -40,13 +40,13 @@
 
 > 进度：**B1/B2/B4 的 host 侧已完成**。
 >
-> - B1：固定凭据引用 `DSH_SESSION_SYNC_TOKEN` / `DSH_SESSION_SYNC_PASSPHRASE`；每轮同步前 `ctx.credentials.resolve`，凭据优先、YAML `token`/`passphrase` 仅作 bootstrap fallback；`setup` 带 `hasToken/hasPassphrase/tokenSource/passphraseSource/credentialRefs`，不回传值。
+> - B1：固定凭据引用 `DSH_SESSION_CLOUDSYNC_TOKEN` / `DSH_SESSION_CLOUDSYNC_PASSPHRASE`；每轮同步前 `ctx.credentials.resolve`，凭据优先、YAML `token`/`passphrase` 仅作 bootstrap fallback；`setup` 带 `hasToken/hasPassphrase/tokenSource/passphraseSource/credentialRefs`，不回传值。
 > - B2：非敏感字段已标 `.volatile()`，DSH 设置页可直接生成表单并热更新；`token`/`passphrase` 不放进普通表单。默认单次 HTTP 读取超时 10s（`requestTimeoutMs`），避免网络挂死无限等待。
 > - `workspacePath` 是 M4 的开发期单落点占位：插件未公开发布，V2 直接用 [VAULT.md](VAULT.md) 的工作区绑定替换，不做迁移/兼容分支。
 > - 启动对账（候选列表/确认/忽略）与 raw 前缀校验见 [RECONCILE.md](RECONCILE.md)；实现前不能把当前“自动拉取所有远端会话”当作最终 UX。
 > - 宿主每轮 status/setup/sync 都重新读取 `.volatile()` 引用的 `.get()`，所以设置页保存后不必重启插件即可生效；首启/设置页的测试连接也先保存当前输入再测。
 > - B4：`GET /status`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 验证服务端可达与 token，不校验口令。
-> - **B3/B5 已完成**：`client/index.js` 通过 `plugins.bundle.config` 渲染自定义设置页（表单来自 `ctx.configForms.get('session-sync')`），`shell.overlay` 提供首启向导与顶部气泡；非敏感字段走 settings，token/passphrase 走 `remote.credentials`；首启完成后立即触发一轮同步。设置页「测试连接」会先落盘当前字段再测；首启步骤切换带方向动画，并且一旦以未配置姿态打开，后续保存不会把向导抽掉。
+> - **B3/B5 已完成**：`client/index.js` 通过 `plugins.bundle.config` 渲染自定义设置页（表单来自 `ctx.configForms.get('session-cloudsync')`），`shell.overlay` 提供首启向导与顶部气泡；非敏感字段走 settings，token/passphrase 走 `remote.credentials`；首启完成后立即触发一轮同步。设置页「测试连接」会先落盘当前字段再测；首启步骤切换带方向动画，并且一旦以未配置姿态打开，后续保存不会把向导抽掉。
 
 **官方前端接口（已确认，来自本地 DSH 源码/类型）：**
 
@@ -61,7 +61,7 @@
 
 ### 前端形态（已定）
 
-- **首启**：客户端启动请求 `GET /api/session-sync/setup`；未配置时用 `shell.overlay` 显示全屏向导（连接 → 凭据 → 工作区白名单 → 测试/首次同步），可“稍后”；之后在 Plugins 页常驻配置。向导打开/关闭有缩放淡入淡出，步骤切换按方向滑入；动效约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
+- **首启**：客户端启动请求 `GET /api/session-cloudsync/setup`；未配置时用 `shell.overlay` 显示全屏向导（连接 → 凭据 → 工作区白名单 → 测试/首次同步），可“稍后”；之后在 Plugins 页常驻配置。向导打开/关闭有缩放淡入淡出，步骤切换按方向滑入；动效约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
 - **同步预览**：不用 `conversation.session.header.*` 槽位，改为 **`shell.overlay` 的顶部居中气泡**：
   - 收起态是顶部居中的唯一云图标；点击后同一个云图标带着卡片展开，再点缩回图标；组件常驻 overlay 层，切页面不重建；
   - 一条完整进度条，无间隔切成 N 等份，每份对应一个会话；
@@ -71,7 +71,7 @@
   - 用户主动打开或操作过气泡后，失焦 5 秒再自动收回；焦点/指针回到气泡会取消，焦点在气泡内时不收回；手动点图标可立即收起；
   - 顶部居中、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
   - 窄屏切底部 sheet；`aria-live="polite"`。
-- **API**：`GET /api/session-sync/setup`、`GET /status`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区标题、根会话数、子代理数、是否选中；「全选」取全部 `path`。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
+- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区标题、根会话数、子代理数、是否选中；「全选」取全部 `path`。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
 - **刷新**：同步中每 1s 轮询 status，空闲停止。
 - **动效**：状态变化才动；微交互 120–180ms、面板 220–320ms、气泡进出 320–420ms；只动 `transform` / `opacity` / `grid-template-rows`，进度用 `linear`；必须支持 `prefers-reduced-motion`。详细约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
 
@@ -116,7 +116,7 @@
 - 同步预览 = `shell.overlay` 顶层气泡；不用标题栏槽位；
 - 首启/状态 API 走 `connection.fetch`，继承 DSH 鉴权；
 - 非敏感配置走 settings，token/passphrase 走 credentials。
-- **凭据已定**：固定引用 `DSH_SESSION_SYNC_TOKEN` / `DSH_SESSION_SYNC_PASSPHRASE`；`ctx.credentials` 优先，YAML `token`/`passphrase` 仅作 bootstrap fallback；每轮同步前解析，不要求重启。非敏感字段标 `.volatile()`，由设置页热更新。
+- **凭据已定**：固定引用 `DSH_SESSION_CLOUDSYNC_TOKEN` / `DSH_SESSION_CLOUDSYNC_PASSPHRASE`；`ctx.credentials` 优先，YAML `token`/`passphrase` 仅作 bootstrap fallback；每轮同步前解析，不要求重启。非敏感字段标 `.volatile()`，由设置页热更新。
 - **子代理闭包默认开启**（`includeSubagents: true`）：同步根会话及其全部 `origin === 'subagent'` 后代；fork 作为独立根。
 - **工作区白名单空 = 暂不同步**：`workspaceAllowlist` 为空时插件只提供设置/状态 API，不推送、不拉取；首启/设置页的同步列表提供「全选」，选中后把路径写入白名单。
 

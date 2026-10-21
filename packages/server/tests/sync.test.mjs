@@ -57,7 +57,7 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
     const deviceB = createDevice(db, 'B')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
-      const sessionId = 'session-sync-test'
+      const sessionId = 'session-cloudsync-test'
       const key = sessionKeyOf(Buffer.alloc(32, 5), sessionId)
       const sealed = sealFrames(4, sessionId, key)
       const refs = sealed.map((entry) => entry.ref)
@@ -173,7 +173,7 @@ test('append 拒绝未上传的 blob、非法请求与错误的 X-Device-Id', as
     const device = createDevice(db, 'A')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
-      const sessionId = 'session-sync-errors'
+      const sessionId = 'session-cloudsync-errors'
       const key = sessionKeyOf(Buffer.alloc(32, 6), sessionId)
       const sealed = sealFrames(2, sessionId, key)
       assert.equal((await call(base, `/v1/sessions/${sessionId}/lease`, { method: 'POST', token: device.token })).status, 200)

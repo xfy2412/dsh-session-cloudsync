@@ -3,7 +3,7 @@
 // GET /m0/ingest?id=&dir=&title=&warm=1  执行一次 ingest，revision +1
 // GET /m0/state                          返回最近一次 ingest 的状态与 revision
 
-export const name = 'dsh-session-sync-m0-e2e'
+export const name = 'dsh-session-cloudsync-m0-e2e'
 
 export const inject = ['sessions', 'sessionPersistence', 'workspaceRegistry', 'webServer']
 

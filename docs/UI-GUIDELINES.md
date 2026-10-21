@@ -1,6 +1,6 @@
 # 前端动效约定
 
-> 适用于 `dsh-session-sync` 的所有客户端页面（设置页、首启、同步气泡、会话行标记）。原型见 [dev/ui/index.html](../dev/ui/index.html)。
+> 适用于 `dsh-session-cloudsync` 的所有客户端页面（设置页、首启、同步气泡、会话行标记）。原型见 [dev/ui/index.html](../dev/ui/index.html)。
 
 ## 1. 只在状态变化时动
 

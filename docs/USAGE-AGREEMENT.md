@@ -1,14 +1,14 @@
-# dsh-session-sync 使用协议（草案）
+# dsh-session-cloudsync 使用协议（草案）
 
 > 状态：**草案**，随实现更新；不构成法律意见。
-> 适用版本：dsh-session-sync 插件与其配套自部署服务端。
+> 适用版本：dsh-session-cloudsync 插件与其配套自部署服务端。
 > 生效日期：2026-10-21。
 > 正式发布前，项目方可以调整本文；发布后以插件包内附带的版本为准。
 > 文中术语见 [GLOSSARY.md](GLOSSARY.md)。
 
 ## 1. 定位
 
-dsh-session-sync 是 DeepSeek Harness（DSH）的会话同步插件：
+dsh-session-cloudsync 是 DeepSeek Harness（DSH）的会话同步插件：
 
 - 把本机 DSH 会话同步到你自己部署的服务端，并可拉取到其他设备；
 - 默认端到端加密，服务端只保存密文与必要的同步元数据；

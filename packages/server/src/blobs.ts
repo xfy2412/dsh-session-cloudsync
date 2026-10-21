@@ -4,7 +4,7 @@
  * 每个 blob 以自身字节的 SHA-256 命名。blob 不可变，所以"与同内容的写入
  * 竞争失败"不算错误：目标位置已经存着同样的字节。
  *
- * @module @dsh-session-sync/server/blobs
+ * @module @dsh-session-cloudsync/server/blobs
  */
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'

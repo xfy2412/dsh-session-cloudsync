@@ -5,7 +5,7 @@
  * 设备 token 代表一台设备。本脚手架只提供健康检查与设备管理；
  * 会话/帧端点随同步引擎一起落地。
  *
- * @module @dsh-session-sync/server/http
+ * @module @dsh-session-cloudsync/server/http
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'

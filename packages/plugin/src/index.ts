@@ -1,11 +1,11 @@
 /**
- * dsh-session-sync 宿主插件入口。
+ * dsh-session-cloudsync 宿主插件入口。
  *
  * M4：在 M3 的推拉引擎外面加一层同步控制器——手动触发、状态快照和
- * `/api/session-sync/*` 宿主 API。未配置时也加载，设置/首启界面需要读取
+ * `/api/session-cloudsync/*` 宿主 API。未配置时也加载，设置/首启界面需要读取
  * `setup` 与 `status`。
  *
- * @module dsh-session-sync
+ * @module dsh-session-cloudsync
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
@@ -31,15 +31,15 @@ import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } fr
 import type { SetupInfo, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
-export const name = 'dsh-session-sync'
+export const name = 'dsh-session-cloudsync'
 
 /** 本插件读取的服务；缺任何一个都由加载器在装载期报错，而不是运行期。 */
 export const inject = ['sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry', 'credentials']
 
 /** token / passphrase 在 DSH 凭据库里的引用名。 */
 const CREDENTIAL_REFS = {
-  token: 'DSH_SESSION_SYNC_TOKEN',
-  passphrase: 'DSH_SESSION_SYNC_PASSPHRASE',
+  token: 'DSH_SESSION_CLOUDSYNC_TOKEN',
+  passphrase: 'DSH_SESSION_CLOUDSYNC_PASSPHRASE',
 } as const
 
 /** 插件配置。 */
@@ -134,13 +134,13 @@ function statePathOf(ctx: Context): string | undefined {
   const homePath = ctx.get('dshHomePath') as unknown
   if (typeof homePath === 'function') {
     try {
-      return (homePath as (path: string) => string)('session-sync/state.json')
+      return (homePath as (path: string) => string)('session-cloudsync/state.json')
     } catch {
       return undefined
     }
   }
   const home = process.env.DSH_HOME
-  return home === undefined || home === '' ? undefined : join(home, 'session-sync', 'state.json')
+  return home === undefined || home === '' ? undefined : join(home, 'session-cloudsync', 'state.json')
 }
 
 /**
@@ -179,7 +179,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   if (readVolatile<boolean>(config.enabled) === false) {
-    logger.info('dsh-session-sync: 已禁用')
+    logger.info('dsh-session-cloudsync: 已禁用')
     return
   }
   let serverUrl = readVolatile<string>(config.serverUrl) ?? ''
@@ -258,7 +258,7 @@ export function apply(ctx: Context, config: Config): void {
         try {
           return await credentials.resolve(ref)
         } catch (error: unknown) {
-          logger.warn(`dsh-session-sync: 读取 ${name} 凭据失败：${error instanceof Error ? error.message : String(error)}`)
+          logger.warn(`dsh-session-cloudsync: 读取 ${name} 凭据失败：${error instanceof Error ? error.message : String(error)}`)
           return undefined
         }
       }
@@ -301,7 +301,7 @@ export function apply(ctx: Context, config: Config): void {
   const workspaceRegistry = ctx.get('workspaceRegistry') as unknown as WorkspaceRegistryLike | undefined
   if (configToken !== '' || configPassphrase !== '') {
     logger.warn(
-      'dsh-session-sync: token/passphrase 仍写在 YAML；建议迁到 DSH 凭据库'
+      'dsh-session-cloudsync: token/passphrase 仍写在 YAML；建议迁到 DSH 凭据库'
       + `（${CREDENTIAL_REFS.token} / ${CREDENTIAL_REFS.passphrase}），YAML 仅作 fallback`,
     )
   }
@@ -309,7 +309,7 @@ export function apply(ctx: Context, config: Config): void {
   const initialJournal: PullJournal = statePath === undefined
     ? { version: STATE_VERSION, revision: 0 }
     : readPullJournal(statePath)
-  if (statePath === undefined) logger.info('dsh-session-sync: 找不到 DSH home，拉取状态只保存在内存')
+  if (statePath === undefined) logger.info('dsh-session-cloudsync: 找不到 DSH home，拉取状态只保存在内存')
 
   const persistState = (state: PullState): void => {
     if (statePath === undefined) return
@@ -323,7 +323,7 @@ export function apply(ctx: Context, config: Config): void {
         ...state.blockedDecisions === undefined || state.blockedDecisions.length === 0 ? {} : { blockedDecisions: state.blockedDecisions },
       })
     } catch (error: unknown) {
-      logger.warn(`dsh-session-sync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
+      logger.warn(`dsh-session-cloudsync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -482,7 +482,7 @@ export function apply(ctx: Context, config: Config): void {
     try {
       registered = workspaceRegistry?.list?.() ?? []
     } catch (error: unknown) {
-      logger.warn(`dsh-session-sync: 读取工作区列表失败：${error instanceof Error ? error.message : String(error)}`)
+      logger.warn(`dsh-session-cloudsync: 读取工作区列表失败：${error instanceof Error ? error.message : String(error)}`)
     }
 
     const candidates: SyncWorkspaceCandidate[] = []
@@ -566,13 +566,13 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['connection'], (connectionCtx) => {
     const connection = connectionCtx.get('connection') as ConnectionLike | undefined
     if (connection === undefined) {
-      logger.warn('dsh-session-sync: connection 服务不可用，状态/控制 API 未注册')
+      logger.warn('dsh-session-cloudsync: connection 服务不可用，状态/控制 API 未注册')
       return
     }
     for (const route of createHostApi(control)) {
       connectionCtx.effect(
         () => connection.fetch.register(route),
-        `dsh-session-sync: ${route.path}`,
+        `dsh-session-cloudsync: ${route.path}`,
       )
     }
   })
@@ -580,7 +580,7 @@ export function apply(ctx: Context, config: Config): void {
   void refreshSecrets().then(() => {
     const current = configuration()
     if (!current.configured) {
-      logger.info(`dsh-session-sync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
+      logger.info(`dsh-session-cloudsync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
     } else {
       void controller.run()
     }

@@ -8,7 +8,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 
-export const name = 'dsh-session-sync-m3-probe'
+export const name = 'dsh-session-cloudsync-m3-probe'
 
 export const inject = ['sessionPersistence', 'sessionQuery']
 

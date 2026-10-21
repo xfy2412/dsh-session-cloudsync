@@ -9,7 +9,7 @@
  * 转换后放进 `lib/shared/`，让插件产物保持自包含；插件源码里的
  * `../../shared/src/x.ts` 会改写成 `./shared/x.js`。
  *
- * @module dsh-session-sync/scripts/build
+ * @module dsh-session-cloudsync/scripts/build
  */
 
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

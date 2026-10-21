@@ -1,10 +1,10 @@
 /**
  * 宿主 HTTP API：把同步控制暴露给 DSH Web 客户端。
  *
- * 只注册精确的 `/api/session-sync/*` 路由，由 `ctx.connection.fetch` 继承
+ * 只注册精确的 `/api/session-cloudsync/*` 路由，由 `ctx.connection.fetch` 继承
  * DSH Web 的 owner 鉴权；不另外发 token，也不使用裸 `webServer` 路由。
  *
- * @module dsh-session-sync/host-api
+ * @module dsh-session-cloudsync/host-api
  */
 import { classifySyncError } from './engine.ts'
 import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
@@ -54,20 +54,20 @@ interface Envelope<T> {
 }
 
 /**
- * 生成 `/api/session-sync/*` 路由表。
+ * 生成 `/api/session-cloudsync/*` 路由表。
  * @param control - 宿主控制面。
  * @returns 可直接交给 `connection.fetch.register` 的路由。
  */
 export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
   return [
     {
-      path: '/api/session-sync/status',
+      path: '/api/session-cloudsync/status',
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async () => json({ ok: true, value: control.status() }),
     },
     {
-      path: '/api/session-sync/setup',
+      path: '/api/session-cloudsync/setup',
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async () => {
@@ -83,7 +83,7 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       },
     },
     {
-      path: '/api/session-sync/workspaces',
+      path: '/api/session-cloudsync/workspaces',
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async () => {
@@ -99,7 +99,7 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       },
     },
     {
-      path: '/api/session-sync/test',
+      path: '/api/session-cloudsync/test',
       methods: ['POST'],
       requestBody: 'buffered',
       fetch: async () => {
@@ -115,7 +115,7 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       },
     },
     {
-      path: '/api/session-sync/sync',
+      path: '/api/session-cloudsync/sync',
       methods: ['POST'],
       requestBody: 'buffered',
       fetch: async () => {
@@ -131,7 +131,7 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       },
     },
     {
-      path: '/api/session-sync/cwd',
+      path: '/api/session-cloudsync/cwd',
       methods: ['POST'],
       requestBody: 'buffered',
       fetch: async (request: Request) => {
@@ -153,7 +153,7 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       },
     },
     {
-      path: '/api/session-sync/blocked',
+      path: '/api/session-cloudsync/blocked',
       methods: ['POST'],
       requestBody: 'buffered',
       fetch: async (request: Request) => {

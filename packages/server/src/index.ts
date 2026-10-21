@@ -5,7 +5,7 @@
  * `serve` 启动 HTTP API；`token add|list|revoke` 管理设备 token。
  * setup token 在首次启动时打印一次，也可以从 `<data>/setup-token` 读取。
  *
- * @module @dsh-session-sync/server
+ * @module @dsh-session-cloudsync/server
  */
 import { chmodSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -19,7 +19,7 @@ interface Parsed {
 }
 
 function usage(): never {
-  console.error(`dsh-session-sync-server <命令> [选项]
+  console.error(`dsh-session-cloudsync-server <命令> [选项]
 
 命令：
   serve                      启动 HTTP API 与管理台
@@ -127,7 +127,7 @@ async function main(parsed: Parsed): Promise<void> {
       server.listen(port, host, () => {
         const address = server.address()
         const actualPort = typeof address === 'object' && address !== null ? address.port : port
-        console.log(`dsh-session-sync-server 已监听 http://${host}:${actualPort}`)
+        console.log(`dsh-session-cloudsync-server 已监听 http://${host}:${actualPort}`)
         console.log(`setup token 文件：${join(dataDir, 'setup-token')}（设备 CLI 用）`)
         if (!initialized) {
           console.log('')

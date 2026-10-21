@@ -5,7 +5,7 @@
  * 条目是封好的会话头（seq=-1），事件批次从下标 1 开始；服务端只存不透明
  * 密文，不解析内容。
  *
- * @module dsh-session-sync/engine
+ * @module dsh-session-cloudsync/engine
  */
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import {
@@ -403,7 +403,7 @@ export function classifySyncError(error: unknown): ClassifiedSyncError {
  * @returns 16 字节盐。
  */
 function defaultSalt(base: string): Buffer {
-  return Buffer.from(sha256(`dsh-session-sync/v1|${base}`).slice(0, 32), 'hex')
+  return Buffer.from(sha256(`dsh-session-cloudsync/v1|${base}`).slice(0, 32), 'hex')
 }
 
 /**
@@ -918,7 +918,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
       })
     } catch (error: unknown) {
       const classified = classifySyncError(error)
-      deps.logger?.warn(`dsh-session-sync: ${sessionId} 同步失败：${classified.message}`)
+      deps.logger?.warn(`dsh-session-cloudsync: ${sessionId} 同步失败：${classified.message}`)
       sessions.push({
         sessionId,
         status: 'error',
@@ -1385,7 +1385,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       await deps.afterApply?.(state.pending.sessionId)
     } catch (error: unknown) {
       const classified = classifySyncError(error)
-      deps.logger?.warn(`dsh-session-sync: 恢复 ${state.pending.sessionId} 失败：${classified.message}`)
+      deps.logger?.warn(`dsh-session-cloudsync: 恢复 ${state.pending.sessionId} 失败：${classified.message}`)
       reports.push({ sessionId: state.pending.sessionId, status: 'error', error: classified.message, kind: classified.kind })
       return { configured: true, sessions: reports, revision: state.revision }
     }
@@ -1406,7 +1406,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         })
       } catch (error: unknown) {
         const classified = classifySyncError(error)
-        deps.logger?.warn(`dsh-session-sync: 读取 ${change.sessionId} 的会话头失败：${classified.message}`)
+        deps.logger?.warn(`dsh-session-cloudsync: 读取 ${change.sessionId} 的会话头失败：${classified.message}`)
         reports.push({ sessionId: change.sessionId, status: 'error', error: classified.message, kind: classified.kind })
         continue
       }
@@ -1436,7 +1436,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         })
       } catch (error: unknown) {
         const classified = classifySyncError(error)
-        deps.logger?.warn(`dsh-session-sync: 拉取 ${item.sessionId} 失败：${classified.message}`)
+        deps.logger?.warn(`dsh-session-cloudsync: 拉取 ${item.sessionId} 失败：${classified.message}`)
         reports.push({
           sessionId: item.sessionId,
           status: 'error',
@@ -1478,7 +1478,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         await deps.attach(sessionId)
       } catch (error: unknown) {
         const classified = classifySyncError(error)
-        deps.logger?.warn(`dsh-session-sync: 挂载 ${sessionId} 失败：${classified.message}`)
+        deps.logger?.warn(`dsh-session-cloudsync: 挂载 ${sessionId} 失败：${classified.message}`)
         reports.push({ sessionId, status: 'error', error: classified.message, kind: classified.kind })
         return { configured: true, sessions: reports, revision: state.revision }
       }

@@ -4,7 +4,7 @@
  *
  * 服务端只会拿到密文；这里出现的密钥都留在客户端。
  *
- * @module @dsh-session-sync/shared/crypto
+ * @module @dsh-session-cloudsync/shared/crypto
  */
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, scryptSync } from 'node:crypto'
 

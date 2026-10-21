@@ -4,7 +4,7 @@
  * 这里只关心「帧字节的哈希 + 顺序 + seq 区间」，不涉及加密、HTTP 或事件内容；
  * 对同一格式代际的事件 schema 变化完全免疫。
  *
- * @module @dsh-session-sync/shared/chain
+ * @module @dsh-session-cloudsync/shared/chain
  */
 import { sha256 } from './crypto.ts'
 import type { SessionManifest } from './protocol.ts'

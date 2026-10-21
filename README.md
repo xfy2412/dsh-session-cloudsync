@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img src="assets/logo.svg" alt="dsh-session-sync" width="96">
+    <img src="assets/logo.svg" alt="dsh-session-cloudsync" width="96">
   </picture>
 </p>
 
@@ -10,7 +10,7 @@
   <a href="LICENSES/MIT.txt"><img src="https://img.shields.io/badge/plugin%20%2F%20shared-MIT-green.svg" alt="plugin/shared: MIT"></a>
 </p>
 
-# dsh-session-sync
+# dsh-session-cloudsync
 
 给 DeepSeek Harness（DSH）做的**会话云同步**：自部署服务端、端到端加密，同步会话与附件；设备台账、agent 笔记与多工作区映射见 [docs/VAULT.md](docs/VAULT.md) 设计稿。
 
@@ -19,6 +19,14 @@
 ## 支持版本
 
 DSH `>=0.2.1-rc.1 <0.2.2-0`。0.2.1 之前缺少本插件依赖的能力（如 `appendPluginRecord`），不做兼容。
+
+## 安装
+
+npm 包名：`dsh-session-cloudsync`。
+
+```sh
+dsh plugin --profile web add dsh-session-cloudsync
+```
 
 ## 目录
 

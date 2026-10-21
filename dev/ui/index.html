@@ -555,7 +555,7 @@
 
 <script>
   const WORKSPACES = [
-    { path: 'D:/git-repo/dsh-session-sync', title: 'dsh-session-sync', roots: 12, subs: 37 },
+    { path: 'D:/git-repo/dsh-session-cloudsync', title: 'dsh-session-cloudsync', roots: 12, subs: 37 },
     { path: 'D:/git-repo/ServerPluginCore', title: 'ServerPluginCore', roots: 8, subs: 19 },
     { path: 'D:/git-repo/deepseek-harness', title: 'deepseek-harness', roots: 3, subs: 2 },
     { path: 'D:/git-repo/_audit', title: '_audit', roots: 5, subs: 0 },
@@ -580,7 +580,7 @@
     status: 'ready',
     serverUrl: 'http://127.0.0.1:8787',
     deviceName: 'XFY-COLORFUL',
-    allowlist: ['D:/git-repo/dsh-session-sync'],
+    allowlist: ['D:/git-repo/dsh-session-cloudsync'],
     autoSync: true,
     interval: 60,
     includeSubagents: true,
@@ -816,7 +816,7 @@
       </aside>
       <main class="mock-chat">
         <h3>会话同步设计</h3>
-        <p>dsh-session-sync · 标准模式</p>
+        <p>dsh-session-cloudsync · 标准模式</p>
         <div class="mock-bubble-user">把同步范围改成按工作区选择；没选工作区时先不要同步。</div>
         <div class="mock-reply">
           <div>明白。同步列表会列出每个工作区的根会话和子代理数量，并提供全选。</div>
@@ -843,7 +843,7 @@
           <input class="input mono" id="ob-token" type="password" autocomplete="off" placeholder="${state.hasToken ? '已配置；留空保持不变' : '粘贴管理台/CLI 签发的 token'}"></div>
         <div class="cred-row"><div class="cred-head"><span>同步口令</span><span class="pill ${state.hasPassphrase ? 'ok' : 'warn'}">${state.hasPassphrase ? '已配置' : '未配置'}</span></div>
           <input class="input" id="ob-passphrase" type="password" autocomplete="new-password" placeholder="${state.hasPassphrase ? '已配置；留空保持不变' : '至少 8 位，所有设备一致'}"></div>
-        <p class="wizard-note" style="margin-top:16px">凭据保存在 DSH 凭据库（引用 <code>DSH_SESSION_SYNC_TOKEN</code> / <code>DSH_SESSION_SYNC_PASSPHRASE</code>），不会写入普通配置。</p>`;
+        <p class="wizard-note" style="margin-top:16px">凭据保存在 DSH 凭据库（引用 <code>DSH_SESSION_CLOUDSYNC_TOKEN</code> / <code>DSH_SESSION_CLOUDSYNC_PASSPHRASE</code>），不会写入普通配置。</p>`;
       if (step === 2) return `
         <div class="row between" style="margin-bottom:8px"><span class="hint">没有选择工作区时不会同步。</span><button class="btn small" id="ob-select-all">${state.allowlist.length === WORKSPACES.length && WORKSPACES.length > 0 ? '清空' : '全选'}</button></div>
         <div class="ws-list" id="ob-ws-list">${workspaceRowsHtml()}</div>
@@ -1369,7 +1369,7 @@
       if (next === 'ready') {
         state.hasToken = true;
         state.hasPassphrase = true;
-        state.allowlist = ['D:/git-repo/dsh-session-sync'];
+        state.allowlist = ['D:/git-repo/dsh-session-cloudsync'];
         setSessionMode('ready');
         state.bubbleVisible = true;
         state.bubbleOpen = false;

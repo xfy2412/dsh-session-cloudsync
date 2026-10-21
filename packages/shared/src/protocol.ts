@@ -4,7 +4,7 @@
  * 服务端只存不透明密文；这里的类型全是元数据：id、大小、序号区间、
  * 租约状态与墓碑。
  *
- * @module @dsh-session-sync/shared/protocol
+ * @module @dsh-session-cloudsync/shared/protocol
  */
 
 /** 所有 API 路由的前缀。 */

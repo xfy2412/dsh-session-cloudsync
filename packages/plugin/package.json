@@ -1,5 +1,5 @@
 {
-  "name": "dsh-session-sync",
+  "name": "dsh-session-cloudsync",
   "version": "0.0.0",
   "private": true,
   "type": "module",

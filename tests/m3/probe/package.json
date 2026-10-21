@@ -1,5 +1,5 @@
 {
-  "name": "dsh-session-sync-m3-probe",
+  "name": "dsh-session-cloudsync-m3-probe",
   "version": "0.0.0",
   "private": true,
   "type": "module",

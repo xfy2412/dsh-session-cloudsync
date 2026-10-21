@@ -26,7 +26,7 @@
 `fixtures/sessions/*.jsonl` 是手工构造、字节确定的日志（固定 id 与时间戳，内容为合成文本），用于在不碰真实数据的前提下测试帧解析、前缀/分叉判定与投影折叠。
 
 - `v4-minimal.jsonl`：header + 一段有代表性的对话（消息、工具调用/结果、turn/step 边界、一条未知的 `ignorable` 记录）。
-- `v4-with-plugin-record.jsonl`：同样的形状，外加本插件的 `plugin:dsh-session-sync/device` 记录。
+- `v4-with-plugin-record.jsonl`：同样的形状，外加本插件的 `plugin:dsh-session-cloudsync/device` 记录。
 - `v5-newer.jsonl`：header 声明更高的格式代际；读者必须**拒绝**它，而不是猜。
 - `v4-coverage.jsonl`：**从隔离开发实例的真实录制派生**的覆盖夹具。结构、事件类型、工具名、参数键、结果内容块都照搬录制，但所有自由文本 / 路径 / URL / 命令都替换成占位符；生成后断言纯 ASCII、无盘符、无 URL。它覆盖 35 种事件与 35 种工具（含失败结果与 `image` 内容块）。
 

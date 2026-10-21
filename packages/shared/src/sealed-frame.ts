@@ -20,7 +20,7 @@
  * 26  N   密文 + 16 字节 tag
  * ```
  *
- * @module @dsh-session-sync/shared/sealed-frame
+ * @module @dsh-session-cloudsync/shared/sealed-frame
  */
 import { createCipheriv, createDecipheriv } from 'node:crypto'
 import { deriveSubkey, sha256, TAG_BYTES, KEY_BYTES, NONCE_BYTES } from './crypto.ts'

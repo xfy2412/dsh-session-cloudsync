@@ -2,9 +2,9 @@
  * 会话闭包规划：根会话 + 全部子代理后代，子先父后。
  *
  * 只做纯计算，不碰持久化。`syncOnce` 用它决定推送顺序与跳过原因；
- * `/api/session-sync/workspaces` 用同一棵树生成同步列表。
+ * `/api/session-cloudsync/workspaces` 用同一棵树生成同步列表。
  *
- * @module dsh-session-sync/closure
+ * @module dsh-session-cloudsync/closure
  */
 
 /** 规划需要的会话头字段。 */

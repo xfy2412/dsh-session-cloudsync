@@ -89,7 +89,7 @@ device/<deviceId>
 
 ```jsonc
 {
-  "schema": "dsh-session-sync/vault/1",
+  "schema": "dsh-session-cloudsync/vault/1",
   "kind": "device/profile",
   "entity": "device-id",
   "at": 1790000000000,
@@ -119,7 +119,7 @@ device/<deviceId>
     "sessionFormatVersion": 4
   },
   "plugins": [
-    { "id": "session-sync", "name": "dsh-session-sync", "version": "0.0.0",
+    { "id": "session-cloudsync", "name": "dsh-session-cloudsync", "version": "0.0.0",
       "disabled": false, "state": "active", "source": "loaded" }
   ],
   "toolchain": {
@@ -146,7 +146,7 @@ device/<deviceId>
 - **版本来源要标**：`ctx.loader.entries()` = 加载了什么；`package.json` = 装了什么；
   `spawn` = 实际工具链是什么。三者可能不一致，不能合并成一个“版本”；
 - 工具链分 `auto` / `authored` 两源，自动采集只刷新 `auto`；同名渲染时 `authored` 优先；
-- 台账写插件自己的目录（如 `<DSH_HOME>/dsh-session-sync/ledger/<deviceId>.json`），
+- 台账写插件自己的目录（如 `<DSH_HOME>/dsh-session-cloudsync/ledger/<deviceId>.json`），
   随 Vault 上行；本地可渲染人类可读的 `DEVICES.md`；
 - agent 写入走工具白名单字段，不允许改 `deviceId`/`dshHome` 这类身份字段；
 - 不采集用户名、环境变量值、密钥路径、token；
@@ -169,7 +169,7 @@ pathKey = base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)
 
 ```jsonc
 {
-  "schema": "dsh-session-sync/vault/1",
+  "schema": "dsh-session-cloudsync/vault/1",
   "kind": "workspace/bind",
   "entity": "opaque-key",
   "data": {

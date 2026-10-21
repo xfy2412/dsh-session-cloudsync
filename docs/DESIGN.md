@@ -87,7 +87,7 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 
 会话在不同设备间继续时，模型需要知道"自己换机器了"。做法：
 
-- 在会话日志里写一条 `plugin:dsh-session-sync/device` 记录（`ignorable`，不进模型可见表面）；
+- 在会话日志里写一条 `plugin:dsh-session-cloudsync/device` 记录（`ignorable`，不进模型可见表面）；
 - 用 Session projection 折叠出"最后设备"（不扫历史，`snapshotEvents` 已弃用）；
 - 判定为换设备时，在 `agent/pre-step` 追加一条 `<system-reminder>`（最小事实 + 该工作区 agent 笔记摘要），不唤醒会话。
 

@@ -2,7 +2,7 @@
 //
 // 预期：宿主 ingest 后，页面不刷新也会出现新工作区/会话；配合 warm=1 标题也正确。
 window.__ModuleLoader__.load({
-  id: 'dsh-session-sync-m0-e2e',
+  id: 'dsh-session-cloudsync-m0-e2e',
   factory() {
     return {
       inject: ['sessions'],
