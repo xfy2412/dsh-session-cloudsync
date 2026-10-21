@@ -238,6 +238,13 @@ export interface BlockedSessionState {
   readonly at: number
 }
 
+/** 用户对一个分叉会话的人工决定。 */
+export interface BlockedDecision {
+  readonly sessionId: string
+  readonly action: 'ignore' | 'force'
+  readonly at: number
+}
+
 /** 一次未完成的拉取。 */
 export interface PendingApply {
   readonly sessionId: string
@@ -255,6 +262,8 @@ export interface PullState {
   readonly cwdPending?: readonly string[]
   /** 已分叉、等待人工处理的会话。 */
   readonly blocked?: readonly BlockedSessionState[]
+  /** 用户已经选择忽略或强行写入的会话；抑制重复阻塞。 */
+  readonly blockedDecisions?: readonly BlockedDecision[]
 }
 
 /** 单个会话的拉取结果。 */

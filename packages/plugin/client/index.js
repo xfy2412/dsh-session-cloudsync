@@ -331,6 +331,15 @@ window.__ModuleLoader__.load({
         return result
       }
 
+      async function resolveBlocked(sessionId, action) {
+        var result = await fetchJson('/blocked', {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: sessionId, action: action }),
+        })
+        await refreshStatus()
+        return result
+      }
+
       function toast(text, bad) {
         if (toastTimer !== null) clearTimeout(toastTimer)
         patch({ toast: { text: text, bad: bad === true, at: Date.now() } })
@@ -354,6 +363,7 @@ window.__ModuleLoader__.load({
         syncNow: syncNow,
         testConnection: testConnection,
         correctCwd: correctCwd,
+        resolveBlocked: resolveBlocked,
         toast: toast,
         dispose: dispose,
       }
@@ -1220,6 +1230,28 @@ window.__ModuleLoader__.load({
         ]
       }
 
+      function blockedActions(id) {
+        function settle(action) {
+          model.resolveBlocked(id, action).then(function (result) {
+            if (!result || result.ok !== true) {
+              model.toast((result && result.error && result.error.message) || '处理失败', true)
+              return
+            }
+            model.toast(action === 'ignore' ? '已忽略该分叉会话' : '已允许继续写入；不会自动合并')
+          }).catch(function (error) { model.toast(errorText(error), true) })
+        }
+        return [
+          h('button', {
+            className: 'dssync-mini', type: 'button', key: id + ':ignore',
+            onClick: function (event) { event.stopPropagation(); settle('ignore') },
+          }, '忽略'),
+          h('button', {
+            className: 'dssync-mini', type: 'button', key: id + ':force',
+            onClick: function (event) { event.stopPropagation(); settle('force') },
+          }, '强行写入'),
+        ]
+      }
+
       var rows = sessions.map(function (session, index) {
         var isBlocked = blockedIds.indexOf(session.sessionId) !== -1
         var tag = isBlocked ? '分叉'
@@ -1231,6 +1263,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + session.sessionId),
           h('span', { className: 'tag' }, tag),
           isBlocked ? h('span', { className: 'dssync-warn', title: '本地与远端历史已分叉，已阻止继续写入' }, '已阻止') : null,
+          isBlocked ? blockedActions(session.sessionId) : null,
           !isBlocked && session.cwdNonPortable ? h('span', {
             className: 'dssync-warn', title: '最后 cwd 在工作区外，跨设备可能无法正确恢复',
           }, 'cwd 外') : null,
@@ -1252,7 +1285,8 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'dssync-rowline', key: entry.sessionId + ':blocked' },
           h('span', { className: 'dssync-st bad' }),
           h('span', { className: 'name' }, '↓ ' + entry.sessionId),
-          h('span', { className: 'dssync-warn', title: entry.message || '本地与远端历史已分叉' }, '已阻止'))
+          h('span', { className: 'dssync-warn', title: entry.message || '本地与远端历史已分叉' }, '已阻止'),
+          blockedActions(entry.sessionId))
       })
 
       var head = h('div', {

@@ -54,6 +54,7 @@ function control(overrides = {}) {
     test: overrides.test ?? (async () => ({ ok: true })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
     cwdDecision: overrides.cwdDecision ?? (async () => ({ ok: true, status: 'corrected' })),
+    resolveBlocked: overrides.resolveBlocked ?? (async () => ({ ok: true })),
   }
 }
 
@@ -69,7 +70,7 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/setup/workspaces/test/sync/cwd 六条精确路由', () => {
+test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked 七条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-sync/status', ['GET'], 'buffered'],
@@ -78,6 +79,7 @@ test('宿主 API：注册 status/setup/workspaces/test/sync/cwd 六条精确路�
     ['/api/session-sync/test', ['POST'], 'buffered'],
     ['/api/session-sync/sync', ['POST'], 'buffered'],
     ['/api/session-sync/cwd', ['POST'], 'buffered'],
+    ['/api/session-sync/blocked', ['POST'], 'buffered'],
   ])
 })
 
@@ -166,6 +168,29 @@ test('宿主 API：cwd 决策按 sessionId/action 调用控制面', async () => 
   assert.equal(seen, 'session-cwd')
   assert.equal(seenAction, 'fix')
   assert.deepEqual((await bodyOf(response)).value, { ok: true, status: 'corrected' })
+})
+
+test('宿主 API：blocked 决策按 sessionId/action 调用控制面', async () => {
+  let seen = ''
+  let seenAction = ''
+  const routes = createHostApi(control({
+    resolveBlocked: async (sessionId, action) => {
+      seen = sessionId
+      seenAction = action
+      return { ok: true }
+    },
+  }))
+  const response = await route(routes, '/api/session-sync/blocked').fetch(
+    new Request('http://host/api/session-sync/blocked', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-blocked', action: 'force' }),
+    }),
+  )
+  assert.equal(response.status, 200)
+  assert.equal(seen, 'session-blocked')
+  assert.equal(seenAction, 'force')
+  assert.deepEqual((await bodyOf(response)).value, { ok: true })
 })
 
 test('宿主 API：cwd 决策缺少 action 时返回 400', async () => {

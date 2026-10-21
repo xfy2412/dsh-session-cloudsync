@@ -8,7 +8,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { BlockedSessionState, PendingApply } from './engine.ts'
+import type { BlockedDecision, BlockedSessionState, PendingApply } from './engine.ts'
 
 /** 状态文件格式版本。 */
 export const STATE_VERSION = 1
@@ -20,6 +20,7 @@ export interface PullJournal {
   readonly pending?: PendingApply
   readonly cwdPending?: readonly string[]
   readonly blocked?: readonly BlockedSessionState[]
+  readonly blockedDecisions?: readonly BlockedDecision[]
 }
 
 /**
@@ -42,9 +43,11 @@ export function readPullJournal(file: string): PullJournal {
     ? record['cwdPending'].filter((id): id is string => typeof id === 'string' && id !== '')
     : undefined
   const blocked = blockedFrom(record['blocked'])
+  const blockedDecisions = decisionsFrom(record['blockedDecisions'])
   const extra = {
     ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
     ...blocked === undefined ? {} : { blocked },
+    ...blockedDecisions === undefined ? {} : { blockedDecisions },
   }
   const pending = record['pending']
   if (pending === undefined) {
@@ -88,6 +91,24 @@ function blockedFrom(value: unknown): readonly BlockedSessionState[] | undefined
     blocked.push({ sessionId, kind, message, at: at as number })
   }
   return blocked.length === 0 ? undefined : blocked
+}
+
+/** 解析用户的分叉决定；损坏记录不阻止启动。 */
+function decisionsFrom(value: unknown): readonly BlockedDecision[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const decisions: BlockedDecision[] = []
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+    const entry = item as Record<string, unknown>
+    const sessionId = entry['sessionId']
+    const action = entry['action']
+    const at = entry['at']
+    if (typeof sessionId !== 'string' || sessionId === ''
+      || (action !== 'ignore' && action !== 'force')
+      || !Number.isSafeInteger(at)) continue
+    decisions.push({ sessionId, action, at: at as number })
+  }
+  return decisions.length === 0 ? undefined : decisions
 }
 
 /**

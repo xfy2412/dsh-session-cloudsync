@@ -8,6 +8,7 @@
  */
 import {
   classifySyncError,
+  type BlockedDecision,
   type BlockedSessionState,
   type PullReport,
   type PullSessionReport,
@@ -90,6 +91,7 @@ export class SyncController {
   private live: readonly SessionSyncView[] = []
   private readonly cwdPending = new Set<string>()
   private readonly blocked = new Map<string, BlockedSessionState>()
+  private readonly blockedDecisions = new Map<string, BlockedDecision>()
 
   /**
    * @param options - 引擎、持久化与时钟注入点。
@@ -100,7 +102,10 @@ export class SyncController {
     this.revision = options.initial?.revision ?? 0
     this.pending = options.initial?.pending
     for (const sessionId of options.initial?.cwdPending ?? []) this.cwdPending.add(sessionId)
-    for (const entry of options.initial?.blocked ?? []) this.blocked.set(entry.sessionId, entry)
+    for (const entry of options.initial?.blockedDecisions ?? []) this.blockedDecisions.set(entry.sessionId, entry)
+    for (const entry of options.initial?.blocked ?? []) {
+      if (!this.blockedDecisions.has(entry.sessionId)) this.blocked.set(entry.sessionId, entry)
+    }
   }
 
   /** 当前客户端可读快照。 */
@@ -137,13 +142,23 @@ export class SyncController {
 
   /** 清除一个人工处理完成的阻塞项。 */
   clearBlocked(sessionId: string): void {
-    if (!this.blocked.delete(sessionId)) return
+    const hadBlocked = this.blocked.delete(sessionId)
+    const hadDecision = this.blockedDecisions.delete(sessionId)
+    if (hadBlocked || hadDecision) this.persistNow()
+  }
+
+  /** 用户对分叉会话选择忽略或强行写入；两者都解除 Host 写入拦截。 */
+  resolveBlocked(sessionId: string, action: 'ignore' | 'force'): void {
+    this.blocked.delete(sessionId)
+    this.blockedDecisions.set(sessionId, { sessionId, action, at: this.now() })
     this.persistNow()
   }
 
   /** 记录分叉；下一次该会话成功同步时自动清除。 */
   private block(sessionId: string, kind: SyncErrorKind, message: string): void {
     if (kind !== 'diverged') return
+    // 用户已经明确选择忽略/强行写入后，不把同一会话反复锁回去。
+    if (this.blockedDecisions.has(sessionId)) return
     const existing = this.blocked.get(sessionId)
     if (existing !== undefined && existing.message === message) return
     this.blocked.set(sessionId, { sessionId, kind, message, at: this.now() })
@@ -261,6 +276,7 @@ export class SyncController {
       ...this.pending === undefined ? {} : { pending: this.pending },
       ...this.cwdPending.size === 0 ? {} : { cwdPending: [...this.cwdPending] },
       ...this.blocked.size === 0 ? {} : { blocked: [...this.blocked.values()] },
+      ...this.blockedDecisions.size === 0 ? {} : { blockedDecisions: [...this.blockedDecisions.values()] },
     }
   }
 
@@ -334,7 +350,11 @@ export class SyncController {
         this.cwdPending.delete(session.sessionId)
       }
       if (session.status === 'error') this.block(session.sessionId, session.kind ?? 'unknown', session.error ?? '未知错误')
-      else if (this.blocked.delete(session.sessionId)) this.persistNow()
+      else {
+        const hadBlocked = this.blocked.delete(session.sessionId)
+        const hadDecision = this.blockedDecisions.delete(session.sessionId)
+        if (hadBlocked || hadDecision) this.persistNow()
+      }
     }
     for (const session of failed) {
       const kind = session.kind ?? 'unknown'

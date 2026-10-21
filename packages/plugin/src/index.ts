@@ -320,6 +320,7 @@ export function apply(ctx: Context, config: Config): void {
         ...state.pending === undefined ? {} : { pending: state.pending },
         ...state.cwdPending === undefined || state.cwdPending.length === 0 ? {} : { cwdPending: state.cwdPending },
         ...state.blocked === undefined || state.blocked.length === 0 ? {} : { blocked: state.blocked },
+        ...state.blockedDecisions === undefined || state.blockedDecisions.length === 0 ? {} : { blockedDecisions: state.blockedDecisions },
       })
     } catch (error: unknown) {
       logger.warn(`dsh-session-sync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
@@ -350,6 +351,7 @@ export function apply(ctx: Context, config: Config): void {
       ...initialJournal.pending === undefined ? {} : { pending: initialJournal.pending },
       ...initialJournal.cwdPending === undefined ? {} : { cwdPending: initialJournal.cwdPending },
       ...initialJournal.blocked === undefined ? {} : { blocked: initialJournal.blocked },
+      ...initialJournal.blockedDecisions === undefined ? {} : { blockedDecisions: initialJournal.blockedDecisions },
     },
     logger,
   })
@@ -542,6 +544,10 @@ export function apply(ctx: Context, config: Config): void {
       const result = await fixCwd(sessionId)
       if (result.ok) controller.clearCwdPending(sessionId)
       return result
+    },
+    resolveBlocked: async (sessionId: string, action: 'ignore' | 'force') => {
+      controller.resolveBlocked(sessionId, action)
+      return { ok: true as const }
     },
   }
   ctx.inject(['connection'], (connectionCtx) => {
