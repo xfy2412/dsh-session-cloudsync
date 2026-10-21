@@ -388,6 +388,67 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
   }
 })
 
+test('拉取引擎：一个只读阶段失败后继续其他安全会话', async () => {
+  const temp = createTempHome('plugin-pull-continue')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'pull-continue-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const headerA = {
+        id: 'session-continue-a',
+        version: 4,
+        createdAt: 1200,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: 'D:/work',
+      }
+      const headerB = { ...headerA, id: 'session-continue-b', createdAt: 1201 }
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'pull continue pass',
+        workspaceAllowlist: ['D:/work'],
+        batchEvents: 50,
+      }
+      const source = fakeStore(headerA, events(0, 2))
+      source.sessions.set(headerB.id, { header: headerB, events: events(0, 1) })
+      await syncOnce({
+        persistence: source,
+        sessions,
+        config,
+        isTailOpen: () => false,
+      })
+
+      const divergent = events(0, 2)
+      divergent[1].data.text = 'tampered'
+      const local = fakeStore(headerA, divergent)
+      const attached = []
+      const result = await pullOnce({
+        persistence: local,
+        sessions,
+        config,
+        workspacePath: 'D:/work',
+        attach: async (id) => { attached.push(id) },
+      }, { revision: 0 })
+
+      const failed = result.sessions.find((entry) => entry.sessionId === headerA.id)
+      const safe = result.sessions.find((entry) => entry.sessionId === headerB.id)
+      assert.equal(failed.status, 'error')
+      assert.equal(failed.kind, 'diverged')
+      assert.equal(safe.status, 'pulled')
+      assert.deepEqual(attached, [headerB.id])
+      assert.equal(result.revision, 0)
+      assert.equal(local.sessions.has(headerB.id), true)
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
 test('推送引擎：白名单为空时整体不执行', async () => {
   const header = { id: 'session-no-allowlist', version: 4, createdAt: 1, isSeeded: false, delegationDepth: 0, cwd: 'D:/work' }
   const report = await syncOnce({

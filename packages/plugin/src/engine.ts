@@ -1342,14 +1342,23 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   // 子代理/根会话只到一半时刷新列表。pending 在 append+flush 后即清除，
   // 挂载失败时下一轮会因本地已是最新而重试挂载。
   const attachments: string[] = []
-  const applyDeps: PullDeps<Session> = deps.attach === undefined
-    ? deps
-    : {
-        ...deps,
-        attach: async (sessionId: string): Promise<void> => {
-          attachments.push(sessionId)
-        },
-      }
+  let applyStarted: string | undefined
+  const applyDeps: PullDeps<Session> = {
+    ...deps,
+    ...(deps.attach === undefined ? {} : {
+      attach: async (sessionId: string): Promise<void> => {
+        attachments.push(sessionId)
+      },
+    }),
+    beforeApply: async (sessionId: string, targetSeq: number): Promise<void> => {
+      applyStarted = sessionId
+      await deps.beforeApply?.(sessionId, targetSeq)
+    },
+    afterApply: async (sessionId: string): Promise<void> => {
+      await deps.afterApply?.(sessionId)
+      if (applyStarted === sessionId) applyStarted = undefined
+    },
+  }
 
   // 上次崩溃留下的 pending：先把它补完，再继续游标。
   if (state.pending !== undefined) {
@@ -1381,7 +1390,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         const classified = classifySyncError(error)
         deps.logger?.warn(`dsh-session-sync: 读取 ${change.sessionId} 的会话头失败：${classified.message}`)
         reports.push({ sessionId: change.sessionId, status: 'error', error: classified.message, kind: classified.kind })
-        return { configured: true, sessions: reports, revision: state.revision }
+        continue
       }
     }
 
@@ -1397,6 +1406,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         continue
       }
       notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', progress: 0 })
+      applyStarted = undefined
       try {
         const report = await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, item.loaded)
         reports.push(report)
@@ -1411,9 +1421,11 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         deps.logger?.warn(`dsh-session-sync: 拉取 ${item.sessionId} 失败：${classified.message}`)
         reports.push({ sessionId: item.sessionId, status: 'error', error: classified.message, kind: classified.kind })
         notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'error', progress: 0, error: classified.message })
-        // 一个会话失败后立即停止：pending 只有一条，继续应用下一个会话会覆盖
-        // 前一个未完成的恢复记录（下一次启动就补不回来了）。
-        return { configured: true, sessions: reports, revision: state.revision }
+        // 已经调用 beforeApply 的失败会留下 pending；此时必须停下，不能
+        // 让下一个会话覆盖唯一一条恢复记录。只读阶段的分叉/格式错误没有
+        // pending，可以跳过该会话，继续处理其他安全会话。
+        if (applyStarted !== undefined) return { configured: true, sessions: reports, revision: state.revision }
+        continue
       }
     }
     for (const tombstone of cursor.tombstones) {
@@ -1446,7 +1458,11 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
     }
   }
 
-  return { configured: true, sessions: reports, revision }
+  return {
+    configured: true,
+    sessions: reports,
+    revision: reports.some((report) => report.status === 'error') ? state.revision : revision,
+  }
 }
 
 /** 导出默认值，便于配置/测试。 */
