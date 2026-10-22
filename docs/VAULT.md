@@ -1,8 +1,8 @@
 # 加密附加数据层（Vault）与工作区映射
 
-> 状态：**V1 已完成，V2 待实现**（2026-10-22）。
-> 本文件承接 [DESIGN.md](DESIGN.md) 的 L2 设备台账 / L3 agent 笔记，并替换 M4 的单一
-> `workspacePath` 落点方案。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
+> 状态：**V2 已完成，V3+ 设计稿**（2026-10-22）。
+> 本文件承接 [DESIGN.md](DESIGN.md) 的 L2 设备台账 / L3 agent 笔记；M4 的单一
+> `workspacePath` 已由本文的工作区绑定替换。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
 > 会话内部的 cwd 处理另见 [CWD.md](CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
 > 会话身份与启动对账流程见 [RECONCILE.md](RECONCILE.md)，术语见 [GLOSSARY.md](GLOSSARY.md)。
 > 使用协议见 [USAGE-AGREEMENT.md](USAGE-AGREEMENT.md)：只改 DSH 必需的 cwd 元数据，
@@ -341,11 +341,11 @@ session manifest
 - 个别会话换落点只能通过明确的破坏性删除/重建，不进入 V2；
 - 子代理跟随根会话，不单独覆盖。
 
-### 5.4 M4 开发期的 `workspacePath`
+### 5.4 工作区路径配置
 
-- 当前 M4 的 `workspacePath` 只是**未发布版本的临时代码**，不是需要保留的兼容协议；
-- V2 直接替换为工作区绑定；不迁移旧配置、不保留旧 manifest fallback；
-- 开发数据可以清空重拉；不为此写升级路径。
+- 单一 `workspacePath` 已删除，不再有“所有远端会话落到同一工作区”的路径；
+- 每个远端会话按自己的 `workspaceKey` 查绑定；
+- 不保留旧 manifest 的 cwd fallback。
 
 ### 5.5 已绑定后不改绑
 
@@ -498,8 +498,8 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 ## 10. 兼容性（未发布，无需迁移）
 
 - 插件尚未公开发布，没有已发布的历史数据、旧客户端或旧 manifest 需要兼容；
-- 不保留 `workspacePath` fallback、旧 manifest 的 cwd 兼容层或迁移提示；
-- 当前 M4 的实现是开发期行为，可以在 V2 直接替换；开发数据可清空重拉；
+- 不保留旧 manifest 的 cwd 兼容层或迁移提示；
+- V2 开发数据可以清空重拉；
 - 仍保留 Vault 记录 schema / `workspaceKey` 的**协议版本字段**，用于发布后的正常演进，
   这不是迁移负担；
 - Vault 记录/协议版本独立，失败时不影响会话同步。
@@ -514,13 +514,14 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 | V3 | 会话生产者戳 + 插件版本检测 + 一键匹配 | 精确 spec、用户确认、失败可回退 |
 | V4 | 工具链采集 + L3 笔记 + 压缩/保留策略 | 自动不覆盖 authored；笔记只追加 |
 
-V0–V2 期间可直接替换 M4 的 `workspacePath`，不需要迁移分支。
+V2 已完成工作区落点替换，不需要迁移分支。
 
 > V0 已完成（2026-10-22）：`shared/vault.ts` 的 vaultKey/workspaceKey 派生、确定性
 > AES-GCM 封帧、AAD、recordHash、链校验与 5 组篡改/重放测试。
-> V1 已完成：服务端 `/v1/vault/append|cursor|stream`、`vault-writer` 租约、通用
-> `clientInstanceId` 租约；宿主最小设备台账与 `workspace/profile` 写入。当前测试 129 通过。
-> V2 从 `workspaceKey` manifest 扩展、一次性绑定和未映射阻断开始。
+> V2 已完成：会话 manifest 的 `workspaceKey`、根 key/子代理继承、一次性本机绑定、
+> 未映射 `unmapped` 阻断、设置页映射入口；当前测试 131 通过。
+> V2 的映射 UI 先显示 opaque key + 会话数；`workspace/profile` label 的读取/展示
+> 放到下一增量，不阻塞落点正确性。
 
 ## 12. 已定
 
@@ -539,6 +540,6 @@ V0–V2 期间可直接替换 M4 的 `workspacePath`，不需要迁移分支。
 ## 13. 与当前 M4 的关系
 
 - 2026-10-22 起先做 Vault V0 → V1 → V2；M4 的 C5/D5/E3 顺延；
-- M4 的 `workspacePath` 是开发期单落点实现，V2 直接替换，不保留兼容文案或迁移路径；
-- 本设计的 Vault 失败不阻塞会话同步；V2 未完成前，单一 `workspacePath` 仍是过渡行为；
+- V2 已删除单一 `workspacePath`，不保留兼容文案或迁移路径；
+- 本设计的 Vault 失败不阻塞会话同步；
 - 会话内部的 cwd 处理见 [CWD.md](CWD.md)（raw 事件 + 接收端修正）。

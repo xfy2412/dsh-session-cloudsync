@@ -108,6 +108,7 @@ export interface ManifestInput {
   readonly frames: readonly SealedFrameRef[]
   readonly tailOpen?: boolean
   readonly safeThroughSeq?: number
+  readonly workspaceKey?: string
 }
 
 /**
@@ -129,6 +130,7 @@ export function buildManifest(input: ManifestInput): SessionManifest {
     formatVersion: input.formatVersion,
     createdAt: input.createdAt,
     lastSeq,
+    ...input.workspaceKey === undefined ? {} : { workspaceKey: input.workspaceKey },
     ...input.tailOpen === undefined ? {} : { tailOpen: input.tailOpen },
     ...input.safeThroughSeq === undefined ? {} : { safeThroughSeq: input.safeThroughSeq },
     frames: input.frames,
@@ -150,6 +152,9 @@ export function assertManifest(manifest: SessionManifest): void {
   if ((last === undefined ? -1 : last.seqTo) !== manifest.lastSeq) throw new Error('manifest 的 lastSeq 与最后一帧不一致')
   const safe = manifest.safeThroughSeq ?? manifest.lastSeq
   if (!Number.isSafeInteger(safe) || safe < -1 || safe > manifest.lastSeq) throw new Error('manifest 的 safeThroughSeq 非法')
+  if (manifest.workspaceKey !== undefined && !/^[A-Za-z0-9_-]{16,64}$/u.test(manifest.workspaceKey)) {
+    throw new Error('manifest 的 workspaceKey 非法')
+  }
   if (manifest.tailOpen !== undefined && typeof manifest.tailOpen !== 'boolean') throw new Error('manifest 的 tailOpen 非法')
 }
 
@@ -184,6 +189,7 @@ export function manifestDigest(manifest: SessionManifest): string {
     formatVersion: manifest.formatVersion,
     createdAt: manifest.createdAt,
     lastSeq: manifest.lastSeq,
+    workspaceKey: manifest.workspaceKey ?? null,
     tailOpen: manifest.tailOpen ?? null,
     safeThroughSeq: manifest.safeThroughSeq ?? manifest.lastSeq,
     frames: manifest.frames.map((frame) => ({

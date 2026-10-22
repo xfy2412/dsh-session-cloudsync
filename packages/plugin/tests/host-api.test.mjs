@@ -25,7 +25,6 @@ function control(overrides = {}) {
       reason: null,
       serverUrl: 'http://127.0.0.1:8787',
       deviceName: 'dev',
-      workspacePath: 'D:/work',
       workspaceAllowlist: ['D:/work'],
       allowlistConfigured: true,
       autoSync: true,
@@ -62,6 +61,13 @@ function control(overrides = {}) {
       backupRoot: '/tmp/backups',
       steps: ['step'],
     })),
+    bindWorkspace: overrides.bindWorkspace ?? (async () => ({
+      allowlistConfigured: true,
+      selectedPaths: ['/tmp/work'],
+      workspaces: [],
+      bindings: [],
+      unmapped: [],
+    })),
   }
 }
 
@@ -77,7 +83,7 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked/replace 八条精确路由', () => {
+test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked/replace/bind 九条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-cloudsync/status', ['GET'], 'buffered'],
@@ -88,6 +94,7 @@ test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked/replace 
     ['/api/session-cloudsync/cwd', ['POST'], 'buffered'],
     ['/api/session-cloudsync/blocked', ['POST'], 'buffered'],
     ['/api/session-cloudsync/replace', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/workspaces/bind', ['POST'], 'buffered'],
   ])
 })
 
@@ -108,7 +115,6 @@ test('宿主 API：setup 只返回非敏感字段', async () => {
   )
   assert.equal(response.status, 200)
   const body = await bodyOf(response)
-  assert.equal(body.value.workspacePath, 'D:/work')
   assert.equal(JSON.stringify(body).includes('token-value'), false)
 })
 

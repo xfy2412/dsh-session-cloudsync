@@ -41,6 +41,8 @@ export interface SessionManifest {
   readonly createdAt: number
   /** 写入帧链的最高事件序号；只有 header 帧时为 -1。 */
   readonly lastSeq: number
+  /** 逻辑工作区 opaque key；缺省表示 unmapped。 */
+  readonly workspaceKey?: string
   /** 尾巴是否还有未闭合的 turn；缺省按 false 处理。 */
   readonly tailOpen?: boolean
   /** 最后一个闭合事件的 seq；读者只 apply 到这个位置，缺省等于 lastSeq。 */

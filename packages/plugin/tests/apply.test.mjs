@@ -82,6 +82,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
     '/api/session-cloudsync/cwd',
     '/api/session-cloudsync/blocked',
     '/api/session-cloudsync/replace',
+    '/api/session-cloudsync/workspaces/bind',
   ])
 
   const status = await connection.routes[0].fetch(new Request('http://host/api/session-cloudsync/status'))
@@ -154,7 +155,6 @@ test('应用接线：Schemastery volatile 引用按 .get() 读取', async () => 
     token: ref('token-value'),
     passphrase: ref('pass-value'),
     deviceName: ref('dev-box'),
-    workspacePath: ref(''),
     workspaceAllowlist: ref([]),
     autoSync: ref(false),
     intervalMs: ref(15_000),
@@ -184,7 +184,6 @@ test('应用接线：volatile 引用原地更新后 setup/status 立即读到新
     token: 'token-value',
     passphrase: 'pass-value',
     deviceName: 'dev-box',
-    workspacePath: '',
     workspaceAllowlist: ref(() => values.allowlist),
     autoSync: false,
     intervalMs: 15_000,
@@ -213,7 +212,6 @@ test('应用接线：设置信息不回传 token/passphrase', async () => {
     serverUrl: 'http://127.0.0.1:8787',
     token: 'secret-token',
     passphrase: 'secret-passphrase',
-    workspacePath: 'D:/work',
     autoSync: false,
   })
 
@@ -302,7 +300,6 @@ test('应用接线：token/passphrase 优先取 DSH 凭据库', async () => {
     serverUrl: 'http://127.0.0.1:1',
     token: '',
     passphrase: '',
-    workspacePath: '',
     workspaceAllowlist: ['D:/work'],
     autoSync: false,
   })

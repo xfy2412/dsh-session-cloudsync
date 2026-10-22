@@ -35,6 +35,8 @@ export interface SyncControl {
   ): Promise<{ readonly ok: true }>
   /** 生成“远端覆盖本地”的停机脚本；只生成，不执行。 */
   prepareReplace(sessionId: string): Promise<ReplacePlan>
+  /** 建立一次性 workspaceKey → localPath 绑定。 */
+  bindWorkspace(workspaceKey: string, localPath: string): Promise<SyncWorkspaceList>
 }
 
 /** connection.fetch 接受的精确路由。 */
@@ -206,6 +208,29 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             ok: false,
             error: { code: classified.kind, message: classified.message },
           }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/workspaces/bind',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as { readonly workspaceKey?: unknown; readonly localPath?: unknown }
+          const workspaceKey = typeof body.workspaceKey === 'string' ? body.workspaceKey.trim() : ''
+          const localPath = typeof body.localPath === 'string' ? body.localPath.trim() : ''
+          const keyPattern = /^[A-Za-z0-9_-]{16,64}$/u
+          if (!keyPattern.test(workspaceKey) || localPath === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要合法 workspaceKey 与 localPath' } }, 400)
+          }
+          return json({ ok: true, value: await control.bindWorkspace(workspaceKey, localPath) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 400)
         }
       },
     },

@@ -36,7 +36,7 @@ import {
   deleteSession,
   getManifest,
   listChanges,
-  listFrames,
+  listBatches,
   sessionCounts,
 } from './sessions.ts'
 import { acquireLease, releaseLease, sessionResource, vaultResource } from './leases.ts'
@@ -270,6 +270,7 @@ function parseAppend(body: Record<string, unknown>): {
   frames: SealedFrameRef[]
   tailOpen?: boolean
   safeThroughSeq?: number
+  workspaceKey?: string
 } {
   if (!Number.isSafeInteger(body.baseIndex)) throw new SyncError('bad-request', 'baseIndex 必须是整数')
   const baseChainHash = body.baseChainHash
@@ -278,12 +279,15 @@ function parseAppend(body: Record<string, unknown>): {
   }
   if (!Number.isSafeInteger(body.createdAt) || Number(body.createdAt) < 0) throw new SyncError('bad-request', 'createdAt 必须是非负整数')
   if (!Number.isSafeInteger(body.formatVersion) || Number(body.formatVersion) < 1) throw new SyncError('bad-request', 'formatVersion 必须是正整数')
-  // 规范字段是 `batches`；`frames` 只作为 M3 客户端的兼容别名。
-  const refs = Array.isArray(body.batches) ? body.batches : body.frames
+  // 规范字段是 `batches`；不再接受旧 `frames`。
+  const refs = body.batches
   if (!Array.isArray(refs)) throw new SyncError('bad-request', 'batches 必须是数组')
   if (body.tailOpen !== undefined && typeof body.tailOpen !== 'boolean') throw new SyncError('bad-request', 'tailOpen 必须是布尔值')
   if (body.safeThroughSeq !== undefined && (!Number.isSafeInteger(body.safeThroughSeq) || Number(body.safeThroughSeq) < -1)) {
     throw new SyncError('bad-request', 'safeThroughSeq 必须是不小于 -1 的整数')
+  }
+  if (body.workspaceKey !== undefined && (typeof body.workspaceKey !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/u.test(body.workspaceKey))) {
+    throw new SyncError('bad-request', 'workspaceKey 非法')
   }
   return {
     baseIndex: Number(body.baseIndex),
@@ -293,6 +297,7 @@ function parseAppend(body: Record<string, unknown>): {
     frames: refs as SealedFrameRef[],
     ...body.tailOpen === undefined ? {} : { tailOpen: body.tailOpen },
     ...body.safeThroughSeq === undefined ? {} : { safeThroughSeq: Number(body.safeThroughSeq) },
+    ...body.workspaceKey === undefined ? {} : { workspaceKey: body.workspaceKey },
   }
 }
 
@@ -316,7 +321,7 @@ const LEASE_PATH = /^\/v1\/sessions\/([^/]+)\/lease$/u
 const APPEND_PATH = /^\/v1\/sessions\/([^/]+)\/append$/u
 const DELETE_PATH = /^\/v1\/sessions\/([^/]+)\/delete$/u
 const MANIFEST_PATH = /^\/v1\/sessions\/([^/]+)\/manifest$/u
-const FRAMES_PATH = /^\/v1\/sessions\/([^/]+)\/(?:frames|batches)$/u
+const BATCHES_PATH = /^\/v1\/sessions\/([^/]+)\/batches$/u
 const CURSOR_PATH = /^\/v1\/cursor$/u
 const VAULT_APPEND_PATH = /^\/v1\/vault\/append$/u
 const VAULT_LEASE_PATH = /^\/v1\/vault\/lease$/u
@@ -325,27 +330,22 @@ const VAULT_STREAM_PATH = /^\/v1\/vault\/stream\/([^/]+)$/u
 const ADMIN_DEVICE_PATH = /^\/admin\/devices\/([0-9a-f]+)$/u
 
 /**
- * 在响应里补上 canonical `batches` / `batchCount`，同时保留旧字段。
+ * 把 manifest 的内部 `frames` 输出成唯一的 `batches`。
  * @param value - 会话摘要、manifest 或批次列表。
- * @returns 同一对象结构的兼容视图。
+ * @returns 只含规范字段的视图。
  */
-function withBatchAliases(value: unknown): unknown {
+function withBatchFields(value: unknown): unknown {
   if (value === null || typeof value !== 'object') return value
   const record = value as Record<string, unknown>
-  const refs = Array.isArray(record['batches']) ? record['batches'] : record['frames']
   const result: Record<string, unknown> = { ...record }
+  const refs = Array.isArray(record['batches']) ? record['batches'] : record['frames']
   if (Array.isArray(refs)) {
     result['batches'] = refs
-    result['batchCount'] = typeof record['batchCount'] === 'number'
-      ? record['batchCount']
-      : typeof record['frameCount'] === 'number'
-        ? record['frameCount']
-        : typeof record['total'] === 'number' ? record['total'] : refs.length
-  } else if (typeof record['frameCount'] === 'number' && typeof record['batchCount'] !== 'number') {
-    result['batchCount'] = record['frameCount']
+    if (typeof record['batchCount'] !== 'number') result['batchCount'] = refs.length
+    delete result['frames']
   }
   if (record['manifest'] !== null && typeof record['manifest'] === 'object') {
-    result['manifest'] = withBatchAliases(record['manifest'])
+    result['manifest'] = withBatchFields(record['manifest'])
   }
   return result
 }
@@ -721,7 +721,7 @@ export function createHttpServer(options: ServerOptions): Server {
         const body = await readJson(req, MAX_APPEND_BODY_BYTES)
         const parsed = parseAppend(body)
         const value = appendFrames(db, options.dataDir, { sessionId: id, deviceId: device.deviceId, clientId, ...parsed })
-        return json(res, 200, { ok: true, value: withBatchAliases(value) })
+        return json(res, 200, { ok: true, value: withBatchFields(value) })
       },
     },
     {
@@ -744,19 +744,19 @@ export function createHttpServer(options: ServerOptions): Server {
         const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, MANIFEST_PATH)
         const found = getManifest(db, id)
         if (found === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
-        return json(res, 200, { ok: true, value: withBatchAliases(found) })
+        return json(res, 200, { ok: true, value: withBatchFields(found) })
       },
     },
     {
       method: 'GET',
-      path: FRAMES_PATH,
+      path: BATCHES_PATH,
       handler: async (req, res) => {
         requireDevice(db, req)
         const url = new URL(req.url ?? '/', 'http://localhost')
-        const id = sessionIdFrom(url.pathname, FRAMES_PATH)
-        const found = listFrames(db, id, intParam(url.searchParams.get('from'), 0, 0, Number.MAX_SAFE_INTEGER), intParam(url.searchParams.get('limit'), 500, 1, 1000))
+        const id = sessionIdFrom(url.pathname, BATCHES_PATH)
+        const found = listBatches(db, id, intParam(url.searchParams.get('from'), 0, 0, Number.MAX_SAFE_INTEGER), intParam(url.searchParams.get('limit'), 500, 1, 1000))
         if (found === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
-        return json(res, 200, { ok: true, value: withBatchAliases(found) })
+        return json(res, 200, { ok: true, value: withBatchFields(found) })
       },
     },
     {

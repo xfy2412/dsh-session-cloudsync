@@ -8,10 +8,14 @@ import {
   classifySyncError,
   correctCwd,
   pullOnce,
-  syncOnce,
+  syncOnce as syncOnceRaw,
   SyncHttpError,
   testConnection,
 } from '../src/engine.ts'
+
+const TEST_WORKSPACE_KEY = 'test-workspace-key-0001'
+/** 测试默认给每个推送根会话一个稳定 key；V2 严格模式不再接受无 key。 */
+const syncOnce = (deps) => syncOnceRaw({ workspaceKeyOf: () => TEST_WORKSPACE_KEY, ...deps })
 
 /** 发一个 JSON 请求。 */
 async function call(base, path, options = {}) {
@@ -101,6 +105,79 @@ const sessions = {
   flush: async () => true,
 }
 
+test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply', async () => {
+  const temp = createTempHome('plugin-v2')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'v2-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const sessionId = 'session-v2-mapping'
+      const workspaceKey = 'abcdefghijklmnopqrstuvwx'
+      const header = {
+        id: sessionId,
+        version: 4,
+        createdAt: 901,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: 'D:/local',
+      }
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'v2 pass',
+        workspaceAllowlist: ['D:/local', 'D:/mapped'],
+        batchEvents: 50,
+      }
+      const pushed = await syncOnce({
+        persistence: fakeStore(header, events(0, 5)),
+        sessions,
+        config,
+        isTailOpen: () => false,
+        workspaceKeyOf: () => workspaceKey,
+      })
+      assert.equal(pushed.sessions[0].status, 'pushed')
+      const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      assert.equal(manifest.body.value.manifest.workspaceKey, workspaceKey)
+
+      const mismatch = await syncOnce({
+        persistence: fakeStore(header, events(0, 5)),
+        sessions,
+        config,
+        isTailOpen: () => false,
+        workspaceKeyOf: () => 'differentworkspacekey',
+      })
+      assert.equal(mismatch.sessions[0].status, 'error')
+      assert.match(mismatch.sessions[0].error ?? '', /workspaceKey/)
+
+      const mappedStore = fakeStore(undefined)
+      const mapped = await pullOnce({
+        persistence: mappedStore,
+        sessions,
+        config,
+        workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
+      })
+      assert.equal(mapped.sessions[0].status, 'pulled')
+      assert.equal(mappedStore.sessions.get(sessionId).header.cwd, 'D:/mapped')
+
+      const unmappedStore = fakeStore(undefined)
+      const unmapped = await pullOnce({
+        persistence: unmappedStore,
+        sessions,
+        config,
+        workspacePathOf: () => undefined,
+      })
+      assert.equal(unmapped.sessions[0].status, 'unmapped')
+      assert.equal(unmappedStore.sessions.has(sessionId), false)
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
 test('推送引擎：首次推送 header+批次，重复执行增量追加', async () => {
   const temp = createTempHome('plugin-engine')
   try {
@@ -138,12 +215,12 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
 
       const manifest1 = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest1.status, 200)
-      assert.equal(manifest1.body.value.manifest.frames.length, 4)
+      assert.equal(manifest1.body.value.manifest.batches.length, 4)
       assert.equal(manifest1.body.value.manifest.lastSeq, 119)
       assert.equal(manifest1.body.value.manifest.tailOpen, false)
       assert.equal(manifest1.body.value.manifest.safeThroughSeq, 119)
-      assert.equal(manifest1.body.value.manifest.frames[0].seqFrom, -1)
-      assert.equal(manifest1.body.value.manifest.frames[1].seqFrom, 0)
+      assert.equal(manifest1.body.value.manifest.batches[0].seqFrom, -1)
+      assert.equal(manifest1.body.value.manifest.batches[1].seqFrom, 0)
 
       const second = await syncOnce({ persistence, sessions, config, isTailOpen })
       assert.equal(second.sessions[0].status, 'up-to-date')
@@ -154,11 +231,11 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
       assert.equal(third.sessions[0].batches, 1)
 
       const manifest2 = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
-      assert.equal(manifest2.body.value.manifest.frames.length, 5)
+      assert.equal(manifest2.body.value.manifest.batches.length, 5)
       assert.equal(manifest2.body.value.manifest.lastSeq, 149)
       assert.equal(manifest2.body.value.manifest.safeThroughSeq, 149)
-      assert.equal(manifest2.body.value.manifest.frames[4].seqFrom, 120)
-      assert.equal(manifest2.body.value.manifest.frames[4].seqTo, 149)
+      assert.equal(manifest2.body.value.manifest.batches[4].seqFrom, 120)
+      assert.equal(manifest2.body.value.manifest.batches[4].seqTo, 149)
     } finally {
       await close()
       db.close()
@@ -214,7 +291,7 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
         persistence: fakeStore(header, localDiverged),
         sessions,
         config,
-        workspacePath: 'D:/local',
+        workspacePathOf: () => 'D:/local',
       }, { revision: 0 })
       assert.equal(pullDiverged.sessions[0].status, 'error')
       assert.equal(pullDiverged.sessions[0].kind, 'diverged')
@@ -225,7 +302,7 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
         persistence: localAhead,
         sessions,
         config,
-        workspacePath: 'D:/local',
+        workspacePathOf: () => 'D:/local',
       }, { revision: 0 })
       assert.equal(pulled.sessions[0].status, 'pulled')
       assert.equal(localAhead.sessions.get(sessionId).events.length, 120)
@@ -286,7 +363,7 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
         persistence: fakeStore(undefined),
         sessions,
         config,
-        workspacePath: 'D:/local',
+        workspacePathOf: () => 'D:/local',
         attach: async (id) => { attached.push(id) },
       }, { revision: 0 })
       assert.equal(pulled.sessions[0].status, 'pulled')
@@ -308,7 +385,7 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
         persistence: fakeStore(undefined),
         sessions,
         config,
-        workspacePath: 'D:/local',
+        workspacePathOf: () => 'D:/local',
       }, { revision: 0 })
       assert.equal(pulledInside.sessions[0].status, 'pulled')
       assert.equal(pulledInside.sessions[0].cwdNonPortable, undefined)
@@ -357,7 +434,7 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
         persistence: target,
         sessions,
         config,
-        workspacePath: 'D:/local',
+        targetPath: 'D:/local',
       }, sessionId)
       assert.equal(result.ok, true)
       assert.equal(result.status, 'corrected')
@@ -370,12 +447,12 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
       assert.equal(manifest.body.value.manifest.lastSeq, 4)
       assert.equal(manifest.body.value.manifest.safeThroughSeq, 4)
 
-      const again = await correctCwd({ persistence: target, sessions, config, workspacePath: 'D:/local' }, sessionId)
+      const again = await correctCwd({ persistence: target, sessions, config, targetPath: 'D:/local' }, sessionId)
       assert.equal(again.status, 'already-portable')
 
       // 远端已推进、本地还停在旧边界时不能 append，避免制造分叉。
       const stale = fakeStore(header, outside)
-      const refused = await correctCwd({ persistence: stale, sessions, config, workspacePath: 'D:/local' }, sessionId)
+      const refused = await correctCwd({ persistence: stale, sessions, config, targetPath: 'D:/local' }, sessionId)
       assert.equal(refused.ok, false)
       assert.equal(refused.status, 'needs-sync')
       assert.equal(stale.sessions.get(sessionId).events.length, 4)
@@ -428,7 +505,7 @@ test('拉取引擎：一个只读阶段失败后继续其他安全会话', async
         persistence: local,
         sessions,
         config,
-        workspacePath: 'D:/work',
+        workspacePathOf: () => 'D:/work',
         attach: async (id) => { attached.push(id) },
       }, { revision: 0 })
 
@@ -575,7 +652,7 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
           passphrase: 'pull closure pass',
           workspaceAllowlist: ['D:/work', 'D:/b'],
         },
-        workspacePath: 'D:/b',
+        workspacePathOf: () => 'D:/b',
         attach: async (id) => {
           attached.push({
             id,
@@ -602,7 +679,7 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
   }
 })
 
-test('拉取引擎：白名单为空或拉取目标不在白名单时整体不执行', async () => {
+test('拉取引擎：白名单为空时整体不执行', async () => {
   const base = {
     serverUrl: 'http://127.0.0.1:1',
     token: 'token',
@@ -613,19 +690,10 @@ test('拉取引擎：白名单为空或拉取目标不在白名单时整体不�
     persistence: store,
     sessions,
     config: { ...base, workspaceAllowlist: [] },
-    workspacePath: 'D:/b',
+    workspacePathOf: () => 'D:/b',
   }, { revision: 0 })
   assert.equal(empty.configured, false)
   assert.equal(empty.reason, 'workspaceAllowlist 未配置')
-
-  const outside = await pullOnce({
-    persistence: store,
-    sessions,
-    config: { ...base, workspaceAllowlist: ['D:/a'] },
-    workspacePath: 'D:/b',
-  }, { revision: 0 })
-  assert.equal(outside.configured, false)
-  assert.equal(outside.reason, 'workspacePath 不在同步白名单')
 })
 
 test('连接测试：token 有效时通过，无效时分类为 auth，离线为 network', async () => {
@@ -739,7 +807,7 @@ test('拉取引擎：append 失败留下 pending，重启后按 pending 补完',
         persistence: storeB,
         sessions,
         config,
-        workspacePath: 'D:/b',
+        workspacePathOf: () => 'D:/b',
         attach: async () => {},
         beforeApply: async (id, targetSeq) => {
           pending = { sessionId: id, targetSeq, at: 1 }
@@ -803,7 +871,7 @@ test('拉取引擎：一个会话失败后停止，不覆盖它的 pending', asy
         persistence: storeB,
         sessions,
         config,
-        workspacePath: 'D:/b',
+        workspacePathOf: () => 'D:/b',
         attach: async () => {},
         beforeApply: async (id, targetSeq) => { pending = { sessionId: id, targetSeq, at: 1 } },
         afterApply: async (id) => {
@@ -910,7 +978,7 @@ test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', asyn
         persistence: storeB,
         sessions,
         config,
-        workspacePath: 'D:/device-b',
+        workspacePathOf: () => 'D:/device-b',
         attach: async (id) => { attached.push(id) },
       }, { revision: 0 })
       assert.equal(pulled.configured, true)
@@ -934,7 +1002,7 @@ test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', asyn
         persistence: storeB,
         sessions,
         config,
-        workspacePath: 'D:/device-b',
+        workspacePathOf: () => 'D:/device-b',
         attach: async () => {},
       }, { revision: pulled.revision })
       assert.equal(pulledAgain.sessions[0].status, 'pulled')

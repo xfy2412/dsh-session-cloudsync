@@ -185,13 +185,13 @@ manifest 不存 cwd。不能问“服务器上存的是哪台设备的 cwd”；
 - 不同路径则是别名绑定，不能“自动选一台设备的 cwd”；
 - 已挂载会话的 header cwd 在 realpath 后必须等于 workspace path；它不单独作为工作区身份。
 
-### 5.3 当前开发版
+### 5.3 当前实现
 
-M4 只有单一 `workspacePath`，没有 `workspaceKey`；因此：
+V2 已落地 `workspaceKey` manifest 扩展、本机一次性绑定和未映射阻断：
 
-- 不能按会话判断工作区；
-- 不能做“同一个远端工作区”的可靠比较；
-- 本文的落点流程需要 VAULT V1/V2 才能完整实现。
+- 推送时根会话写 key，子代理继承；
+- 拉取时按绑定解析本地落点，未映射不 apply；
+- 单一 `workspacePath` 已删除，不做旧配置迁移。
 
 ### 5.4 同路径
 
@@ -336,7 +336,7 @@ interface SyncDecision {
 | header cwd 剥离 | 已有 | 保持 |
 | `working-directory/change` 投影 | 无 | **不做**，保持 raw |
 | 共享前缀校验 | 无 | 逐远端批次比较 raw |
-| 工作区 key/绑定 | 无，只有 `workspacePath` | VAULT V1/V2 |
+| 工作区 key/绑定 | 已实现 `workspaceKey` + 一次性绑定 | 保持 |
 | 启动对账/勾选/忽略 | 无 | 本文第 6–9 节 |
 | 自动拉取所有远端会话 | 有 | 改为 plan 后执行 |
 

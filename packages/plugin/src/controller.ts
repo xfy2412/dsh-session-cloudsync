@@ -445,6 +445,7 @@ function pullView(session: PullSessionReport): SessionSyncView {
     status: session.status,
     ...session.applied === undefined ? {} : { applied: session.applied },
     ...session.cwdNonPortable === undefined ? {} : { cwdNonPortable: session.cwdNonPortable },
+    ...session.workspaceKey === undefined ? {} : { workspaceKey: session.workspaceKey },
     ...session.kind === undefined ? {} : { kind: session.kind },
     ...session.error === undefined ? {} : { error: session.error },
   }

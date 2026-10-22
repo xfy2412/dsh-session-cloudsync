@@ -26,6 +26,8 @@ export interface SessionSyncView {
   readonly tailOpen?: boolean
   /** 最后 cwd 是否在工作区外；只做本地警告，不影响哈希/同步身份。 */
   readonly cwdNonPortable?: boolean
+  /** 远端 manifest 的 workspaceKey（若有）。 */
+  readonly workspaceKey?: string
   /** 失败分类。 */
   readonly kind?: SyncErrorKind
   /** 失败说明。 */
@@ -110,8 +112,6 @@ export interface SetupInfo {
   readonly serverUrl: string
   /** 本设备短标签。 */
   readonly deviceName: string
-  /** 拉取会话挂载的本地工作区路径。 */
-  readonly workspacePath: string
   /** 允许同步的工作区路径；空数组表示未配置。 */
   readonly workspaceAllowlist: readonly string[]
   /** 白名单是否已配置。 */
@@ -143,12 +143,28 @@ export interface SyncWorkspaceCandidate {
   readonly path: string
   /** 显示标题：注册表标题，或路径最后一段。 */
   readonly title: string
+  /** 本机路径派生的 workspaceKey（V2 映射建议）。 */
+  readonly workspaceKey?: string
   /** 该路径下的根会话数。 */
   readonly rootSessions: number
   /** 该路径下根会话的子代理后代数。 */
   readonly subagentSessions: number
   /** 当前白名单是否包含这个路径。 */
   readonly selected: boolean
+}
+
+/** 一条本机 workspace 绑定。 */
+export interface SyncWorkspaceBinding {
+  readonly workspaceKey: string
+  readonly localPath: string
+  readonly label: string
+  readonly createdAt: number
+}
+
+/** 一个尚未映射的远端工作区。 */
+export interface SyncUnmappedWorkspace {
+  readonly workspaceKey: string | null
+  readonly sessions: number
 }
 
 /** 首启/设置页的同步列表。 */
@@ -159,4 +175,8 @@ export interface SyncWorkspaceList {
   readonly selectedPaths: readonly string[]
   /** 候选工作区；`全选` 即取全部 path。 */
   readonly workspaces: readonly SyncWorkspaceCandidate[]
+  /** 本机一次性映射。 */
+  readonly bindings: readonly SyncWorkspaceBinding[]
+  /** 最近一次拉取中未映射的远端工作区。 */
+  readonly unmapped: readonly SyncUnmappedWorkspace[]
 }

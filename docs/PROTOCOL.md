@@ -1,7 +1,7 @@
 # 协议
 
 > 状态：M2 服务端已实现 `/v1/health`、设备 token、`/v1/blobs`、租约、append、墓碑、cursor、manifest/批次引用读取；
-> 管理台（cookie 会话 + 只读页面）已实现。M4 已把协议规范字段改为 `batches` / `batchCount`，旧 `frames` / `frameCount` 保留兼容。
+> 管理台（cookie 会话 + 只读页面）已实现。M4 只保留 `batches` / `batchCount`，旧 `frames` / `frameCount` 已删除。
 >
 > 2026-10-22：租约已扩展为 `session:<id>` / `vault-writer:<writer>`，owner 增加
 > `clientInstanceId`；Vault V1 的 append/cursor/stream 与 writer 租约已实现，见 [VAULT.md](VAULT.md)。
@@ -51,7 +51,6 @@
 | GET | `/v1/blobs/:sha256` | 设备 | 下载密文 |
 | GET | `/v1/cursor?since=<revision>` | 设备 | 自某 revision 以来的变更**摘要** |
 | GET | `/v1/sessions/:id/manifest` | 设备 | 完整 manifest（大会话只在需要时拉） |
-| GET | `/v1/sessions/:id/frames?from=<index>&limit=<n>` | 设备 | 旧别名；等价于 `/batches` |
 | GET | `/v1/sessions/:id/batches?from=<index>&limit=<n>` | 设备 | 批次引用分页（默认 500/页） |
 | POST | `/v1/sessions/:id/lease` | 设备 | 申请/续租租约（带 `X-Client-Id`） |
 | POST | `/v1/sessions/:id/append` | 设备 | 提交新批次（`baseIndex + baseChainHash` + 封批次条目） |
@@ -82,7 +81,7 @@
 }
 ```
 
-- `frames` 是 M3 客户端的兼容别名，服务端仍接受；新客户端只写 `batches`；
+- 唯一字段是 `batches`，服务端不再接受 `frames`；
 - 首次创建用 `baseIndex: -1, baseChainHash: null`，`batches` 从 index 0 开始；
 - 尾批替换用 `baseIndex = 倒数第二批`，`batches` 从该下标 +1 开始；
 - 服务端把这些批次拼到存储的链上，校验连续性后整体替换 manifest；请求体上限 8 MiB。
@@ -142,13 +141,14 @@
 
 ## M3/M4 语义（事件批次）
 
-协议单位已经统一为**事件批次**；服务端在 M4 提供 `batches` / `batchCount` 规范字段，并保留 `frames` / `frameCount` 作为旧客户端别名：
+协议单位是**事件批次**；服务端只提供 `batches` / `batchCount` 规范字段：
 
 - `SealedFrameRef` 的内部类型名仍保留（`index / seqFrom / seqTo / chainHash / blobSha256`），协议字段用 `SealedBatchRef`；
 - `chainHash` = 批次内事件的**规范 JSON**（键序稳定）sha256，不再依赖物理帧字节；
-- `frames?from&limit` 的规范路径是 `batches?from&limit`；`/frames` 仍可用；
+- 分页路径是 `batches?from&limit`；`/frames` 已删除；
 - append：`baseIndex + baseChainHash` 语义不变，提交的是“新增/替换的批次”；
-- manifest 摘要：规范字段 `batchCount`，旧字段 `frameCount` 保留；header 元数据单独 sealed 上传（`formatVersion/createdAt/isSeeded/delegationDepth/agentPreset/inheritedEventCount`），`cwd` 不进 manifest；
+- manifest 摘要只用 `batchCount`；header 元数据单独 sealed 上传（`formatVersion/createdAt/isSeeded/delegationDepth/agentPreset/inheritedEventCount`），`cwd` 不进 manifest；
+- manifest 可带 opaque `workspaceKey`；根会话写入，子代理继承，拉取时按本机绑定解析落点，未映射不 apply；
 - **已实现** `tailOpen: boolean` 与 `safeThroughSeq: number`：`tailOpen` 表示尾巴是否开放；`safeThroughSeq` 是最后一个闭合事件的 seq。读者只 apply `seqTo <= safeThroughSeq` 的批次，开放尾仅作备份，不写入本地可 resume 的会话；
 - 客户端对齐：manifest 的 `[seqFrom, seqTo]` 为权威；本地已有完整前缀不下载；跨界批次下载后校验重叠段，只追加缺的后半段；
 - 删除：协议不支持删除单个事件；已同步的脏内容用 fork + 墓碑。

@@ -73,7 +73,6 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
         json: { baseIndex: -1, baseChainHash: null, createdAt, formatVersion: 4, batches: refs },
       })
       assert.equal(created.status, 200)
-      assert.equal(created.body.value.frameCount, 4)
       assert.equal(created.body.value.batchCount, 4)
       assert.equal(created.body.value.lastSeq, 119)
 
@@ -84,7 +83,7 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
       assert.equal(manifest.body.value.manifest.batches[1].seqFrom, 0)
       assert.equal(manifest.body.value.manifest.batches[3].seqTo, 119)
 
-      // 继续上传新增的 30 个事件，只追加一个新批次；这里用 legacy `frames` 验证兼容别名。
+      // 继续上传新增的 30 个事件，只追加一个新批次。
       const tail = events(120, 149)
       const [tailPlan] = planEventBatches(tail, 119)
       assert.ok(tailPlan !== undefined)
@@ -99,11 +98,10 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
           baseChainHash: refs[3].chainHash,
           createdAt,
           formatVersion: 4,
-          frames: [tailBatch.ref],
+          batches: [tailBatch.ref],
         },
       })
       assert.equal(appended.status, 200)
-      assert.equal(appended.body.value.frameCount, 5)
       assert.equal(appended.body.value.batchCount, 5)
       assert.equal(appended.body.value.lastSeq, 149)
 

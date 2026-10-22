@@ -82,11 +82,11 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
         baseChainHash: null,
         createdAt: 1000,
         formatVersion: 4,
-        frames: refs,
+        batches: refs,
       }
       const created = await call(base, `/v1/sessions/${sessionId}/append`, { method: 'POST', token: deviceA.token, json: createBody })
       assert.equal(created.status, 200)
-      assert.equal(created.body.value.frameCount, 4)
+      assert.equal(created.body.value.batchCount, 4)
       assert.equal(created.body.value.headChainHash, refs[3].chainHash)
       assert.equal(created.body.value.lastSeq, refs[3].seqTo)
 
@@ -101,7 +101,7 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       const badBase = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
-        json: { baseIndex: 2, baseChainHash: refs[1].chainHash, createdAt: 1000, formatVersion: 4, frames: [refs[2]] },
+        json: { baseIndex: 2, baseChainHash: refs[1].chainHash, createdAt: 1000, formatVersion: 4, batches: [refs[2]] },
       })
       assert.equal(badBase.status, 409)
       assert.equal(badBase.body.error.code, 'diverged')
@@ -114,20 +114,20 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       const replaced = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
-        json: { baseIndex: 2, baseChainHash: refs[2].chainHash, createdAt: 1000, formatVersion: 4, frames: [tail.ref] },
+        json: { baseIndex: 2, baseChainHash: refs[2].chainHash, createdAt: 1000, formatVersion: 4, batches: [tail.ref] },
       })
       assert.equal(replaced.status, 200)
-      assert.equal(replaced.body.value.frameCount, 4)
+      assert.equal(replaced.body.value.batchCount, 4)
       assert.equal(replaced.body.value.headChainHash, tail.ref.chainHash)
 
       // manifest 与分页帧引用。
       const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: deviceA.token })
       assert.equal(manifest.status, 200)
-      assert.equal(manifest.body.value.manifest.frames[3].chainHash, tail.ref.chainHash)
-      const page = await call(base, `/v1/sessions/${sessionId}/frames?from=2&limit=1`, { token: deviceA.token })
+      assert.equal(manifest.body.value.manifest.batches[3].chainHash, tail.ref.chainHash)
+      const page = await call(base, `/v1/sessions/${sessionId}/batches?from=2&limit=1`, { token: deviceA.token })
       assert.equal(page.status, 200)
-      assert.equal(page.body.value.total, 4)
-      assert.equal(page.body.value.frames[0].index, 2)
+      assert.equal(page.body.value.batchCount, 4)
+      assert.equal(page.body.value.batches[0].index, 2)
 
       // 墓碑：删掉后同一生命周期 append → 410。
       const deleted = await call(base, `/v1/sessions/${sessionId}/delete`, { method: 'POST', token: deviceA.token, json: { createdAt: 1000 } })
@@ -136,7 +136,7 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       const gone = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
-        json: { baseIndex: -1, baseChainHash: null, createdAt: 1000, formatVersion: 4, frames: refs },
+        json: { baseIndex: -1, baseChainHash: null, createdAt: 1000, formatVersion: 4, batches: refs },
       })
       assert.equal(gone.status, 410)
       assert.equal(gone.body.error.code, 'gone')
@@ -145,7 +145,7 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       const recreated = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
-        json: { baseIndex: -1, baseChainHash: null, createdAt: 2000, formatVersion: 4, frames: refs },
+        json: { baseIndex: -1, baseChainHash: null, createdAt: 2000, formatVersion: 4, batches: refs },
       })
       assert.equal(recreated.status, 200)
 
@@ -183,7 +183,7 @@ test('append 拒绝未上传的 blob、非法请求与错误的 X-Device-Id', as
       const missing = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,
-        json: { baseIndex: -1, baseChainHash: null, createdAt: 1, formatVersion: 4, frames: sealed.map((entry) => entry.ref) },
+        json: { baseIndex: -1, baseChainHash: null, createdAt: 1, formatVersion: 4, batches: sealed.map((entry) => entry.ref) },
       })
       assert.equal(missing.status, 400)
 
@@ -191,7 +191,7 @@ test('append 拒绝未上传的 blob、非法请求与错误的 X-Device-Id', as
       const bad = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,
-        json: { baseIndex: 'x', baseChainHash: null, createdAt: 1, formatVersion: 4, frames: [] },
+        json: { baseIndex: 'x', baseChainHash: null, createdAt: 1, formatVersion: 4, batches: [] },
       })
       assert.equal(bad.status, 400)
 

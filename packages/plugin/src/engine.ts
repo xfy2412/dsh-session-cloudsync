@@ -178,6 +178,8 @@ export interface SyncDeps<Session> {
   readonly isTailOpen?: (events: readonly SyncEvent[]) => boolean
   /** 实时阶段回调；不抛异常，调用方负责容错。 */
   readonly onProgress?: (progress: SyncProgress) => void
+  /** 由根会话的本机 cwd 解析 workspaceKey；V2 推送必需。 */
+  readonly workspaceKeyOf: (sessionId: string, cwd: string) => string | undefined
 }
 
 /** 单个会话的同步结果。 */
@@ -209,10 +211,10 @@ export interface PullDeps<Session> {
   readonly persistence: PullPersistenceLike
   readonly sessions: SessionsLike<Session>
   readonly config: EngineConfig
-  /** 拉取到本地时使用的 workspace 路径。 */
-  readonly workspacePath: string
+  /** V2：由远端 workspaceKey 解析本机落点；未映射返回 undefined。 */
+  readonly workspacePathOf: (workspaceKey: string) => string | undefined
   /** 拉取完成后挂回工作区；失败由调用方处理。 */
-  readonly attach?: (sessionId: string) => Promise<void>
+  readonly attach?: (sessionId: string, workspacePath?: string) => Promise<void>
   readonly logger?: SyncLogger
   readonly fetch?: typeof fetch
   /** 在第一次本地写入之前落盘 pending 记录。 */
@@ -232,7 +234,7 @@ export interface CorrectCwdDeps<Session> {
   readonly sessions: SessionsLike<Session>
   readonly config: EngineConfig
   /** 本机目标工作区根；必须是已存在的 canonical workspace path。 */
-  readonly workspacePath: string
+  readonly targetPath: string
   readonly fetch?: typeof fetch
   readonly logger?: SyncLogger
 }
@@ -288,10 +290,12 @@ export interface PullState {
 /** 单个会话的拉取结果。 */
 export interface PullSessionReport {
   readonly sessionId: string
-  readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'local-ahead' | 'tombstone' | 'error'
+  readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'local-ahead' | 'tombstone' | 'unmapped' | 'error'
   readonly applied?: number
   readonly error?: string
   readonly kind?: SyncErrorKind
+  /** 远端 manifest 的 workspaceKey（若有）。 */
+  readonly workspaceKey?: string
   /** 最后 cwd 是否在工作区外；只做本地警告，不影响哈希/同步身份。 */
   readonly cwdNonPortable?: boolean
   /** 会话生命周期，用于把阻塞决定绑定到具体一代会话。 */
@@ -313,6 +317,7 @@ interface RemoteManifest {
   readonly formatVersion: number
   readonly createdAt: number
   readonly lastSeq: number
+  readonly workspaceKey?: string
   readonly tailOpen?: boolean
   readonly safeThroughSeq?: number
   readonly frames: readonly SealedFrameRef[]
@@ -502,7 +507,7 @@ async function readManifest(
   const manifest = (value as Record<string, unknown>)['manifest']
   if (manifest === null || typeof manifest !== 'object') throw new Error('manifest 响应缺少 manifest')
   const record = manifest as Record<string, unknown>
-  const refs = Array.isArray(record['batches']) ? record['batches'] : record['frames']
+  const refs = record['batches']
   if (!Array.isArray(refs)) throw new Error('manifest.batches 不是数组')
   return { ...record, frames: refs } as unknown as RemoteManifest
 }
@@ -605,6 +610,7 @@ async function appendFrames(
     readonly createdAt: number
     readonly formatVersion: number
     readonly frames: readonly SealedFrameRef[]
+    readonly workspaceKey?: string
     readonly tailOpen?: boolean
     readonly safeThroughSeq?: number
   },
@@ -790,6 +796,7 @@ async function verifySharedPrefix(
  * @param base - 服务端地址。
  * @param sessionKey - 会话密钥。
  * @param snapshot - 本地会话快照。
+ * @param workspaceKey - 该根会话的逻辑工作区 key；V2 必需。
  * @returns 会话同步结果。
  */
 async function syncSession<Session>(
@@ -798,6 +805,7 @@ async function syncSession<Session>(
   base: string,
   sessionKey: Buffer,
   snapshot: SnapshotLike,
+  workspaceKey: string | undefined,
 ): Promise<SessionSyncReport> {
   const header = snapshot.header
   const sessionId = String(header.id)
@@ -828,6 +836,7 @@ async function syncSession<Session>(
   if (remote !== undefined) {
     if (remote.createdAt !== meta.createdAt) throw new Error('远端会话的 createdAt 与本地不一致')
     if (remote.formatVersion !== meta.formatVersion) throw new Error('远端会话的格式代际与本地不一致')
+    if (remote.workspaceKey !== workspaceKey) throw new Error('远端会话的 workspaceKey 与本地不一致（diverged）')
     const head = remote.frames[0]
     if (head === undefined || head.chainHash !== headerChainHash(meta)) throw new Error('远端会话头与本地不一致（diverged）')
     await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, events)
@@ -872,6 +881,7 @@ async function syncSession<Session>(
       createdAt: meta.createdAt,
       formatVersion: meta.formatVersion,
       frames: sealedEntries.map((entry) => entry.ref),
+      ...workspaceKey === undefined ? {} : { workspaceKey },
       tailOpen,
       safeThroughSeq,
     })
@@ -914,17 +924,31 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
     workspaceAllowlist: allowlist,
   })
   const sessions: SessionSyncReport[] = []
+  const rootKeys = new Map<string, string | undefined>()
 
   for (const skipped of plan.skipped) {
     sessions.push({ sessionId: String(skipped.snapshot.header.id), status: 'skipped', error: skipped.reason })
   }
 
   for (const entry of plan.planned) {
+    if (entry.depth === 0) {
+      rootKeys.set(entry.rootId, deps.workspaceKeyOf(entry.rootId, String(entry.snapshot.header.cwd ?? '')))
+    }
+  }
+
+  for (const entry of plan.planned) {
     const sessionId = String(entry.snapshot.header.id)
     notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', progress: 0 })
     try {
+      const rootKey = rootKeys.get(entry.rootId)
+      const workspaceKey = entry.depth === 0 ? rootKey : undefined
+      if (rootKey === undefined) {
+        sessions.push({ sessionId, status: 'skipped', error: 'workspaceKey 未解析（unmapped）' })
+        notifyProgress(deps, { sessionId, direction: 'push', phase: 'error', progress: 0, error: 'workspaceKey 未解析（unmapped）' })
+        continue
+      }
       const sessionKey = sessionKeyOf(master, sessionId)
-      const report = await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot)
+      const report = await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot, workspaceKey)
       sessions.push(report)
       notifyProgress(deps, {
         sessionId, direction: 'push',
@@ -1138,6 +1162,36 @@ async function loadRemoteHeader(
 }
 
 /**
+ * 解析一个远端会话的 workspaceKey：根读取 manifest，子代理沿父链找根。
+ * @param loaded - 当前会话。
+ * @param fetchImpl - fetch。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param master - 主密钥。
+ * @param lookup - 本轮已读会话索引。
+ * @returns key 或 undefined（unmapped）。
+ */
+async function resolveWorkspaceKey(
+  loaded: LoadedRemote,
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  master: Buffer,
+  lookup: (sessionId: string) => LoadedRemote | undefined,
+): Promise<string | undefined> {
+  let current = loaded
+  const seen = new Set<string>()
+  while (current.remote.workspaceKey === undefined) {
+    const parentId = current.meta?.origin === 'subagent' ? current.meta.parentSession : undefined
+    if (parentId === undefined || seen.has(parentId)) return undefined
+    seen.add(parentId)
+    const cached = lookup(parentId)
+    current = cached ?? await loadRemoteHeader(fetchImpl, base, token, master, parentId)
+  }
+  return current.remote.workspaceKey
+}
+
+/**
  * 拉取一个会话。
  * @param deps - 拉取依赖。
  * @param fetchImpl - fetch 实现。
@@ -1153,6 +1207,7 @@ async function pullSession<Session>(
   base: string,
   master: Buffer,
   sessionId: string,
+  workspacePath: string,
   preloaded?: LoadedRemote,
 ): Promise<PullSessionReport> {
   const loaded = preloaded ?? await loadRemoteHeader(fetchImpl, base, deps.config.token, master, sessionId)
@@ -1180,10 +1235,10 @@ async function pullSession<Session>(
       if (headerChainHash(localMeta) !== headerRef.chainHash) throw new Error('本地会话头与远端不一致（diverged）')
       const localLast = read.events.length === 0 ? -1 : read.events[read.events.length - 1]!.seq
       await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events)
-      const localCwdNonPortable = cwdNonPortableOf(read.events, deps.workspacePath)
+      const localCwdNonPortable = cwdNonPortableOf(read.events, workspacePath)
       if (localLast > safe) return { sessionId, status: 'local-ahead', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
       if (localLast === safe) {
-        if (!localCwdNonPortable) await deps.attach?.(sessionId)
+        if (!localCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
         return { sessionId, status: 'up-to-date', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
       }
       const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, localLast, safe, sessionKey)
@@ -1191,8 +1246,8 @@ async function pullSession<Session>(
       await deps.beforeApply?.(sessionId, safe)
       await handle.append(events)
       await handle.flush()
-      const nextCwdNonPortable = cwdNonPortableOf([...read.events, ...events], deps.workspacePath)
-      if (!nextCwdNonPortable) await deps.attach?.(sessionId)
+      const nextCwdNonPortable = cwdNonPortableOf([...read.events, ...events], workspacePath)
+      if (!nextCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
       await deps.afterApply?.(sessionId)
       return {
         sessionId,
@@ -1210,7 +1265,7 @@ async function pullSession<Session>(
     version: meta.formatVersion,
     id: sessionId,
     createdAt: meta.createdAt,
-    cwd: deps.workspacePath,
+    cwd: workspacePath,
     isSeeded: meta.isSeeded,
     delegationDepth: meta.delegationDepth,
     ...meta.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset },
@@ -1226,8 +1281,8 @@ async function pullSession<Session>(
   } finally {
     await handle.close()
   }
-  const cwdNonPortable = cwdNonPortableOf(events, deps.workspacePath)
-  if (!cwdNonPortable) await deps.attach?.(sessionId)
+  const cwdNonPortable = cwdNonPortableOf(events, workspacePath)
+  if (!cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
   await deps.afterApply?.(sessionId)
   return {
     sessionId,
@@ -1250,8 +1305,8 @@ export async function correctCwd<Session>(
   deps: CorrectCwdDeps<Session>,
   sessionId: string,
 ): Promise<CwdCorrectionResult> {
-  if (deps.workspacePath.trim() === '' || !isAbsolute(deps.workspacePath)) {
-    return { ok: false, status: 'error', message: 'workspacePath 未配置或不是绝对路径' }
+  if (deps.targetPath.trim() === '' || !isAbsolute(deps.targetPath)) {
+    return { ok: false, status: 'error', message: 'targetPath 未配置或不是绝对路径' }
   }
   if (deps.sessions.get(sessionId) !== undefined) {
     return { ok: false, status: 'error', message: '会话正在运行，不能修改 cwd' }
@@ -1270,7 +1325,7 @@ export async function correctCwd<Session>(
     const last = lastWorkingDirectoryOf(events)
     const localLast = events.length === 0 ? -1 : events[events.length - 1]!.seq
     const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
-    if (last === undefined || cwdInsideWorkspace(deps.workspacePath, last)) {
+    if (last === undefined || cwdInsideWorkspace(deps.targetPath, last)) {
       // 本地已经 portable；如果远端还落后，说明上次修正只落了本地，必须先推送。
       if (remote === undefined || (remote.deletedAt === undefined && remote.lastSeq === localLast)) {
         return { ok: true, status: 'already-portable' }
@@ -1310,7 +1365,7 @@ export async function correctCwd<Session>(
         type: 'working-directory/change',
         seq: localLast + 1,
         time: Math.max(Date.now(), (typeof lastTime === 'number' && Number.isFinite(lastTime) ? lastTime : 0) + 1),
-        data: { cwd: deps.workspacePath },
+        data: { cwd: deps.targetPath },
       }
       await handle.append([correction])
       await handle.flush()
@@ -1359,11 +1414,8 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   if (allowlist.length === 0) {
     return { configured: false, reason: 'workspaceAllowlist 未配置', sessions: [], revision: state.revision }
   }
-  if (deps.workspacePath.trim() === '') {
-    return { configured: false, reason: 'workspacePath 未配置', sessions: [], revision: state.revision }
-  }
-  if (!pathAllowed(deps.workspacePath, allowlist)) {
-    return { configured: false, reason: 'workspacePath 不在同步白名单', sessions: [], revision: state.revision }
+  if (deps.workspacePathOf === undefined) {
+    return { configured: false, reason: 'workspace 绑定未初始化', sessions: [], revision: state.revision }
   }
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [], revision: state.revision }
@@ -1373,16 +1425,21 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
 
   const reports: PullSessionReport[] = []
   let revision = state.revision
+  const resolvePath = (workspaceKey: string | undefined): string | undefined => {
+    if (workspaceKey === undefined) return undefined
+    const path = deps.workspacePathOf(workspaceKey)
+    return path !== undefined && pathAllowed(path, allowlist) ? path : undefined
+  }
   // 拉取期间只收集待挂载会话，等整轮 apply 完再挂到工作区；这样前端不会在
   // 子代理/根会话只到一半时刷新列表。pending 在 append+flush 后即清除，
   // 挂载失败时下一轮会因本地已是最新而重试挂载。
-  const attachments: string[] = []
+  const attachments: Array<{ readonly sessionId: string; readonly workspacePath?: string }> = []
   let applyStarted: string | undefined
   const applyDeps: PullDeps<Session> = {
     ...deps,
     ...(deps.attach === undefined ? {} : {
-      attach: async (sessionId: string): Promise<void> => {
-        attachments.push(sessionId)
+      attach: async (sessionId: string, workspacePath?: string): Promise<void> => {
+        attachments.push({ sessionId, ...workspacePath === undefined ? {} : { workspacePath } })
       },
     }),
     beforeApply: async (sessionId: string, targetSeq: number): Promise<void> => {
@@ -1398,7 +1455,14 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   // 上次崩溃留下的 pending：先把它补完，再继续游标。
   if (state.pending !== undefined) {
     try {
-      reports.push(await pullSession(applyDeps, fetchImpl, base, master, state.pending.sessionId))
+      const loaded = await loadRemoteHeader(fetchImpl, base, config.token, master, state.pending.sessionId)
+      const workspaceKey = await resolveWorkspaceKey(loaded, fetchImpl, base, config.token, master, () => undefined)
+      const workspacePath = resolvePath(workspaceKey)
+      if (workspacePath === undefined) {
+        reports.push({ sessionId: state.pending.sessionId, status: 'unmapped', ...workspaceKey === undefined ? {} : { workspaceKey } })
+        return { configured: true, sessions: reports, revision: state.revision }
+      }
+      reports.push(await pullSession(applyDeps, fetchImpl, base, master, state.pending.sessionId, workspacePath, loaded))
       await deps.afterApply?.(state.pending.sessionId)
     } catch (error: unknown) {
       const classified = classifySyncError(error)
@@ -1434,6 +1498,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       (right.loaded.meta?.delegationDepth ?? -1) - (left.loaded.meta?.delegationDepth ?? -1)
       || (left.loaded.meta?.createdAt ?? 0) - (right.loaded.meta?.createdAt ?? 0)
       || left.sessionId.localeCompare(right.sessionId))
+    const preparedById = new Map(prepared.map((item) => [item.sessionId, item.loaded]))
 
     for (const item of prepared) {
       if (item.loaded.remote.deletedAt !== undefined) {
@@ -1443,7 +1508,32 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', progress: 0 })
       applyStarted = undefined
       try {
-        const report = await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, item.loaded)
+        const workspaceKey = await resolveWorkspaceKey(
+          item.loaded,
+          fetchImpl,
+          base,
+          config.token,
+          master,
+          (sessionId) => preparedById.get(sessionId),
+        )
+        const workspacePath = resolvePath(workspaceKey)
+        if (workspacePath === undefined) {
+          reports.push({
+            sessionId: item.sessionId,
+            status: 'unmapped',
+            ...workspaceKey === undefined ? {} : { workspaceKey },
+            ...item.loaded.meta === undefined ? {} : {
+              createdAt: item.loaded.meta.createdAt,
+              formatVersion: item.loaded.meta.formatVersion,
+            },
+          })
+          notifyProgress(deps, {
+            sessionId: item.sessionId, direction: 'pull', phase: 'done', progress: 1,
+            error: '未映射工作区：unmapped',
+          })
+          continue
+        }
+        const report = await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, workspacePath, item.loaded)
         reports.push(report)
         notifyProgress(deps, {
           sessionId: item.sessionId, direction: 'pull',
@@ -1489,10 +1579,13 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   }
 
   if (deps.attach !== undefined) {
-    const unique = [...new Set(attachments)]
-    for (const sessionId of unique) {
+    const unique = new Map<string, string | undefined>()
+    for (const attachment of attachments) {
+      if (!unique.has(attachment.sessionId)) unique.set(attachment.sessionId, attachment.workspacePath)
+    }
+    for (const [sessionId, workspacePath] of unique) {
       try {
-        await deps.attach(sessionId)
+        await deps.attach(sessionId, workspacePath)
       } catch (error: unknown) {
         const classified = classifySyncError(error)
         deps.logger?.warn(`dsh-session-cloudsync: 挂载 ${sessionId} 失败：${classified.message}`)

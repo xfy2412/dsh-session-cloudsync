@@ -19,7 +19,6 @@ DSH 会话云同步插件：自部署服务端、端到端加密，同步根会�
 ```yaml
 serverUrl: ''            # 自部署服务端地址
 deviceName: ''           # 设备短标签
-workspacePath: ''        # 拉取会话落到哪个已选工作区；空 = 只推不拉
 workspaceAllowlist: []   # 允许同步的工作区路径；空 = 暂不同步
 autoSync: true
 intervalMs: 60000

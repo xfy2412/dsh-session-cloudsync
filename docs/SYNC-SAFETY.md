@@ -57,7 +57,7 @@ interface SessionSummary {
 - 首启/设置页的同步列表由 `GET /api/session-cloudsync/workspaces` 提供：每个工作区带 `title`、根会话数、子代理数、是否选中；「全选」就是把全部 `path` 写进白名单。
 - 推送按根会话的 `cwd` 判定白名单；子代理后代跟随根，不单独判定。只有 `origin === 'subagent'` 算后代；fork 虽然也有 `parentSession`，但它是独立根。
 - 推送顺序是**后代深到浅、根最后**；拉取按远端封好的 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入 `skipped`，不会静默丢进同步链。
-- 拉取要求 `workspacePath` 也在白名单里（拉取目标必须是已选工作区之一）。远端会话头不携带 `cwd`（跨设备路径不稳定），所以当前所有远端会话都落到 `workspacePath`；多工作区各自回填属于后续工作。
+- 拉取按远端 `workspaceKey` 查本机绑定；未找到绑定时标记 `unmapped`，不创建本地会话，也不猜落点。
 
 ## 3. 拉取原子性
 

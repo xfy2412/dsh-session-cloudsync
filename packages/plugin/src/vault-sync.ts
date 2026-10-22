@@ -350,8 +350,15 @@ async function requestJson(
   return { ok: true, value: record['value'], status: response.status }
 }
 
+/** 由配置派生 vaultKey；供 host 的 workspaceKey 解析复用。 */
+export function vaultKeyForConfig(config: Pick<VaultSyncConfig, 'serverUrl' | 'passphrase' | 'salt'>): Buffer {
+  const base = config.serverUrl.trim().replace(/\/+$/u, '')
+  if (base === '') throw new Error('serverUrl 非法')
+  return vaultKeyOf(masterKeyOf(config, base))
+}
+
 /** 由配置派生 masterKey。 */
-function masterKeyOf(config: VaultSyncConfig, base: string): Buffer {
+function masterKeyOf(config: Pick<VaultSyncConfig, 'passphrase' | 'salt'>, base: string): Buffer {
   const salt = config.salt === undefined || config.salt === ''
     ? Buffer.from(sha256(`dsh-session-cloudsync/v1|${base}`).slice(0, 32), 'hex')
     : Buffer.from(config.salt, 'base64')

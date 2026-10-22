@@ -3,9 +3,8 @@
 > 状态：**v1 已实现**（`packages/shared/src/sealed-frame.ts`，`packages/shared/tests/sealed-frame.test.ts`）。
 > 三个待定项已拍板：确定性 nonce、清单不带 cwd、keyId 每帧记录。
 >
-> M4 协议层把每个 sealed frame 视为一个**事件批次**（event batch）；对外字段是
-> `batches` / `batchCount`，`frames` / `frameCount` 仅作旧客户端别名。格式名与
-> 内部类型名保留 "sealed frame" 历史，不改变密文字节布局。
+> M4 协议层把每个 sealed frame 视为一个**事件批次**（event batch）；对外字段只有
+> `batches` / `batchCount`。格式名与内部类型名保留 "sealed frame" 历史，不改变密文字节布局。
 
 ## 1. 目标
 

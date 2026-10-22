@@ -173,7 +173,7 @@ function renderSessions(sessions) {
     const row = document.createElement('tr')
     cell(row, session.sessionId)
     cell(row, 'v' + session.formatVersion)
-    cell(row, String(session.frameCount))
+    cell(row, String(session.batchCount))
     cell(row, String(session.lastSeq))
     cell(row, time(session.updatedAt))
     cell(row, session.lease === null ? '—' : session.lease.deviceId + ' 至 ' + time(session.lease.leaseUntil))

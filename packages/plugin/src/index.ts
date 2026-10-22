@@ -31,6 +31,9 @@ import {
 } from './engine.ts'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
+import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
+import { vaultKeyForConfig } from './vault-sync.ts'
+import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
 import type { SetupInfo, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
@@ -59,8 +62,6 @@ export interface Config {
   salt?: string
   /** 本设备短标签；空表示未使用。 */
   deviceName?: string
-  /** 拉取会话时挂载的本地工作区路径；空表示只推送不拉取。 */
-  workspacePath?: string
   /** 允许同步的工作区路径；空数组表示未配置、暂不同步任何会话。 */
   workspaceAllowlist?: string[]
   /** 是否自动按间隔推送，默认 true；关闭后只做一次启动推送。 */
@@ -85,7 +86,6 @@ export const Config = z.object({
   passphrase: z.string().default(''),
   salt: z.string().default(''),
   deviceName: z.string().default('').volatile(),
-  workspacePath: z.string().default('').volatile(),
   workspaceAllowlist: z.array(z.string()).default([]).volatile(),
   autoSync: z.boolean().default(true).volatile(),
   intervalMs: z.number().min(1000).default(60000).volatile(),
@@ -193,7 +193,6 @@ export function apply(ctx: Context, config: Config): void {
   let salt = readVolatile<string>(config.salt) ?? ''
   let includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
   let deviceName = readVolatile<string>(config.deviceName) ?? ''
-  let workspacePath = readVolatile<string>(config.workspacePath) ?? ''
   let autoSync = readVolatile<boolean>(config.autoSync) !== false
   let batchEvents = readVolatile<number>(config.batchEvents) ?? 50
   let batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
@@ -233,7 +232,6 @@ export function apply(ctx: Context, config: Config): void {
     salt = readVolatile<string>(config.salt) ?? ''
     includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
     deviceName = readVolatile<string>(config.deviceName) ?? ''
-    workspacePath = readVolatile<string>(config.workspacePath) ?? ''
     autoSync = readVolatile<boolean>(config.autoSync) !== false
     batchEvents = readVolatile<number>(config.batchEvents) ?? 50
     batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
@@ -317,6 +315,38 @@ export function apply(ctx: Context, config: Config): void {
     : readPullJournal(statePath)
   if (statePath === undefined) logger.info('dsh-session-cloudsync: 找不到 DSH home，拉取状态只保存在内存')
 
+  let bindings: WorkspaceBindings = emptyBindings()
+  const bindingsDir = statePath === undefined ? undefined : join(dirname(statePath), 'vault')
+  const refreshBindings = async (): Promise<void> => {
+    bindings = bindingsDir === undefined ? emptyBindings() : await readBindings(bindingsDir)
+  }
+  let vaultKeyCache: { readonly identity: string; readonly key: Buffer } | undefined
+  const currentVaultKey = (): Buffer | undefined => {
+    const identity = `${serverUrl}\u0000${engineConfig.passphrase}\u0000${engineConfig.salt ?? ''}`
+    if (vaultKeyCache?.identity === identity) return vaultKeyCache.key
+    try {
+      const key = vaultKeyForConfig({
+        serverUrl,
+        passphrase: engineConfig.passphrase,
+        ...engineConfig.salt === undefined || engineConfig.salt === '' ? {} : { salt: engineConfig.salt },
+      })
+      vaultKeyCache = { identity, key }
+      return key
+    } catch {
+      return undefined
+    }
+  }
+  const workspaceKeyForCwd = (_sessionId: string, cwd: string): string | undefined => {
+    const raw = cwd.trim()
+    if (raw === '') return undefined
+    const registered = (workspaceRegistry?.list?.() ?? []).find((workspace) => pathKeyOf(workspace.path) === pathKeyOf(raw))
+    const localPath = registered?.path ?? raw
+    const bound = keyForPath(bindings, localPath)
+    if (bound !== undefined) return bound
+    const vaultKey = currentVaultKey()
+    return vaultKey === undefined ? undefined : deriveWorkspaceKey(vaultKey, localPath)
+  }
+
   const persistState = (state: PullState): void => {
     if (statePath === undefined) return
     try {
@@ -372,7 +402,11 @@ export function apply(ctx: Context, config: Config): void {
 
   let pullWithDeps: ((state: PullState) => Promise<PullReport>) | undefined
   const controller = new SyncController({
-    push: () => syncOnce({ ...deps, onProgress: (progress) => controller.updateProgress(progress) }),
+    push: () => syncOnce({
+      ...deps,
+      workspaceKeyOf: workspaceKeyForCwd,
+      onProgress: (progress) => controller.updateProgress(progress),
+    }),
     pull: (state) => {
       if (pullWithDeps === undefined) throw new Error('拉取引擎尚未初始化')
       return pullWithDeps(state)
@@ -444,11 +478,11 @@ export function apply(ctx: Context, config: Config): void {
     },
     sessions: deps.sessions,
     config: engineConfig,
-    workspacePath,
-    attach: async (sessionId: string): Promise<void> => {
+    attach: async (sessionId: string, mappedPath?: string): Promise<void> => {
       if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
-      const workspace = (await workspaceRegistry.resolveByPath(workspacePath))
-        ?? (await workspaceRegistry.create(workspacePath, 'Session Sync'))
+      if (mappedPath === undefined || mappedPath === '') throw new Error('会话没有可用的本地工作区落点')
+      const workspace = (await workspaceRegistry.resolveByPath(mappedPath))
+        ?? (await workspaceRegistry.create(mappedPath, 'Session Sync'))
       await workspace.attachSession(sessionId as SessionId)
     },
     logger,
@@ -463,7 +497,7 @@ export function apply(ctx: Context, config: Config): void {
     refreshConfig()
     return pullOnce({
       ...pullDeps,
-      workspacePath,
+      workspacePathOf: (key: string) => pathForKey(bindings, key),
       onProgress: (progress) => controller.updateProgress(progress),
     }, state)
   }
@@ -477,7 +511,6 @@ export function apply(ctx: Context, config: Config): void {
       reason: state.reason ?? null,
       serverUrl,
       deviceName,
-      workspacePath,
       workspaceAllowlist,
       allowlistConfigured: workspaceAllowlist.length > 0,
       autoSync,
@@ -494,6 +527,7 @@ export function apply(ctx: Context, config: Config): void {
   const runSync = async (manual = false): Promise<Awaited<ReturnType<SyncController['run']>>> => {
     refreshConfig()
     await refreshSecrets()
+    await refreshBindings()
     const result = manual ? await controller.run({ manual: true }) : await controller.run()
     void runVault().catch((error: unknown) => {
       logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
@@ -503,6 +537,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const workspaces = async (): Promise<SyncWorkspaceList> => {
     refreshConfig()
+    await refreshBindings()
     const snapshots = await ctx.sessionPersistence.list()
     const tree = buildSessionTree(snapshots)
     const groups = new Map<string, { path: string; rootSessions: number; subagentSessions: number }>()
@@ -529,9 +564,11 @@ export function apply(ctx: Context, config: Config): void {
       const key = pathKeyOf(workspace.path)
       seen.add(key)
       const group = groups.get(key)
+      const candidateKey = workspaceKeyForCwd('', workspace.path)
       candidates.push({
         path: workspace.path,
         title: workspace.title,
+        ...candidateKey === undefined ? {} : { workspaceKey: candidateKey },
         rootSessions: group?.rootSessions ?? 0,
         subagentSessions: group?.subagentSessions ?? 0,
         selected: pathAllowed(workspace.path, workspaceAllowlist),
@@ -539,34 +576,54 @@ export function apply(ctx: Context, config: Config): void {
     }
     for (const [key, group] of groups) {
       if (seen.has(key)) continue
+      const candidateKey = workspaceKeyForCwd('', group.path)
       candidates.push({
         path: group.path,
         title: titleOfPath(group.path),
+        ...candidateKey === undefined ? {} : { workspaceKey: candidateKey },
         rootSessions: group.rootSessions,
         subagentSessions: group.subagentSessions,
         selected: pathAllowed(group.path, workspaceAllowlist),
       })
     }
 
+    const unmapped = new Map<string | null, number>()
+    for (const session of controller.snapshot().sessions) {
+      if (session.direction !== 'pull' || session.status !== 'unmapped') continue
+      const key = session.workspaceKey ?? null
+      if (key !== null && bindings.bindings[key] !== undefined) continue
+      unmapped.set(key, (unmapped.get(key) ?? 0) + 1)
+    }
+
     return {
       allowlistConfigured: workspaceAllowlist.length > 0,
       selectedPaths: workspaceAllowlist,
       workspaces: candidates,
+      bindings: Object.values(bindings.bindings).map((binding) => ({
+        workspaceKey: binding.key,
+        localPath: binding.localPath,
+        label: binding.label,
+        createdAt: binding.createdAt,
+      })),
+      unmapped: [...unmapped.entries()].map(([workspaceKey, sessions]) => ({ workspaceKey, sessions })),
     }
   }
 
   const fixCwd = async (sessionId: string) => {
     refreshConfig()
     await refreshSecrets()
+    const snapshot = await ctx.sessionPersistence.stat(sessionId as SessionId)
+    const target = snapshot?.header.cwd?.trim() ?? ''
+    if (target === '') return { ok: false, status: 'error' as const, message: '本地会话没有可用工作区' }
     const result = await correctSessionCwd({
       persistence: pullDeps.persistence,
       sessions: deps.sessions,
       config: engineConfig,
-      workspacePath,
+      targetPath: target,
       logger,
     }, sessionId)
     if (result.ok && (result.status === 'corrected' || result.status === 'already-portable')) {
-      await pullDeps.attach(sessionId)
+      await pullDeps.attach(sessionId, target)
     }
     return result
   }
@@ -582,7 +639,8 @@ export function apply(ctx: Context, config: Config): void {
     syncNow: () => runSync(true),
     cwdDecision: async (sessionId: string, action: 'fix' | 'skip') => {
       if (action === 'skip') {
-        await pullDeps.attach(sessionId)
+        const snapshot = await ctx.sessionPersistence.stat(sessionId as SessionId)
+        await pullDeps.attach(sessionId, snapshot?.header.cwd)
         controller.clearCwdPending(sessionId)
         return { ok: true, status: 'attached' as const }
       }
@@ -614,6 +672,17 @@ export function apply(ctx: Context, config: Config): void {
         dshPid: process.pid,
       })
     },
+    bindWorkspace: async (workspaceKey: string, localPath: string) => {
+      refreshConfig()
+      if (bindingsDir === undefined) throw new Error('找不到 Vault 状态目录')
+      if (!pathAllowed(localPath, workspaceAllowlist)) throw new Error('本地工作区不在同步白名单')
+      if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
+      const workspace = await workspaceRegistry.resolveByPath(localPath)
+      if (workspace === undefined) throw new Error('本地工作区不存在')
+      await bindWorkspaceFile(bindingsDir, workspaceKey, workspace.path, workspace.title)
+      await refreshBindings()
+      return workspaces()
+    },
   }
   ctx.inject(['connection'], (connectionCtx) => {
     const connection = connectionCtx.get('connection') as ConnectionLike | undefined
@@ -629,11 +698,12 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
 
-  void refreshSecrets().then(() => {
+  void refreshSecrets().then(async () => {
     const current = configuration()
     if (!current.configured) {
       logger.info(`dsh-session-cloudsync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
     } else {
+      await refreshBindings()
       void controller.run()
       void runVault().catch((error: unknown) => {
         logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)

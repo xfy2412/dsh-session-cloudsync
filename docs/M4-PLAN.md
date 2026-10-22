@@ -2,7 +2,7 @@
 
 > 状态：M3 核心链路已完成（推送/拉取/安全边界/断网降级/双 home 验收）；M4 进行中。本文件是 M4 的唯一清单，ROADMAP 只保留状态摘要。
 >
-> 进度（2026-10-20）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已把协议规范字段改为 `batches` / `batchCount` 并保留旧别名；当前 129 tests。下一步 D5/C5 的端到端演练与 E3 文档收口。
+> 进度（2026-10-20）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已删除旧别名，只保留 `batches` / `batchCount`；当前 131 tests。下一步 D5/C5 的端到端演练与 E3 文档收口。
 >
 > 2026-10-22 调整：先做 [VAULT.md](VAULT.md) V0 → V1 → V2（`workspaceKey` 多工作区落点），
 > 再做 C5/D5/E3；本文件 A–E 不删除，只调整顺序。
@@ -36,7 +36,7 @@
 | ID | 内容 | 依赖 |
 |---|---|---|
 | B1 | `token` / `passphrase` 迁到 DSH `ctx.credentials`；支持环境变量/配置作为 bootstrap fallback | A3 |
-| B2 | 非敏感配置：serverUrl、workspaceAllowlist、workspacePath、autoSync、interval、batch 上限 | A3 |
+| B2 | 非敏感配置：serverUrl、workspaceAllowlist、autoSync、interval、batch 上限 | A3 |
 | B3 | 设置页：Plugins 页的 `plugins.bundle.config` / `plugins.row.config` + `SettingsForm`；`settings.plugins.tab` 只用于 Built-in inventory，不是第三方插件配置位 | A4、B1、B2 |
 | B4 | Host↔Client 控制通道（测试连接、立即同步、读取状态） | A3 |
 | B5 | 首启引导：连接 → 凭据 → 工作区白名单 → 测试/首次同步；未配置时显示 | B3、B4 |
@@ -45,7 +45,7 @@
 >
 > - B1：固定凭据引用 `DSH_SESSION_CLOUDSYNC_TOKEN` / `DSH_SESSION_CLOUDSYNC_PASSPHRASE`；每轮同步前 `ctx.credentials.resolve`，凭据优先、YAML `token`/`passphrase` 仅作 bootstrap fallback；`setup` 带 `hasToken/hasPassphrase/tokenSource/passphraseSource/credentialRefs`，不回传值。
 > - B2：非敏感字段已标 `.volatile()`，DSH 设置页可直接生成表单并热更新；`token`/`passphrase` 不放进普通表单。默认单次 HTTP 读取超时 10s（`requestTimeoutMs`），避免网络挂死无限等待。
-> - `workspacePath` 是 M4 的开发期单落点占位：插件未公开发布，V2 直接用 [VAULT.md](VAULT.md) 的工作区绑定替换，不做迁移/兼容分支。
+> - 工作区落点由 V2 的 `workspaceKey` 一次性绑定决定，M4 的单一 `workspacePath` 已删除。
 > - 启动对账（候选列表/确认/忽略）与 raw 前缀校验见 [RECONCILE.md](RECONCILE.md)；实现前不能把当前“自动拉取所有远端会话”当作最终 UX。
 > - 宿主每轮 status/setup/sync 都重新读取 `.volatile()` 引用的 `.get()`，所以设置页保存后不必重启插件即可生效；首启/设置页的测试连接也先保存当前输入再测。
 > - B4：`GET /status`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 验证服务端可达与 token，不校验口令。
@@ -107,7 +107,7 @@
 
 | ID | 内容 |
 |---|---|
-| E1 | `frames → batches` 协议/字段/文档重命名：已落 `batches`/`batchCount` 规范字段、`/batches` 路由与 client 新写入；`frames`/`frameCount` 仅保留兼容别名 | 已完成 |
+| E1 | `frames → batches` 协议/字段/文档重命名：已删除旧别名，只保留 `batches`/`batchCount`、`/batches` 路由 | 已完成 |
 | E2 | 采集白名单（按工作区路径）；**空配置 = 暂不同步任何会话**；首启/设置页的同步列表提供「全选」；子代理跟随根会话闭包 | A5 |
 | E3 | 更新 ROADMAP/PROTOCOL/SYNC-SAFETY/tests 文档 |
 

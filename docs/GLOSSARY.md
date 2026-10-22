@@ -115,8 +115,7 @@ sessionId + createdAt + formatVersion
 | **alias binding / 别名绑定** | `workspaceKey != pathKey` 的绑定；以后从该本机路径推送时复用远端 key |
 | **nonPortable** | 当前/最后 cwd 在工作区外；本地警告，保留原值，不映射到根 |
 | **workspaceAllowlist** | 允许同步的工作区路径列表；空 = 暂不同步 |
-| **workspacePath** | M4 开发期的单一拉取落点；未发布版本的占位，不是最终协议 |
-| **pull target / 拉取落点** | 远端会话最终写入哪个本地工作区 |
+| **pull target / 拉取落点** | 远端会话最终写入哪个本地工作区；由工作区绑定解析 |
 
 ## 5. 对账流程
 

@@ -63,6 +63,13 @@ window.__ModuleLoader__.load({
       '.dssync-note.warn{color:var(--dsw-alias-state-warn-primary,#f0b64a)}',
       '.dssync-note.bad{color:var(--dsw-alias-state-error-primary,#ffb1b1)}',
       '.dssync-wslist{display:flex;flex-direction:column;gap:7px}',
+      '.dssync-bindlist,.dssync-maplist{display:flex;flex-direction:column;gap:7px;margin-top:8px}',
+      '.dssync-bindrow,.dssync-maprow{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--dssync-line);border-radius:9px;flex-wrap:wrap}',
+      '.dssync-bindrow b,.dssync-maprow b{font-size:12px;font-weight:600}',
+      '.dssync-bindrow code{font-size:10.5px;color:var(--dssync-faint)}',
+      '.dssync-mapkey{display:flex;flex-direction:column;gap:2px;min-width:150px;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--dssync-muted)}',
+      '.dssync-mapkey span{font:10.5px var(--dssync-font,system-ui);color:var(--dssync-faint)}',
+      '.dssync-maprow select{flex:1 1 220px;height:28px;border:1px solid var(--dssync-line-strong);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#1d1d1f);color:inherit;font:inherit;font-size:11px}',
       '.dssync-ws{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--dssync-line);border-radius:9px;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.025))}',
       '.dssync-ws.on{border-color:rgba(86,134,254,.42);background:var(--dssync-accent-soft)}',
       '.dssync-ws input{width:15px;height:15px;accent-color:var(--dssync-accent);flex:0 0 auto}',
@@ -364,6 +371,16 @@ window.__ModuleLoader__.load({
         patch({ replacePlan: null })
       }
 
+      async function bindWorkspace(workspaceKey, localPath) {
+        var value = await fetchJson('/workspaces/bind', {
+          method: 'POST',
+          body: JSON.stringify({ workspaceKey: workspaceKey, localPath: localPath }),
+        })
+        await refreshWorkspaces()
+        await refreshStatus()
+        return { ok: true, value: value }
+      }
+
       function toast(text, bad) {
         if (toastTimer !== null) clearTimeout(toastTimer)
         patch({ toast: { text: text, bad: bad === true, at: Date.now() } })
@@ -390,6 +407,7 @@ window.__ModuleLoader__.load({
         resolveBlocked: resolveBlocked,
         prepareReplace: prepareReplace,
         dismissReplace: dismissReplace,
+        bindWorkspace: bindWorkspace,
         toast: toast,
         dispose: dispose,
       }
@@ -429,11 +447,14 @@ window.__ModuleLoader__.load({
 
     /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策 / 已分叉。 */
     function sessionState(status, sessionId) {
-      if (status === null) return { pending: false, tail: false, lag: false, cwd: false, blocked: false, blockedReason: '' }
+      if (status === null) return { pending: false, tail: false, lag: false, cwd: false, blocked: false, blockedReason: '', unmapped: false }
       var pending = status.pending !== null && status.pending !== undefined && status.pending.sessionId === sessionId
       var tail = false
       var lag = false
       var cwd = Array.isArray(status.cwdPending) && status.cwdPending.indexOf(sessionId) !== -1
+      var unmapped = Array.isArray(status.sessions) && status.sessions.some(function (view) {
+        return view.sessionId === sessionId && view.direction === 'pull' && view.status === 'unmapped'
+      })
       var blocked = null
       if (Array.isArray(status.blocked)) {
         blocked = status.blocked.find(function (entry) { return entry && entry.sessionId === sessionId }) || null
@@ -450,12 +471,14 @@ window.__ModuleLoader__.load({
         pending: pending, tail: tail, lag: lag, cwd: cwd,
         blocked: blocked !== null,
         blockedReason: blocked && blocked.message ? blocked.message : '',
+        unmapped: unmapped,
       }
     }
 
     function sessionBlockReason(status, sessionId) {
       var state = sessionState(status, sessionId)
       if (state.blocked) return '这个会话的本地与远端历史已分叉，已阻止继续写入；请先人工处理'
+      if (state.unmapped) return '这个远端会话的工作区尚未映射到本机，请先在设置里建立一次性映射'
       if (state.pending) return '正在应用云端写入，暂不能继续这个会话'
       if (state.tail) return '这个会话有未闭合的同步尾巴，先完成当前轮次再打开'
       if (state.lag) return '这个会话的安全边界还落后于远端，暂不能继续'
@@ -471,7 +494,6 @@ window.__ModuleLoader__.load({
       return {
         serverUrl: source.serverUrl !== undefined ? source.serverUrl : (fallback.serverUrl || ''),
         deviceName: source.deviceName !== undefined ? source.deviceName : (fallback.deviceName || ''),
-        workspacePath: source.workspacePath !== undefined ? source.workspacePath : (fallback.workspacePath || ''),
         workspaceAllowlist: Array.isArray(source.workspaceAllowlist) ? source.workspaceAllowlist.slice() : ((fallback.workspaceAllowlist || []).slice()),
         autoSync: source.autoSync !== undefined ? source.autoSync !== false : fallback.autoSync !== false,
         intervalMs: source.intervalMs !== undefined ? source.intervalMs : (fallback.intervalMs || 60000),
@@ -494,6 +516,46 @@ window.__ModuleLoader__.load({
           onChange: function (event) { props.onChange(event.target.checked) },
         }),
         h('i'))
+    }
+
+    function WorkspaceMappingRow(props) {
+      var model = props.model
+      var options = props.options
+      var choiceState = useState(options.length > 0 ? options[0].path : '')
+      var choice = choiceState[0]
+      var setChoice = choiceState[1]
+      var busyState = useState(false)
+      var busy = busyState[0]
+      var setBusy = busyState[1]
+      var key = props.workspaceKey
+      return h('div', { className: 'dssync-maprow' },
+        h('div', { className: 'dssync-mapkey', title: key || '远端没有 workspaceKey' },
+          key === null ? '未知工作区' : key.slice(0, 12) + '…',
+          h('span', null, props.sessions + ' 个会话')),
+        options.length === 0
+          ? h('span', { className: 'dssync-note warn' }, '先选择一个同步工作区')
+          : h('select', {
+            value: choice,
+            onChange: function (event) { setChoice(event.target.value) },
+          }, options.map(function (item) {
+            return h('option', { value: item.path, key: item.path }, item.title || item.path)
+          })),
+        h('button', {
+          className: 'dssync-pill', type: 'button',
+          disabled: busy || key === null || choice === '',
+          onClick: function () {
+            if (key === null || choice === '') return
+            setBusy(true)
+            model.bindWorkspace(key, choice).then(function (result) {
+              if (!result || result.ok !== true) {
+                model.toast((result && result.error && result.error.message) || '绑定失败', true)
+                return
+              }
+              model.toast('已建立工作区映射；不能改绑')
+            }).catch(function (error) { model.toast(errorText(error), true) })
+              .finally(function () { setBusy(false) })
+          },
+        }, busy ? '绑定中…' : '绑定'))
     }
 
     function SyncSettingsPage(props) {
@@ -566,7 +628,6 @@ window.__ModuleLoader__.load({
         var ops = [
           { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
           { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
-          { op: 'set', path: ['workspacePath'], value: String(fields.workspacePath || '').trim() },
           { op: 'set', path: ['workspaceAllowlist'], value: fields.workspaceAllowlist.slice() },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
           { op: 'set', path: ['intervalMs'], value: Number(fields.intervalMs) || 60000 },
@@ -661,9 +722,6 @@ window.__ModuleLoader__.load({
       var allPaths = candidates.map(function (item) { return item.path })
       var allSelected = allPaths.length > 0 && allPaths.every(function (path) { return fields.workspaceAllowlist.indexOf(path) >= 0 })
       var pullChoices = candidates.filter(function (item) { return fields.workspaceAllowlist.indexOf(item.path) >= 0 })
-      if (fields.workspacePath !== '' && !pullChoices.some(function (item) { return item.path === fields.workspacePath })) {
-        pullChoices = pullChoices.concat([{ path: fields.workspacePath, title: fields.workspacePath }])
-      }
       var setupInfo = state.setup
       var tokenConfigured = setupInfo ? setupInfo.hasToken : false
       var passConfigured = setupInfo ? setupInfo.hasPassphrase : false
@@ -686,20 +744,6 @@ window.__ModuleLoader__.load({
                 id: 'dssync-device', value: fields.deviceName,
                 onChange: function (event) { set('deviceName', event.target.value) },
               }))),
-          h(Field, {
-            id: 'dssync-wspath',
-            label: '拉取会话落到工作区（可选）',
-            hint: '远端会话不带本地路径；选一个已选工作区作为落点。留空 = 只推送、不拉取。',
-          },
-          h('select', {
-            id: 'dssync-wspath', value: fields.workspacePath,
-            disabled: disabled || fields.workspaceAllowlist.length === 0,
-            onChange: function (event) { set('workspacePath', event.target.value) },
-          },
-          h('option', { value: '' }, fields.workspaceAllowlist.length === 0 ? '先选择上面的同步工作区' : '不拉取（只推送）'),
-          pullChoices.map(function (item) {
-            return h('option', { value: item.path, key: item.path }, item.title || item.path)
-          }))),
           h('div', { className: 'dssync-btnrow' },
             h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || busy === 'test', onClick: test }, busy === 'test' ? '测试中…' : '测试连接'),
             h('span', { className: 'spacer' }),
@@ -750,6 +794,34 @@ window.__ModuleLoader__.load({
           fields.workspaceAllowlist.length === 0
             ? h('div', { className: 'dssync-note warn' }, '没有选择任何工作区时，插件不会推送或拉取。')
             : null),
+
+        h('section', { className: 'dssync-sec' },
+          h('div', { className: 'dssync-sechead' },
+            h('h3', null, '远端工作区映射'),
+            h('span', null, '一次性绑定，不能改绑')),
+          h('div', { className: 'dssync-note' },
+            '远端会话只带 opaque workspaceKey；选择本地工作区后才会拉取。未映射的会话不会写入本机。'),
+          workspaces === null
+            ? h('div', { className: 'dssync-note' }, '读取映射…')
+            : (workspaces.bindings || []).length > 0
+              ? h('div', { className: 'dssync-bindlist' }, (workspaces.bindings || []).map(function (binding) {
+                return h('div', { className: 'dssync-bindrow', key: binding.workspaceKey },
+                  h('b', null, binding.label || binding.localPath),
+                  h('span', { className: 'dssync-note' }, binding.localPath),
+                  h('code', null, binding.workspaceKey.slice(0, 12) + '…'))
+              }))
+              : h('div', { className: 'dssync-note' }, '还没有本机映射。'),
+          workspaces !== null && (workspaces.unmapped || []).length > 0
+            ? h('div', { className: 'dssync-maplist' }, (workspaces.unmapped || []).map(function (item) {
+              return h(WorkspaceMappingRow, {
+                key: String(item.workspaceKey) + ':' + item.sessions,
+                model: model,
+                workspaceKey: item.workspaceKey,
+                sessions: item.sessions,
+                options: pullChoices,
+              })
+            }))
+            : h('div', { className: 'dssync-note' }, '当前没有未映射的远端工作区。')),
 
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
@@ -868,13 +940,9 @@ window.__ModuleLoader__.load({
       }
 
       async function saveFields() {
-        var pullTarget = fields.workspacePath !== '' && fields.workspaceAllowlist.indexOf(fields.workspacePath) >= 0
-          ? fields.workspacePath
-          : (fields.workspaceAllowlist[0] || '')
         var ops = [
           { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
           { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
-          { op: 'set', path: ['workspacePath'], value: pullTarget },
           { op: 'set', path: ['workspaceAllowlist'], value: fields.workspaceAllowlist.slice() },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
           { op: 'set', path: ['intervalMs'], value: Number(fields.intervalMs) || 60000 },

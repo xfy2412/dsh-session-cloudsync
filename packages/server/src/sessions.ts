@@ -44,13 +44,15 @@ export interface AppendInput {
   readonly frames: readonly SealedFrameRef[]
   readonly tailOpen?: boolean
   readonly safeThroughSeq?: number
+  /** 根/worktree 的逻辑工作区 key；子代理继承。 */
+  readonly workspaceKey?: string
 }
 
 /** append / delete 之后返回的会话摘要。 */
 export interface SessionSummary {
   readonly sessionId: string
   readonly revision: number
-  readonly frameCount: number
+  readonly batchCount: number
   readonly headChainHash: string
   readonly manifestDigest: string
   readonly lastSeq: number
@@ -114,6 +116,7 @@ function manifestOf(
   frames: readonly SealedFrameRef[],
   tailOpen?: boolean,
   safeThroughSeq?: number,
+  workspaceKey?: string,
 ): {
   manifest: SessionManifest
   digest: string
@@ -128,6 +131,7 @@ function manifestOf(
     frames,
     ...tailOpen === undefined ? {} : { tailOpen },
     ...safeThroughSeq === undefined ? {} : { safeThroughSeq },
+    ...workspaceKey === undefined ? {} : { workspaceKey },
   })
   return { manifest, digest: manifestDigest(manifest), headChainHash: frames[frames.length - 1]!.chainHash }
 }
@@ -148,6 +152,7 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
     let combined: SealedFrameRef[]
     let formatVersion = input.formatVersion
     let createdAt = input.createdAt
+    let workspaceKey = input.workspaceKey
 
     if (row !== undefined && row.deleted_at !== null && row.created_at === input.createdAt) {
       throw new SyncError('gone', `会话 ${input.sessionId} 的这个生命周期已被删除`)
@@ -165,6 +170,13 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
       const existing = JSON.parse(row.manifest_json) as SessionManifest
       formatVersion = existing.formatVersion
       createdAt = existing.createdAt
+      if (workspaceKey !== undefined && existing.workspaceKey !== undefined && workspaceKey !== existing.workspaceKey) {
+        throw new SyncError('conflict', 'append 的 workspaceKey 与已存 manifest 不一致')
+      }
+      if (workspaceKey === undefined && existing.workspaceKey !== undefined) workspaceKey = existing.workspaceKey
+      if (workspaceKey !== undefined && existing.workspaceKey === undefined) {
+        throw new SyncError('conflict', '已有会话缺少 workspaceKey，不能在后续 append 补写')
+      }
       const start = input.baseIndex + 1
       if (start < 0 || start > existing.frames.length) throw new SyncError('diverged', `baseIndex=${input.baseIndex} 超出链长 ${existing.frames.length}`)
       if (start < existing.frames.length - 1) throw new SyncError('diverged', '只能追加或替换尾帧')
@@ -192,6 +204,7 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
       combined,
       input.tailOpen,
       input.safeThroughSeq,
+      workspaceKey,
     )
     const revision = bumpRevision(db)
     db.handle
@@ -206,7 +219,7 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
     return {
       sessionId: input.sessionId,
       revision,
-      frameCount: combined.length,
+      batchCount: combined.length,
       headChainHash,
       manifestDigest: digest,
       lastSeq: manifest.lastSeq,
@@ -238,7 +251,7 @@ export function deleteSession(db: ServerDb, sessionId: string, deviceId: string,
     db.handle
       .prepare('INSERT OR REPLACE INTO tombstones (dataset, session_id, created_at, deleted_at, deleted_by) VALUES (?, ?, ?, ?, ?)')
       .run(DEFAULT_DATASET, sessionId, createdAt, now, deviceId)
-    return { sessionId, revision, frameCount: row.frame_count, headChainHash: row.head_chain_hash, manifestDigest: row.manifest_digest, lastSeq: row.last_seq, updatedAt: now, deletedAt: now }
+    return { sessionId, revision, batchCount: row.frame_count, headChainHash: row.head_chain_hash, manifestDigest: row.manifest_digest, lastSeq: row.last_seq, updatedAt: now, deletedAt: now }
   })
 }
 
@@ -260,13 +273,13 @@ export function getManifest(db: ServerDb, sessionId: string): { manifest: Sessio
  * @param sessionId - 会话 id。
  * @param from - 起始下标。
  * @param limit - 每页条数。
- * @returns 帧引用、总数与 revision，或 undefined。
+ * @returns 批次引用、总数与 revision，或 undefined。
  */
-export function listFrames(db: ServerDb, sessionId: string, from: number, limit: number): { frames: SealedFrameRef[]; total: number; revision: number } | undefined {
+export function listBatches(db: ServerDb, sessionId: string, from: number, limit: number): { batches: SealedFrameRef[]; batchCount: number; revision: number } | undefined {
   const row = sessionRow(db, sessionId)
   if (row === undefined) return undefined
   const manifest = JSON.parse(row.manifest_json) as SessionManifest
-  return { frames: manifest.frames.slice(from, from + limit), total: manifest.frames.length, revision: row.revision }
+  return { batches: manifest.frames.slice(from, from + limit), batchCount: manifest.frames.length, revision: row.revision }
 }
 
 /**
@@ -276,7 +289,7 @@ export interface AdminSession {
   readonly sessionId: string
   readonly createdAt: number
   readonly formatVersion: number
-  readonly frameCount: number
+  readonly batchCount: number
   readonly lastSeq: number
   readonly headChainHash: string
   readonly revision: number
@@ -314,7 +327,7 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
     sessionId: row.session_id,
     createdAt: row.created_at,
     formatVersion: row.format_version,
-    frameCount: row.frame_count,
+    batchCount: row.frame_count,
     lastSeq: row.last_seq,
     headChainHash: row.head_chain_hash,
     revision: row.revision,
@@ -342,7 +355,7 @@ export interface SessionChange {
   readonly revision: number
   readonly formatVersion: number
   readonly createdAt: number
-  readonly frameCount: number
+  readonly batchCount: number
   readonly headChainHash: string
   readonly manifestDigest: string
   readonly updatedAt: number
@@ -383,7 +396,7 @@ export function listChanges(db: ServerDb, since: number, limit: number): {
     revision: row.revision,
     formatVersion: row.format_version,
     createdAt: row.created_at,
-    frameCount: row.frame_count,
+    batchCount: row.frame_count,
     headChainHash: row.head_chain_hash,
     manifestDigest: row.manifest_digest,
     updatedAt: row.updated_at,
