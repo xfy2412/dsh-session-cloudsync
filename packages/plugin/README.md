@@ -9,7 +9,8 @@ DSH 会话云同步插件：自部署服务端、端到端加密，同步根会�
 - 开放尾只备份、不直接 apply；拉取带 durable pending journal；
 - 工作区白名单：**空列表 = 暂不同步任何会话**；子代理跟随根会话闭包，fork 是独立根；
 - Plugins 页自定义设置页 + 首启向导 + 顶部同步气泡；
-- 同步中/开放尾/安全边界落后时，composer 与侧栏行会被拦截并显示原因。
+- 同步中/开放尾/安全边界落后时，composer 与侧栏行会被拦截并显示原因；
+- “接受远端”只生成停机脚本：检查 DSH 已退出、备份并校验本地、删除 artifact、清理 blocked/ignore 状态，重启后再全量拉取。
 
 ## 配置
 
@@ -40,7 +41,7 @@ YAML 里的 `token` / `passphrase` 只作为 bootstrap fallback；插件每轮�
 浏览器半边在 `client/index.js`，通过 `dsh.client` 清单加载：
 
 - `plugins.bundle.config`：Plugins 页的会话同步设置（连接/凭据/工作区/行为）；
-- `shell.overlay`：首启向导和顶部气泡；
+- `shell.overlay`：首启向导、顶部气泡和远端覆盖本地脚本说明；
 - `conversation.input.dock`：composer 同步守卫；
 - `sidebar.session.row.leading` / `.hover`：同步标记与原因；
 - document 捕获阶段拦截 `[data-row-key^="session:"]` 的 click/pointerdown/keydown。

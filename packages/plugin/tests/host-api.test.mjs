@@ -55,6 +55,13 @@ function control(overrides = {}) {
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
     cwdDecision: overrides.cwdDecision ?? (async () => ({ ok: true, status: 'corrected' })),
     resolveBlocked: overrides.resolveBlocked ?? (async () => ({ ok: true })),
+    prepareReplace: overrides.prepareReplace ?? (async (sessionId) => ({
+      sessionId,
+      scriptPath: '/tmp/replace.mjs',
+      command: 'node "/tmp/replace.mjs"',
+      backupRoot: '/tmp/backups',
+      steps: ['step'],
+    })),
   }
 }
 
@@ -70,7 +77,7 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked 七条精确路由', () => {
+test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked/replace 八条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-cloudsync/status', ['GET'], 'buffered'],
@@ -80,6 +87,7 @@ test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked 七条�
     ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
     ['/api/session-cloudsync/cwd', ['POST'], 'buffered'],
     ['/api/session-cloudsync/blocked', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/replace', ['POST'], 'buffered'],
   ])
 })
 
@@ -204,6 +212,32 @@ test('宿主 API：blocked 决策按 sessionId/action 调用控制面', async ()
   )
   assert.equal(restored.status, 200)
   assert.equal(seenAction, 'restore')
+})
+
+test('宿主 API：replace 按 sessionId 生成覆盖计划', async () => {
+  let seen = ''
+  const routes = createHostApi(control({
+    prepareReplace: async (sessionId) => {
+      seen = sessionId
+      return {
+        sessionId,
+        scriptPath: '/tmp/replace.mjs',
+        command: 'node "/tmp/replace.mjs"',
+        backupRoot: '/tmp/backups',
+        steps: ['一', '二'],
+      }
+    },
+  }))
+  const response = await route(routes, '/api/session-cloudsync/replace').fetch(
+    new Request('http://host/api/session-cloudsync/replace', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-replace' }),
+    }),
+  )
+  assert.equal(response.status, 200)
+  assert.equal(seen, 'session-replace')
+  assert.equal((await bodyOf(response)).value.scriptPath, '/tmp/replace.mjs')
 })
 
 test('宿主 API：cwd 决策缺少 action 时返回 400', async () => {

@@ -11,9 +11,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { SyncController } from './controller.ts'
 import { buildSessionTree, pathAllowed, pathKeyOf } from './closure.ts'
+import { prepareReplaceScript } from './replace.ts'
 import {
   correctCwd as correctSessionCwd,
   pullOnce,
@@ -561,6 +562,20 @@ export function apply(ctx: Context, config: Config): void {
       if (action === 'restore') controller.restoreBlocked(sessionId, createdAt, formatVersion)
       else controller.resolveBlocked(sessionId, action, createdAt, formatVersion)
       return { ok: true as const }
+    },
+    prepareReplace: async (sessionId: string) => {
+      const snapshot = await ctx.sessionPersistence.stat(sessionId as SessionId)
+      if (snapshot === undefined) throw new Error('本地会话不存在，无法生成覆盖脚本')
+      const statePath = statePathOf(ctx)
+      if (statePath === undefined) throw new Error('找不到 DSH home，无法生成覆盖脚本')
+      return prepareReplaceScript({
+        sessionId,
+        createdAt: snapshot.header.createdAt,
+        formatVersion: snapshot.header.version,
+        dshHome: dirname(dirname(statePath)),
+        statePath,
+        dshPid: process.pid,
+      })
     },
   }
   ctx.inject(['connection'], (connectionCtx) => {

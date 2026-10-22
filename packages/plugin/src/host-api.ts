@@ -8,6 +8,7 @@
  */
 import { classifySyncError } from './engine.ts'
 import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
+import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { SetupInfo, SyncStatus, SyncWorkspaceList } from './status.ts'
 
@@ -32,6 +33,8 @@ export interface SyncControl {
     createdAt: number,
     formatVersion: number,
   ): Promise<{ readonly ok: true }>
+  /** 生成“远端覆盖本地”的停机脚本；只生成，不执行。 */
+  prepareReplace(sessionId: string): Promise<ReplacePlan>
 }
 
 /** connection.fetch 接受的精确路由。 */
@@ -176,6 +179,27 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId、action 与生命周期字段' } }, 400)
           }
           return json({ ok: true, value: await control.resolveBlocked(sessionId, action, createdAt, formatVersion) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/replace',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as { readonly sessionId?: unknown }
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+          if (sessionId === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId' } }, 400)
+          }
+          return json({ ok: true, value: await control.prepareReplace(sessionId) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({

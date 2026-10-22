@@ -153,6 +153,12 @@ window.__ModuleLoader__.load({
       '.dssync-mini{height:24px;padding:0 9px;border:1px solid var(--dssync-line-strong);border-radius:999px;background:transparent;color:var(--dssync-text);font:inherit;font-size:10.5px;cursor:pointer}',
       '.dssync-mini:hover{background:rgba(127,127,127,.12)}',
       '.dssync-mini.primary{background:var(--dssync-accent);border-color:var(--dssync-accent);color:#fff}',
+      '.dssync-mini.dssync-mini-danger{color:#f0b64a;border-color:rgba(240,182,74,.55)}',
+      '.dssync-replace-warning{padding:10px 12px;border:1px solid rgba(240,182,74,.35);border-radius:10px;background:rgba(240,182,74,.09);color:var(--dssync-text);font-size:12px;line-height:1.6}',
+      '.dssync-replace-steps{margin:0;padding-left:20px;color:var(--dssync-muted);font-size:12px;line-height:1.7}',
+      '.dssync-replace-code{margin-top:2px;padding:10px 12px;border:1px solid var(--dssync-line);border-radius:10px;background:rgba(127,127,127,.08);font:11.5px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;word-break:break-all;color:var(--dssync-text)}',
+      '.dssync-replace-meta{color:var(--dssync-faint);font-size:11px;line-height:1.5;word-break:break-all}',
+      '.dssync-replace-actions{display:flex;align-items:center;gap:8px;margin-top:2px}',
       '.dssync-rowmark{width:13px;height:13px;border-radius:50%;display:grid;place-items:center;color:#f0b64a;background:rgba(240,182,74,.14);font-size:9px;line-height:1}',
       '.dssync-rowmark.tail{color:#b9ccff;background:rgba(86,134,254,.14)}',
       '.dssync-hovernote{padding:7px 2px;border-top:1px solid var(--dssync-line);color:var(--dssync-faint);font-size:11px;line-height:1.45}',
@@ -229,7 +235,7 @@ window.__ModuleLoader__.load({
     function createModel() {
       var snapshot = {
         loading: true, setup: null, status: null, workspaces: null,
-        error: null, toast: null,
+        error: null, toast: null, replacePlan: null,
       }
       var listeners = new Set()
       var pollTimer = null
@@ -345,6 +351,19 @@ window.__ModuleLoader__.load({
         return result
       }
 
+      async function prepareReplace(sessionId) {
+        var result = await fetchJson('/replace', {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: sessionId }),
+        })
+        if (result && result.ok === true) patch({ replacePlan: result.value })
+        return result
+      }
+
+      function dismissReplace() {
+        patch({ replacePlan: null })
+      }
+
       function toast(text, bad) {
         if (toastTimer !== null) clearTimeout(toastTimer)
         patch({ toast: { text: text, bad: bad === true, at: Date.now() } })
@@ -369,6 +388,8 @@ window.__ModuleLoader__.load({
         testConnection: testConnection,
         correctCwd: correctCwd,
         resolveBlocked: resolveBlocked,
+        prepareReplace: prepareReplace,
+        dismissReplace: dismissReplace,
         toast: toast,
         dispose: dispose,
       }
@@ -1034,6 +1055,62 @@ window.__ModuleLoader__.load({
         h(Toast, { model: model }))
     }
 
+    /* ---------- 远端覆盖本地向导 ---------- */
+
+    function ReplaceDialog(props) {
+      var model = props.model
+      var state = useModel(model)
+      var plan = state.replacePlan
+      var copiedState = useState(false)
+      var copied = copiedState[0]
+      var setCopied = copiedState[1]
+      if (plan === null || plan === undefined) return null
+
+      function close() {
+        model.dismissReplace()
+      }
+
+      function copyCommand() {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(plan.command).then(function () {
+            setCopied(true)
+            setTimeout(function () { setCopied(false) }, 1800)
+          }, function () { model.toast('复制失败，请手动选择命令', true) })
+          return
+        }
+        model.toast('当前环境不能直接复制，请手动选择命令', true)
+      }
+
+      return h('div', { className: 'dssync dssync-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': '接受远端丢弃本地' },
+        h('div', { className: 'dssync-wizard' },
+          h('div', { className: 'dssync-wizard-head' },
+            h('div', { className: 'dssync-wizard-icon' }, shieldIcon()),
+            h('div', null,
+              h('h2', null, '接受远端，丢弃本地'),
+              h('p', null, '本地分支不会参与合并；只保留一份停机备份。')),
+            h('button', { className: 'dssync-close', type: 'button', 'aria-label': '关闭', onClick: close }, '×')),
+          h('div', { className: 'dssync-wizard-body' },
+            h('div', { className: 'dssync-replace-warning' },
+              '这是破坏性操作：脚本会删除本地会话 artifact。',
+              h('br'),
+              '只有确认远端是最终版本时才继续。脚本会先备份并逐文件校验，备份失败会立即停止。',
+              h('br'),
+              '执行前确认远端仍有该会话，并确认它所属工作区在同步白名单内；否则启动后不会被拉回。'),
+            h('ol', { className: 'dssync-replace-steps' }, plan.steps.map(function (step, index) {
+              return h('li', { key: 'replace-step-' + index }, step)
+            })),
+            h('div', { className: 'dssync-replace-code' }, plan.command),
+            h('div', { className: 'dssync-replace-meta' }, '备份目录：' + plan.backupRoot),
+            h('div', { className: 'dssync-replace-meta' },
+              '脚本只生成命令；不会自动关闭或重启 DSH。执行前请先完全退出 DSH。')),
+          h('div', { className: 'dssync-wizard-foot' },
+            h('button', { className: 'dssync-pill', type: 'button', onClick: copyCommand }, copied ? '已复制' : '复制命令'),
+            h('span', { className: 'spacer' }),
+            h('button', { className: 'dssync-pill primary', type: 'button', onClick: close }, '知道了')),
+        ),
+        h(Toast, { model: model }))
+    }
+
     /* ---------- 顶部同步气泡 ---------- */
 
     function Bubble(props) {
@@ -1258,6 +1335,18 @@ window.__ModuleLoader__.load({
             className: 'dssync-mini', type: 'button', key: id + ':force',
             onClick: function (event) { event.stopPropagation(); settle('force') },
           }, '强行写入'),
+          h('button', {
+            className: 'dssync-mini dssync-mini-danger', type: 'button', key: id + ':replace',
+            title: '备份本地后删除，并让远端重建同一会话',
+            onClick: function (event) {
+              event.stopPropagation()
+              model.prepareReplace(id).then(function (result) {
+                if (!result || result.ok !== true) {
+                  model.toast((result && result.error && result.error.message) || '生成覆盖脚本失败', true)
+                }
+              }).catch(function (error) { model.toast(errorText(error), true) })
+            },
+          }, '接受远端'),
         ]
       }
 
@@ -1276,6 +1365,18 @@ window.__ModuleLoader__.load({
               }).catch(function (error) { model.toast(errorText(error), true) })
             },
           }, '恢复拦截'),
+          h('button', {
+            className: 'dssync-mini dssync-mini-danger', type: 'button', key: id + ':replace',
+            title: '备份本地后删除，并让远端重建同一会话',
+            onClick: function (event) {
+              event.stopPropagation()
+              model.prepareReplace(id).then(function (result) {
+                if (!result || result.ok !== true) {
+                  model.toast((result && result.error && result.error.message) || '生成覆盖脚本失败', true)
+                }
+              }).catch(function (error) { model.toast(errorText(error), true) })
+            },
+          }, '接受远端'),
         ]
       }
 
@@ -1570,6 +1671,10 @@ window.__ModuleLoader__.load({
           name: 'shell.overlay', id: 'dsh-session-cloudsync-bubble', order: 30,
           inject: function () { return { model: model, openSettings: openSettings } },
         }, Bubble)
+        yield ctx.slots.register({
+          name: 'shell.overlay', id: 'dsh-session-cloudsync-replace', order: 40,
+          inject: function () { return { model: model } },
+        }, ReplaceDialog)
       })
     }
 

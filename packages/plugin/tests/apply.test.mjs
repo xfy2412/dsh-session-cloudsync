@@ -81,6 +81,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
     '/api/session-cloudsync/sync',
     '/api/session-cloudsync/cwd',
     '/api/session-cloudsync/blocked',
+    '/api/session-cloudsync/replace',
   ])
 
   const status = await connection.routes[0].fetch(new Request('http://host/api/session-cloudsync/status'))

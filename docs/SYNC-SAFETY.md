@@ -166,6 +166,21 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 - **diverged/未同步**：由 [RECONCILE.md](RECONCILE.md) 的状态机提供给前端；拦输入并展示风险确认；
 - 不写临时同步事件，避免污染会话日志；逐会话 projection 仍可作为后续优化，但当前等价状态已由 `/status` 提供。
 
+### 5.4 接受远端丢弃本地
+
+`diverged` 会话选择“接受远端”时，不能在不停止 DSH 的情况下删文件再重建：DSH 仍持有 session 对象、写句柄和投影缓存。客户端只生成一次性停机脚本，不直接执行：
+
+1. 脚本检查生成它的 DSH PID 是否已退出；
+2. 扫描 `$DSH_HOME/sessions/*/<sessionId>`，找到唯一本地 artifact；
+3. 复制到 `$DSH_HOME/session-cloudsync/replace-backups/`，逐文件 SHA-256 校验并写 manifest；
+4. 备份通过后删除本地 session 目录、projection cache 和 workspace 记账；
+5. 清除该 session 的 blocked / blockedDecisions / cwdPending / pending，并把拉取 revision 重置为 0；
+6. 提示用户启动 DSH 后手动“立即同步”或等待自动同步。
+
+脚本路径和备份目录由宿主 API `POST /api/session-cloudsync/replace` 返回，前端展示完整步骤和可复制命令。用户必须自己退出 DSH、运行脚本、再启动 DSH；插件不会重启应用。
+
+远端必须仍在同一 `sessionId / createdAt / formatVersion` 下；如果远端已经变成新生命周期，拉取会按新会话处理。脚本只保证本地被安全移除和备份，不保证远端一定还能重建：执行前要确认远端仍有该会话，且其工作区在同步白名单内。
+
 ## 6. 已知限制与待验证
 
 - 客户端 projection 在列表行里的可见性还没端到端验证；
