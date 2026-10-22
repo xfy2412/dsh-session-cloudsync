@@ -6,237 +6,820 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>dsh-session-cloudsync 管理台</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --bg-soft: #14171d;
+    --panel: #1a1e25;
+    --panel-2: #20252e;
+    --line: #2a303a;
+    --line-strong: #3a4350;
+    --text: #e9edf3;
+    --muted: #9aa5b5;
+    --faint: #6f7b8c;
+    --accent: #5b88ff;
+    --accent-2: #7ba4ff;
+    --accent-soft: rgba(91, 136, 255, .14);
+    --good: #5ed392;
+    --good-soft: rgba(94, 211, 146, .12);
+    --bad: #ef7777;
+    --bad-soft: rgba(239, 119, 119, .12);
+    --warn: #f0b64a;
+    --radius: 14px;
+    --shadow: 0 20px 60px rgba(0, 0, 0, .32);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 24px; background: #14161a; color: #e6e8eb;
-         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
-  h1 { font-size: 18px; margin: 0; }
-  h2 { font-size: 14px; margin: 0 0 12px; color: #9aa4b2; font-weight: 600; }
-  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .card { background: #1c1f24; border: 1px solid #2a2f36; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-  .metric { background: #1c1f24; border: 1px solid #2a2f36; border-radius: 10px; padding: 14px; }
-  .metric .k { color: #7d8694; font-size: 12px; }
-  .metric .v { font-size: 22px; font-weight: 600; margin-top: 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #262b33; }
-  th { color: #7d8694; font-weight: 600; }
-  code { color: #8ab4f8; font-size: 12px; }
-  button { background: #2d6cdf; color: #fff; border: 0; border-radius: 6px;
-           padding: 7px 12px; cursor: pointer; font: inherit; }
-  button.secondary { background: #333a44; }
-  button.danger { background: #b4453c; }
-  input { background: #0f1115; color: #e6e8eb; border: 1px solid #333a44;
-          border-radius: 6px; padding: 7px 10px; font: inherit; width: 240px; }
-  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-  .muted { color: #7d8694; }
-  .ok { color: #58c98a; } .bad { color: #e06c75; }
-  .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #333a44; color: #cfd6df; }
-  .tag.deleted { background: #4a2a2a; color: #e6a5a0; }
-  #login { max-width: 420px; margin: 12vh auto; }
-  #app { display: none; }
-  .hidden { display: none !important; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(900px 480px at 12% -10%, rgba(91, 136, 255, .11), transparent 65%),
+      radial-gradient(700px 420px at 100% 0%, rgba(94, 211, 146, .06), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  [hidden] { display: none !important; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; }
+  a { color: var(--accent-2); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 34px; padding: 7px 13px;
+    border: 1px solid transparent; border-radius: 9px;
+    background: var(--accent); color: #fff;
+    font-size: 13px; font-weight: 600; white-space: nowrap;
+    transition: background .16s, border-color .16s, opacity .16s, transform .16s;
+  }
+  .btn:hover { background: #6b95ff; }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: .45; cursor: default; transform: none; }
+  .btn.secondary { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+  .btn.secondary:hover { background: #29303a; }
+  .btn.ghost { background: transparent; border-color: var(--line); color: var(--muted); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--line-strong); background: rgba(255,255,255,.03); }
+  .btn.danger { background: transparent; border-color: rgba(239,119,119,.38); color: #ffabab; }
+  .btn.danger:hover { background: var(--bad-soft); border-color: rgba(239,119,119,.58); }
+  .btn.small { min-height: 27px; padding: 3px 9px; font-size: 11.5px; }
+  .btn.wide { width: 100%; }
+
+  .input, input, select {
+    width: 100%; min-height: 36px;
+    padding: 7px 11px;
+    border: 1px solid var(--line-strong); border-radius: 9px;
+    background: var(--bg-soft); color: var(--text);
+    outline: none;
+    transition: border-color .16s, box-shadow .16s;
+  }
+  input[type="search"] { appearance: none; -webkit-appearance: none; }
+  input[type="search"]::-webkit-search-decoration,
+  input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+  input:hover, select:hover { border-color: #4a5566; }
+  input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  input::placeholder { color: var(--faint); }
+
+  /* login */
+  .login-page {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 28px 20px;
+  }
+  .login-inner {
+    width: min(420px, 100%);
+    display: flex; flex-direction: column; align-items: center;
+    animation: card-in .38s cubic-bezier(.16,1,.3,1) both;
+  }
+  .brand-mark {
+    width: 44px; height: 44px; border-radius: 13px;
+    display: grid; place-items: center;
+    background: linear-gradient(145deg, #24314a, #17202f);
+    border: 1px solid #33415a;
+    box-shadow: 0 12px 30px rgba(0,0,0,.28);
+  }
+  .brand-mark img { width: 26px; height: 26px; }
+  .auth-card {
+    width: 100%; margin-top: 18px; padding: 28px;
+    border: 1px solid var(--line); border-radius: 18px;
+    background: linear-gradient(180deg, rgba(32,37,46,.92), rgba(26,30,37,.96));
+    box-shadow: var(--shadow);
+  }
+  .eyebrow {
+    display: inline-block;
+    color: var(--accent-2); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase;
+  }
+  .auth-card h1 { margin: 8px 0 4px; font-size: 24px; line-height: 1.2; letter-spacing: -.01em; }
+  .auth-card .muted { margin: 0; }
+  .auth-card .field { margin-top: 22px; }
+  .auth-foot { margin-top: 16px; color: var(--faint); font-size: 11.5px; text-align: center; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field > span, .field-label { color: var(--muted); font-size: 12px; font-weight: 500; }
+  .input-wrap { position: relative; }
+  .input-wrap input { padding-right: 58px; }
+  .input-wrap .reveal {
+    position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+    border: 0; background: transparent; color: var(--muted);
+    font-size: 11.5px; padding: 5px 7px; border-radius: 6px;
+  }
+  .input-wrap .reveal:hover { color: var(--text); background: rgba(255,255,255,.05); }
+  .error { min-height: 20px; margin-top: 7px; color: #ffaaaa; font-size: 12px; }
+  .login-card .error { margin-top: 9px; }
+
+  /* app shell */
+  .app { max-width: 1180px; margin: 0 auto; padding: 24px 24px 52px; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 8px 0 22px;
+    animation: fade-in .24s ease both;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .brand img { width: 26px; height: 26px; }
+  .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+  .brand .brand-sub { color: var(--faint); font-size: 11.5px; margin-left: 2px; }
+  .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .version-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--faint); font-size: 11.5px;
+    padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px;
+  }
+  .version-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
+  .hero {
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+    margin: 4px 0 18px;
+    animation: rise-in .32s cubic-bezier(.16,1,.3,1) both;
+  }
+  .hero h2 { margin: 5px 0 4px; font-size: 22px; line-height: 1.2; letter-spacing: -.015em; }
+  .hero .muted { margin: 0; }
+  .health { display: inline-flex; align-items: center; gap: 7px; color: var(--good); font-size: 12px; white-space: nowrap; }
+  .health i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 4px var(--good-soft); }
+
+  .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .metric {
+    padding: 15px 16px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: linear-gradient(180deg, rgba(30,35,44,.9), rgba(24,28,35,.94));
+    animation: rise-in .34s cubic-bezier(.16,1,.3,1) both;
+  }
+  .metric:nth-child(2) { animation-delay: .04s; }
+  .metric:nth-child(3) { animation-delay: .08s; }
+  .metric:nth-child(4) { animation-delay: .12s; }
+  .metric .k { color: var(--faint); font-size: 11.5px; }
+  .metric .v { margin-top: 4px; font-size: 23px; line-height: 1.15; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .metric .hint { margin-top: 3px; color: var(--faint); font-size: 11px; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.48fr) minmax(320px, .82fr);
+    grid-template-areas: "sessions storage" "devices devices";
+    gap: 16px;
+    align-items: stretch;
+  }
+  .sessions-panel { grid-area: sessions; }
+  .storage-panel { grid-area: storage; display: flex; flex-direction: column; }
+  .storage-panel .panel-body { display: flex; flex-direction: column; flex: 1 1 auto; }
+  .storage-panel .quota-form { margin-top: auto; padding-top: 14px; }
+  .devices-panel { grid-area: devices; }
+  .panel {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: linear-gradient(180deg, rgba(28,33,41,.92), rgba(23,27,34,.96));
+    overflow: hidden;
+    animation: rise-in .36s cubic-bezier(.16,1,.3,1) both;
+  }
+  .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 16px 16px 0; }
+  .panel-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+  .panel-head p { margin: 3px 0 0; color: var(--faint); font-size: 11.5px; }
+  .panel-body { padding: 14px 16px 16px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    min-height: 22px; padding: 1px 8px;
+    border: 1px solid var(--line); border-radius: 999px;
+    color: var(--muted); background: rgba(255,255,255,.025);
+    font-size: 11px; white-space: nowrap;
+  }
+  .badge.good { color: #9ce8bc; border-color: rgba(94,211,146,.28); background: var(--good-soft); }
+  .badge.bad { color: #ffb0b0; border-color: rgba(239,119,119,.3); background: var(--bad-soft); }
+  .badge.accent { color: #b9ccff; border-color: rgba(91,136,255,.32); background: var(--accent-soft); }
+
+  /* storage */
+  .storage-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .storage-line b { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .storage-line span { color: var(--faint); font-size: 11.5px; }
+  .bar { height: 7px; border-radius: 999px; background: rgba(255,255,255,.07); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .35s cubic-bezier(.16,1,.3,1); }
+  .quota-form { display: flex; align-items: center; gap: 7px; margin-top: 13px; }
+  .quota-form input { width: 84px; min-height: 32px; }
+  .quota-form .unit { color: var(--faint); font-size: 11.5px; }
+  .quota-form .btn { margin-left: auto; }
+  .inline-result { min-height: 17px; margin-top: 6px; color: var(--faint); font-size: 11.5px; }
+  .inline-result.good { color: var(--good); }
+  .inline-result.bad { color: #ffaaaa; }
+
+  /* devices */
+  .device-form { display: flex; gap: 7px; }
+  .device-form input { min-width: 0; }
+  .device-form .btn { flex: 0 0 auto; }
+  .device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+  .device-form { max-width: 520px; }
+  .device-row {
+    display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 10px;
+    padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px;
+    background: rgba(255,255,255,.018);
+  }
+  .device-main { min-width: 0; }
+  .device-label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+  .device-id { display: flex; align-items: center; gap: 5px; margin-top: 2px; color: var(--faint); font-size: 10.5px; }
+  .device-id code { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .icon-btn {
+    border: 0; background: transparent; color: var(--faint);
+    border-radius: 6px; padding: 2px 5px; font-size: 10.5px;
+  }
+  .icon-btn:hover { color: var(--text); background: rgba(255,255,255,.06); }
+  .device-meta { color: var(--faint); font-size: 10.5px; line-height: 1.5; margin-top: 3px; display: flex; flex-direction: column; gap: 1px; }
+  .device-actions { display: flex; align-items: flex-start; }
+
+  /* sessions */
+  .session-tools { display: flex; align-items: center; gap: 7px; margin-bottom: 11px; }
+  .session-tools input { min-width: 0; flex: 1 1 auto; max-width: 300px; min-height: 32px; }
+  .session-tools select { width: auto; min-width: 112px; min-height: 32px; }
+  .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,.055); white-space: nowrap; }
+  th { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; background: rgba(255,255,255,.025); position: sticky; top: 0; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: rgba(255,255,255,.025); }
+  td.session-id { max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
+  td.session-id code { color: #b8c7de; }
+  .row-copy { border: 0; background: transparent; color: var(--faint); padding: 2px 4px; border-radius: 5px; font-size: 10px; }
+  .row-copy:hover { color: var(--text); background: rgba(255,255,255,.07); }
+  .lease { color: var(--warn); font-size: 10.5px; }
+  .empty { padding: 24px 14px; text-align: center; color: var(--faint); }
+  .empty b { display: block; margin-bottom: 3px; color: var(--muted); font-size: 12.5px; }
+  .empty .btn { margin-top: 10px; }
+  .empty-filter { color: var(--faint); font-size: 11.5px; padding: 16px; text-align: center; }
+
+  .muted { color: var(--muted); }
+  .faint { color: var(--faint); }
+  .mono { font-variant-ligatures: none; }
+
+  /* toast + modal */
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; z-index: 80;
+    max-width: min(520px, calc(100vw - 32px));
+    padding: 9px 14px; border: 1px solid var(--line-strong); border-radius: 10px;
+    background: rgba(30,35,44,.97); color: var(--text);
+    box-shadow: 0 16px 40px rgba(0,0,0,.4);
+    font-size: 12px; opacity: 0; pointer-events: none;
+    transform: translate(-50%, 8px);
+    transition: opacity .18s, transform .18s;
+  }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+  .toast.bad { border-color: rgba(239,119,119,.4); color: #ffb0b0; }
+  .modal {
+    position: fixed; inset: 0; z-index: 70;
+    display: grid; place-items: center; padding: 24px;
+    background: rgba(6,8,11,.66); backdrop-filter: blur(6px);
+    animation: fade-in .18s ease both;
+  }
+  body.modal-open { overflow: hidden; }
+  .modal-card {
+    width: min(520px, 100%);
+    padding: 24px; border: 1px solid var(--line-strong); border-radius: 17px;
+    background: var(--panel); box-shadow: 0 28px 80px rgba(0,0,0,.55);
+    animation: card-in .28s cubic-bezier(.16,1,.3,1) both;
+  }
+  .modal-card h2 { margin: 0 0 4px; font-size: 18px; }
+  .modal-card p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .token-box {
+    margin: 16px 0 6px; padding: 12px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg);
+    color: #c7dbff; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+    word-break: break-all;
+  }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes card-in { from { opacity: 0; transform: translateY(-10px) scale(.98); } to { opacity: 1; transform: none; } }
+  @keyframes rise-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
+
+  @media (max-width: 980px) {
+    .layout { grid-template-columns: 1fr; grid-template-areas: "sessions" "storage" "devices"; }
+  }
+  @media (max-width: 760px) {
+    body { font-size: 13px; }
+    .app { padding: 16px 14px 36px; }
+    .topbar { align-items: flex-start; flex-direction: column; gap: 10px; padding-bottom: 16px; }
+    .top-actions { width: 100%; justify-content: space-between; }
+    .hero { align-items: flex-start; flex-direction: column; gap: 8px; }
+    .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 9px; }
+    .metric { padding: 12px; }
+    .metric .v { font-size: 20px; }
+    .session-tools { flex-wrap: wrap; }
+    .session-tools input { max-width: none; }
+    .session-tools select { flex: 1 1 auto; }
+    .auth-card { padding: 22px; }
+  }
+  @media (max-width: 420px) {
+    .metrics { grid-template-columns: 1fr; }
+    .brand h1 { font-size: 14px; }
+    .brand-sub { display: none; }
+  }
 </style>
 </head>
 <body>
-<div id="login" class="card">
-  <h2>登录管理台</h2>
-  <p class="muted">用初始化时设置的管理密码登录。</p>
-  <div class="row"><input id="password" type="password" placeholder="管理密码" autocomplete="current-password"></div>
-  <div class="row"><button id="loginButton">登录</button><span id="loginError" class="bad"></span></div>
+<div id="loginView" class="login-page">
+  <div class="login-inner">
+    <div class="brand-mark"><img src="/logo.svg" alt=""></div>
+    <div class="auth-card login-card">
+      <span class="eyebrow">Self-hosted console</span>
+      <h1>管理台</h1>
+      <p class="muted">用初始化时设置的管理密码登录。</p>
+      <label class="field">
+        <span for="password">管理密码</span>
+        <div class="input-wrap">
+          <input id="password" type="password" placeholder="管理密码" autocomplete="current-password" autofocus>
+          <button id="revealPassword" class="reveal" type="button" aria-label="显示密码">显示</button>
+        </div>
+      </label>
+      <div id="loginError" class="error" role="alert"></div>
+      <button id="loginButton" class="btn wide" type="button">登录</button>
+    </div>
+    <p class="auth-foot">dsh-session-cloudsync · 端到端加密 · 自部署</p>
+  </div>
 </div>
 
-<div id="app">
-  <div class="top">
-    <h1><img src="/logo.svg" alt="" width="26" height="26" style="vertical-align:-6px;margin-right:8px">dsh-session-cloudsync 管理台</h1>
-    <div class="row" style="margin:0">
-      <span id="version" class="muted"></span>
-      <button id="refresh" class="secondary">刷新</button>
-      <button id="logout" class="secondary">退出</button>
+<div id="appView" class="app" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <img src="/logo.svg" alt="">
+      <h1>dsh-session-cloudsync</h1>
+      <span class="brand-sub">管理台</span>
     </div>
-  </div>
-
-  <div class="grid" id="metrics"></div>
-
-  <div class="card">
-    <h2>存储配额</h2>
-    <div class="row">
-      <input id="quotaGb" type="number" min="1" step="1" style="width:120px">
-      <span class="muted">GiB</span>
-      <button id="saveQuota">保存</button>
-      <span id="quotaResult" class="muted"></span>
+    <div class="top-actions">
+      <span class="version-pill"><i></i><span id="version">连接中…</span></span>
+      <button id="refresh" class="btn secondary" type="button">刷新</button>
+      <button id="logout" class="btn ghost" type="button">退出</button>
     </div>
-  </div>
+  </header>
 
-  <div class="card">
-    <h2>设备</h2>
-    <div class="row">
-      <input id="deviceLabel" placeholder="设备标签，例如 PC-1">
-      <button id="createDevice">签发 token</button>
-      <span id="deviceResult" class="muted"></span>
+  <main>
+    <section class="hero">
+      <div>
+        <span class="eyebrow">Overview</span>
+        <h2>同步概览</h2>
+        <p class="muted">自部署节点、设备与会话的只读视图。</p>
+      </div>
+      <div class="health"><i></i><span id="healthText">服务正常</span></div>
+    </section>
+
+    <section id="metrics" class="metrics" aria-label="概览指标"></section>
+
+    <div class="layout">
+      <section class="panel sessions-panel">
+        <div class="panel-head">
+          <div>
+            <h2>会话</h2>
+            <p>按服务端更新时间倒序；只展示元数据。</p>
+          </div>
+          <span id="sessionBadge" class="badge">0 个</span>
+        </div>
+        <div class="panel-body">
+          <div class="session-tools">
+            <input id="sessionSearch" type="search" placeholder="搜索 session id…" autocomplete="off">
+            <select id="sessionFilter" aria-label="筛选会话">
+              <option value="all">全部状态</option>
+              <option value="active">正常</option>
+              <option value="deleted">已删除</option>
+              <option value="leased">有租约</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>会话 id</th><th>格式</th><th>批次</th><th>最后序号</th><th>更新时间</th><th>租约</th><th>状态</th></tr>
+              </thead>
+              <tbody id="sessions"></tbody>
+            </table>
+          </div>
+          <div id="sessionsEmpty" class="empty" hidden></div>
+        </div>
+      </section>
+
+      <section class="panel storage-panel">
+        <div class="panel-head">
+          <div>
+            <h2>存储</h2>
+            <p>按唯一密文字节计算。</p>
+          </div>
+          <span id="storageBadge" class="badge">0%</span>
+        </div>
+        <div class="panel-body">
+          <div class="storage-line">
+            <b id="storageUsed">0 B</b>
+            <span id="storageTotal">/ 0 GiB</span>
+          </div>
+          <div class="bar" role="progressbar" aria-label="存储配额使用率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <i id="storageBar"></i>
+          </div>
+          <form id="quotaForm" class="quota-form">
+            <input id="quotaGb" type="number" min="1" step="1" inputmode="numeric" aria-label="配额 GiB">
+            <span class="unit">GiB</span>
+            <button id="saveQuota" class="btn small secondary" type="submit">保存</button>
+          </form>
+          <div id="quotaResult" class="inline-result" role="status"></div>
+        </div>
+      </section>
+
+      <section class="panel devices-panel">
+        <div class="panel-head">
+          <div>
+            <h2>设备</h2>
+            <p>每台设备一个 token；token 只显示一次。</p>
+          </div>
+          <span id="deviceBadge" class="badge">0 台</span>
+        </div>
+        <div class="panel-body">
+          <form id="deviceForm" class="device-form">
+            <input id="deviceLabel" placeholder="设备标签，例如 PC-1" autocomplete="off" aria-label="设备标签">
+            <button id="createDevice" class="btn" type="submit">签发</button>
+          </form>
+          <div id="deviceError" class="inline-result bad" role="alert"></div>
+          <div id="devices" class="device-list"></div>
+        </div>
+      </section>
     </div>
-    <table>
-      <thead><tr><th>设备 id</th><th>标签</th><th>创建</th><th>最后在线</th><th></th></tr></thead>
-      <tbody id="devices"></tbody>
-    </table>
-  </div>
+  </main>
+</div>
 
-  <div class="card">
-    <h2>会话</h2>
-    <table>
-      <thead><tr><th>会话 id</th><th>格式</th><th>帧数</th><th>最后序号</th><th>更新时间</th><th>租约</th><th>状态</th></tr></thead>
-      <tbody id="sessions"></tbody>
-    </table>
-    <p id="sessionsEmpty" class="muted hidden">还没有同步过会话。</p>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div id="tokenDialog" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="tokenTitle">
+    <h2 id="tokenTitle">设备 token</h2>
+    <p>只显示这一次。关闭后无法再次查看，只能重新签发。</p>
+    <div id="tokenValue" class="token-box" tabindex="0"></div>
+    <div class="modal-actions">
+      <button id="copyToken" class="btn secondary" type="button">复制 token</button>
+      <button id="closeToken" class="btn" type="button">我已保存</button>
+    </div>
   </div>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id)
-const time = (value) => value === null || value === undefined ? '—' : new Date(value).toLocaleString()
+const state = { overview: null, devices: [], sessions: [] }
+let toastTimer = null
 
-async function api(path, options = {}) {
-  const response = await fetch(path, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...options })
-  if (response.status === 401) { showLogin(); throw new Error('unauthorized') }
-  const body = await response.json()
-  if (!response.ok) throw new Error(body?.error?.message ?? '请求失败')
-  return body.value
+function el(tag, className, text) {
+  const node = document.createElement(tag)
+  if (className) node.className = className
+  if (text !== undefined) node.textContent = text
+  return node
 }
 
-function showLogin() { $('login').style.display = 'block'; $('app').style.display = 'none' }
-function showApp() { $('login').style.display = 'none'; $('app').style.display = 'block' }
+function formatBytes(value) {
+  const bytes = Number(value) || 0
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GiB'
+}
 
-function cell(row, text, className) {
-  const td = document.createElement('td')
-  td.textContent = text
-  if (className !== undefined) td.className = className
-  row.appendChild(td)
-  return td
+function time(value) {
+  return value === null || value === undefined ? '—' : new Date(value).toLocaleString()
+}
+
+function showToast(text, bad) {
+  const node = $('toast')
+  node.textContent = text
+  node.classList.toggle('bad', bad === true)
+  node.classList.add('on')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => node.classList.remove('on'), 2800)
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (error) {
+    const area = document.createElement('textarea')
+    area.value = text
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    document.execCommand('copy')
+    area.remove()
+  }
+  showToast('已复制')
+}
+
+async function api(path, options) {
+  const init = options || {}
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    ...init,
+  })
+  if (response.status === 401) {
+    showLogin()
+    throw new Error('unauthorized')
+  }
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error((payload && payload.error && payload.error.message) || '请求失败')
+  return payload.value
+}
+
+function showLogin() {
+  $('loginView').hidden = false
+  $('appView').hidden = true
+  $('loginError').textContent = ''
+  setTimeout(() => $('password').focus(), 30)
+}
+
+function showApp() {
+  $('loginView').hidden = true
+  $('appView').hidden = false
 }
 
 function renderMetrics(overview) {
-  $('quotaGb').value = String(Math.round(overview.maxBytes / 1024 / 1024 / 1024))
+  const percent = overview.maxBytes > 0 ? Math.min(100, Math.round(overview.usedBytes / overview.maxBytes * 1000) / 10) : 0
   const items = [
-    ['设备', overview.devices],
-    ['会话', overview.sessions],
-    ['已删除', overview.deletedSessions],
-    ['已用存储', (overview.usedBytes / 1024 / 1024).toFixed(1) + ' MB'],
-    ['配额', (overview.maxBytes / 1024 / 1024 / 1024).toFixed(0) + ' GB'],
-    ['revision', overview.revision],
+    { key: '设备', value: overview.devices, hint: '已签发 token' },
+    { key: '会话', value: overview.sessions, hint: overview.deletedSessions > 0 ? overview.deletedSessions + ' 个墓碑' : '没有墓碑' },
+    { key: '已用存储', value: formatBytes(overview.usedBytes), hint: percent + '% · 配额 ' + formatBytes(overview.maxBytes) },
+    { key: '同步版本', value: overview.revision, hint: '服务端 revision' },
   ]
-  $('metrics').replaceChildren(...items.map(([k, v]) => {
-    const box = document.createElement('div')
-    box.className = 'metric'
-    const key = document.createElement('div')
-    key.className = 'k'
-    key.textContent = k
-    const value = document.createElement('div')
-    value.className = 'v'
-    value.textContent = String(v)
-    box.append(key, value)
+  $('metrics').replaceChildren(...items.map((item) => {
+    const box = el('div', 'metric')
+    box.append(el('div', 'k', item.key), el('div', 'v', String(item.value)), el('div', 'hint', item.hint))
     return box
   }))
   $('version').textContent = 'v' + overview.version + ' · protocol ' + overview.protocol
+  $('storageBadge').textContent = percent + '%'
+  $('storageUsed').textContent = formatBytes(overview.usedBytes)
+  $('storageTotal').textContent = '/ ' + formatBytes(overview.maxBytes)
+  $('storageBar').style.width = Math.min(100, percent) + '%'
+  const bar = $('storageBar').parentElement
+  bar.setAttribute('aria-valuenow', String(percent))
+  $('quotaGb').value = String(Math.max(1, Math.round(overview.maxBytes / 1024 / 1024 / 1024)))
 }
 
 function renderDevices(devices) {
-  const body = $('devices')
-  body.replaceChildren(...devices.map((device) => {
-    const row = document.createElement('tr')
-    cell(row, device.deviceId)
-    cell(row, device.label)
-    cell(row, time(device.createdAt))
-    cell(row, time(device.lastSeenAt))
-    const action = cell(row, '')
-    const button = document.createElement('button')
-    button.className = 'danger'
-    button.textContent = '吊销'
-    button.onclick = async () => {
+  $('deviceBadge').textContent = devices.length + ' 台'
+  const list = $('devices')
+  if (devices.length === 0) {
+    const empty = el('div', 'empty')
+    empty.append(el('b', null, '还没有设备'), el('span', null, '签发一个 token，把 DSH 插件接到这台服务器。'))
+    list.replaceChildren(empty)
+    return
+  }
+  list.replaceChildren(...devices.map((device) => {
+    const row = el('div', 'device-row')
+    const main = el('div', 'device-main')
+    const label = el('div', 'device-label')
+    label.append(el('span', null, device.label || 'device'), el('span', 'badge good', '有效'))
+    const idLine = el('div', 'device-id')
+    idLine.append(el('code', null, device.deviceId))
+    const copy = el('button', 'row-copy', '复制')
+    copy.type = 'button'
+    copy.onclick = () => copyText(device.deviceId)
+    idLine.append(copy)
+    const meta = el('div', 'device-meta')
+    meta.append(
+      el('span', null, '创建 ' + time(device.createdAt)),
+      el('span', null, '最后在线 ' + (device.lastSeenAt === null || device.lastSeenAt === undefined ? '从未' : time(device.lastSeenAt))),
+    )
+    main.append(label, idLine, meta)
+    const actions = el('div', 'device-actions')
+    const revoke = el('button', 'btn small danger', '吊销')
+    revoke.type = 'button'
+    revoke.onclick = async () => {
       if (!confirm('吊销后该设备 token 立即失效，确定？')) return
-      await api('/admin/devices/' + device.deviceId, { method: 'DELETE' })
-      await refresh()
+      revoke.disabled = true
+      revoke.textContent = '吊销中…'
+      try {
+        await api('/admin/devices/' + encodeURIComponent(device.deviceId), { method: 'DELETE' })
+        showToast('设备已吊销')
+        await refresh(true)
+      } catch (error) {
+        showToast(error.message, true)
+        revoke.disabled = false
+        revoke.textContent = '吊销'
+      }
     }
-    action.appendChild(button)
+    actions.append(revoke)
+    row.append(main, actions)
     return row
   }))
-  if (devices.length === 0) {
-    const row = document.createElement('tr')
-    cell(row, '还没有设备', 'muted')
-    row.lastChild.colSpan = 5
-    body.appendChild(row)
+}
+
+function filteredSessions() {
+  const query = $('sessionSearch').value.trim().toLowerCase()
+  const mode = $('sessionFilter').value
+  return state.sessions.filter((session) => {
+    if (query && !session.sessionId.toLowerCase().includes(query)) return false
+    if (mode === 'active' && session.deletedAt !== null) return false
+    if (mode === 'deleted' && session.deletedAt === null) return false
+    if (mode === 'leased' && session.lease === null) return false
+    return true
+  })
+}
+
+function renderSessions() {
+  const all = state.sessions
+  const sessions = filteredSessions()
+  $('sessionBadge').textContent = (sessions.length === all.length ? all.length : sessions.length + ' / ' + all.length) + ' 个'
+  const body = $('sessions')
+  body.replaceChildren(...sessions.map((session) => {
+    const row = el('tr')
+    const idCell = el('td', 'session-id')
+    idCell.append(el('code', null, session.sessionId))
+    const copy = el('button', 'row-copy', '复制')
+    copy.type = 'button'
+    copy.onclick = () => copyText(session.sessionId)
+    idCell.append(copy)
+    row.append(idCell, el('td', null, 'v' + session.formatVersion), el('td', null, String(session.batchCount)), el('td', null, String(session.lastSeq)), el('td', null, time(session.updatedAt)))
+    if (session.lease === null) row.append(el('td', null, '—'))
+    else row.append(el('td', 'lease', session.lease.deviceId + ' · ' + time(session.lease.leaseUntil)))
+    const status = el('td')
+    status.append(el('span', 'badge' + (session.deletedAt === null ? ' good' : ' bad'), session.deletedAt === null ? '正常' : '已删除'))
+    row.append(status)
+    return row
+  }))
+  const empty = $('sessionsEmpty')
+  const table = body.closest('.table-wrap')
+  if (sessions.length === 0) {
+    table.hidden = true
+    empty.hidden = false
+    empty.replaceChildren()
+    if (all.length === 0) {
+      empty.append(el('b', null, '还没有同步过会话'), el('span', null, '接入 DSH 插件后，会话会出现在这里。'))
+      const button = el('button', 'btn secondary small', '签发第一台设备')
+      button.type = 'button'
+      button.onclick = () => { $('deviceLabel').focus(); $('deviceLabel').scrollIntoView({ behavior: 'smooth', block: 'center' }) }
+      empty.append(button)
+    } else {
+      empty.append(el('b', null, '没有匹配的会话'), el('span', null, '换一个关键词或状态筛选。'))
+      const button = el('button', 'btn ghost small', '清除筛选')
+      button.type = 'button'
+      button.onclick = () => { $('sessionSearch').value = ''; $('sessionFilter').value = 'all'; renderSessions() }
+      empty.append(button)
+    }
+  } else {
+    table.hidden = false
+    empty.hidden = true
   }
 }
 
-function renderSessions(sessions) {
-  const body = $('sessions')
-  body.replaceChildren(...sessions.map((session) => {
-    const row = document.createElement('tr')
-    cell(row, session.sessionId)
-    cell(row, 'v' + session.formatVersion)
-    cell(row, String(session.batchCount))
-    cell(row, String(session.lastSeq))
-    cell(row, time(session.updatedAt))
-    cell(row, session.lease === null ? '—' : session.lease.deviceId + ' 至 ' + time(session.lease.leaseUntil))
-    const status = cell(row, '')
-    const tag = document.createElement('span')
-    tag.className = session.deletedAt === null ? 'tag' : 'tag deleted'
-    tag.textContent = session.deletedAt === null ? '正常' : '已删除'
-    status.appendChild(tag)
-    return row
-  }))
-  $('sessionsEmpty').classList.toggle('hidden', sessions.length > 0)
-}
-
-async function refresh() {
-  const [overview, devices, sessions] = await Promise.all([
-    api('/admin/overview'),
-    api('/admin/devices'),
-    api('/admin/sessions'),
-  ])
-  showApp()
-  renderMetrics(overview)
-  renderDevices(devices)
-  renderSessions(sessions)
+async function refresh(silent) {
+  const button = $('refresh')
+  if (!silent) {
+    button.disabled = true
+    button.textContent = '刷新中…'
+  }
+  try {
+    const [overview, devices, sessions] = await Promise.all([
+      api('/admin/overview'),
+      api('/admin/devices'),
+      api('/admin/sessions'),
+    ])
+    state.overview = overview
+    state.devices = devices
+    state.sessions = sessions
+    showApp()
+    renderMetrics(overview)
+    renderDevices(devices)
+    renderSessions()
+    $('healthText').textContent = '服务正常'
+  } catch (error) {
+    if (error.message !== 'unauthorized') {
+      $('healthText').textContent = '连接异常'
+      showToast(error.message, true)
+    }
+  } finally {
+    if (!silent) {
+      button.disabled = false
+      button.textContent = '刷新'
+    }
+  }
 }
 
 $('loginButton').onclick = async () => {
+  const button = $('loginButton')
   $('loginError').textContent = ''
-  const response = await fetch('/admin/login', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ password: $('password').value }),
-  })
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}))
-    $('loginError').textContent = payload?.error?.message ?? '登录失败'
+  if ($('password').value === '') {
+    $('loginError').textContent = '请输入管理密码'
+    $('password').focus()
     return
   }
-  $('password').value = ''
-  await refresh()
+  button.disabled = true
+  button.textContent = '登录中…'
+  try {
+    const response = await fetch('/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: $('password').value }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      $('loginError').textContent = (payload && payload.error && payload.error.message) || '登录失败'
+      return
+    }
+    $('password').value = ''
+    await refresh(false)
+  } catch (error) {
+    $('loginError').textContent = error.message || '登录失败'
+  } finally {
+    button.disabled = false
+    button.textContent = '登录'
+  }
 }
 $('password').addEventListener('keydown', (event) => { if (event.key === 'Enter') $('loginButton').click() })
-$('logout').onclick = async () => { await fetch('/admin/logout', { method: 'POST' }); showLogin() }
-$('saveQuota').onclick = async () => {
-  $('quotaResult').textContent = ''
+$('revealPassword').onclick = () => {
+  const input = $('password')
+  const reveal = input.type === 'password'
+  input.type = reveal ? 'text' : 'password'
+  $('revealPassword').textContent = reveal ? '隐藏' : '显示'
+  $('revealPassword').setAttribute('aria-label', reveal ? '隐藏密码' : '显示密码')
+}
+$('logout').onclick = async () => {
+  await fetch('/admin/logout', { method: 'POST' }).catch(() => {})
+  showLogin()
+}
+$('refresh').onclick = () => refresh(false)
+$('quotaForm').addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const button = $('saveQuota')
   const gib = Number($('quotaGb').value)
-  if (!Number.isFinite(gib) || gib < 1) { $('quotaResult').textContent = '至少 1 GiB'; return }
+  $('quotaResult').textContent = ''
+  $('quotaResult').className = 'inline-result'
+  if (!Number.isFinite(gib) || gib < 1) {
+    $('quotaResult').textContent = '至少 1 GiB'
+    $('quotaResult').className = 'inline-result bad'
+    return
+  }
+  button.disabled = true
+  button.textContent = '保存中…'
   try {
     await api('/admin/quota', { method: 'POST', body: JSON.stringify({ maxBytes: Math.round(gib * 1024 * 1024 * 1024) }) })
     $('quotaResult').textContent = '已保存'
-    await refresh()
-  } catch (error) { $('quotaResult').textContent = error.message }
+    $('quotaResult').className = 'inline-result good'
+    await refresh(true)
+  } catch (error) {
+    $('quotaResult').textContent = error.message
+    $('quotaResult').className = 'inline-result bad'
+  } finally {
+    button.disabled = false
+    button.textContent = '保存'
+  }
+})
+$('deviceForm').addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const button = $('createDevice')
+  $('deviceError').textContent = ''
+  button.disabled = true
+  button.textContent = '签发中…'
+  try {
+    const created = await api('/admin/devices', { method: 'POST', body: JSON.stringify({ label: $('deviceLabel').value.trim() || 'device' }) })
+    $('deviceLabel').value = ''
+    showToken(created)
+    await refresh(true)
+  } catch (error) {
+    $('deviceError').textContent = error.message
+  } finally {
+    button.disabled = false
+    button.textContent = '签发'
+  }
+})
+function showToken(created) {
+  $('tokenValue').textContent = created.token
+  $('tokenDialog').hidden = false
+  document.body.classList.add('modal-open')
+  $('copyToken').onclick = () => copyText(created.token)
+  setTimeout(() => $('copyToken').focus(), 30)
 }
-$('refresh').onclick = () => refresh().catch(() => {})
-$('createDevice').onclick = async () => {
-  const label = $('deviceLabel').value.trim() || 'device'
-  const created = await api('/admin/devices', { method: 'POST', body: JSON.stringify({ label }) })
-  $('deviceResult').textContent = 'token（只显示一次）：' + created.token
-  $('deviceLabel').value = ''
-  await refresh()
+function closeToken() {
+  $('tokenDialog').hidden = true
+  document.body.classList.remove('modal-open')
+  $('tokenValue').textContent = ''
 }
+$('closeToken').onclick = closeToken
+$('tokenDialog').addEventListener('click', (event) => { if (event.target === $('tokenDialog')) closeToken() })
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('tokenDialog').hidden) closeToken()
+})
+$('sessionSearch').addEventListener('input', renderSessions)
+$('sessionFilter').addEventListener('change', renderSessions)
 
-refresh().catch(() => showLogin())
-setInterval(() => { if ($('app').style.display !== 'none') refresh().catch(() => {}) }, 5000)
+refresh(false)
+setInterval(() => { if (!$('appView').hidden) refresh(true) }, 10000)
 </script>
 </body>
 </html>
