@@ -22,7 +22,7 @@ const sourceDir = path.join(root, 'src')
 const outputDir = path.join(root, 'lib')
 const sharedDir = path.resolve(root, '..', 'shared', 'src')
 const sharedOutput = path.join(outputDir, 'shared')
-const SHARED_MODULES = ['batches.ts', 'chain.ts', 'crypto.ts', 'sealed-frame.ts']
+const SHARED_MODULES = ['batches.ts', 'chain.ts', 'crypto.ts', 'sealed-frame.ts', 'vault.ts']
 
 /** 递归列出某目录下的所有 `.ts` 文件。 */
 function sources(dir) {

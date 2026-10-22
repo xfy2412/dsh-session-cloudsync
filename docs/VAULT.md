@@ -1,6 +1,6 @@
 # 加密附加数据层（Vault）与工作区映射
 
-> 状态：**设计已收敛，V0 待实现**（2026-10-22）。
+> 状态：**V0 已完成，V1 待实现**（2026-10-22）。
 > 本文件承接 [DESIGN.md](DESIGN.md) 的 L2 设备台账 / L3 agent 笔记，并替换 M4 的单一
 > `workspacePath` 落点方案。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
 > 会话内部的 cwd 处理另见 [CWD.md](CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
@@ -515,6 +515,10 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 | V4 | 工具链采集 + L3 笔记 + 压缩/保留策略 | 自动不覆盖 authored；笔记只追加 |
 
 V0–V2 期间可直接替换 M4 的 `workspacePath`，不需要迁移分支。
+
+> V0 已完成（2026-10-22）：`shared/vault.ts` 的 vaultKey/workspaceKey 派生、确定性
+> AES-GCM 封帧、AAD、recordHash、链校验与 5 组篡改/重放测试；当前共享测试 126 通过。
+> V1 从服务端 append/cursor 与最小设备台账开始。
 
 ## 12. 已定
 
