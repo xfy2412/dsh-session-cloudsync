@@ -1,6 +1,6 @@
 # 加密附加数据层（Vault）与工作区映射
 
-> 状态：**V0 已完成，V1 待实现**（2026-10-22）。
+> 状态：**V1 已完成，V2 待实现**（2026-10-22）。
 > 本文件承接 [DESIGN.md](DESIGN.md) 的 L2 设备台账 / L3 agent 笔记，并替换 M4 的单一
 > `workspacePath` 落点方案。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
 > 会话内部的 cwd 处理另见 [CWD.md](CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
@@ -354,7 +354,7 @@ session manifest
 - 错误映射的恢复方式是显式重置本地同步状态并重新拉取，属于破坏性操作，不在自动流程里；
 - 不实现工作区/会话文件迁移，也不改写已有会话 header cwd。
 
-## 6. Vault 协议（提议）
+## 6. Vault 协议（V1 已实现）
 
 复用现有 `/v1/blobs?kind=vault` 上传密文，然后：
 
@@ -517,8 +517,10 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 V0–V2 期间可直接替换 M4 的 `workspacePath`，不需要迁移分支。
 
 > V0 已完成（2026-10-22）：`shared/vault.ts` 的 vaultKey/workspaceKey 派生、确定性
-> AES-GCM 封帧、AAD、recordHash、链校验与 5 组篡改/重放测试；当前共享测试 126 通过。
-> V1 从服务端 append/cursor 与最小设备台账开始。
+> AES-GCM 封帧、AAD、recordHash、链校验与 5 组篡改/重放测试。
+> V1 已完成：服务端 `/v1/vault/append|cursor|stream`、`vault-writer` 租约、通用
+> `clientInstanceId` 租约；宿主最小设备台账与 `workspace/profile` 写入。当前测试 129 通过。
+> V2 从 `workspaceKey` manifest 扩展、一次性绑定和未映射阻断开始。
 
 ## 12. 已定
 

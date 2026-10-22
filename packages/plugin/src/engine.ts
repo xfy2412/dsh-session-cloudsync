@@ -110,10 +110,21 @@ export interface EngineConfig {
   readonly batchBytes?: number
   /** 单次 HTTP 读取超时（毫秒），默认 10s。 */
   readonly requestTimeoutMs?: number
+  /** 当前 DSH 进程的 clientInstanceId；用于租约 owner。 */
+  readonly clientId?: string
 }
 
 /** 默认单次 HTTP 读取超时。 */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+
+/**
+ * 当前引擎使用的 clientInstanceId。
+ * @param config - 引擎配置。
+ * @returns 配置值或测试用固定十六进制 id。
+ */
+export function clientIdOf(config: EngineConfig): string {
+  return config.clientId ?? '0000000000000000'
+}
 
 /**
  * 给每次 fetch 加读取超时；调用方已有 signal 时尊重它。
@@ -538,8 +549,12 @@ async function acquireLease(
   base: string,
   token: string,
   sessionId: string,
+  clientId: string,
 ): Promise<boolean> {
-  const { status, body } = await requestJson(fetchImpl, base, `/v1/sessions/${encodeURIComponent(sessionId)}/lease`, token, { method: 'POST' })
+  const { status, body } = await requestJson(fetchImpl, base, `/v1/sessions/${encodeURIComponent(sessionId)}/lease`, token, {
+    method: 'POST',
+    headers: { 'x-client-id': clientId },
+  })
   if (status === 200) return true
   if (status === 409 && errorOf(body).code === 'lease-held') return false
   const error = errorOf(body)
@@ -558,11 +573,12 @@ async function releaseLease(
   base: string,
   token: string,
   sessionId: string,
+  clientId: string,
 ): Promise<void> {
   try {
     await fetchImpl(`${base}/v1/sessions/${encodeURIComponent(sessionId)}/lease`, {
       method: 'DELETE',
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${token}`, 'x-client-id': clientId },
     })
   } catch {
     // 租约到期会自然释放；释放失败不改变本次同步结果。
@@ -582,6 +598,7 @@ async function appendFrames(
   base: string,
   token: string,
   sessionId: string,
+  clientId: string,
   input: {
     readonly baseIndex: number
     readonly baseChainHash: string | null
@@ -599,7 +616,7 @@ async function appendFrames(
     token,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-client-id': clientId },
       body: JSON.stringify({ ...input, batches: input.frames }),
     },
   )
@@ -846,10 +863,10 @@ async function syncSession<Session>(
 
   for (const entry of sealedEntries) await uploadBlob(fetchImpl, base, deps.config.token, entry)
 
-  const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId)
+  const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
   if (!leased) return { sessionId, status: 'lease-held', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
   try {
-    await appendFrames(fetchImpl, base, deps.config.token, sessionId, {
+    await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
       baseIndex,
       baseChainHash,
       createdAt: meta.createdAt,
@@ -859,7 +876,7 @@ async function syncSession<Session>(
       safeThroughSeq,
     })
   } finally {
-    await releaseLease(fetchImpl, base, deps.config.token, sessionId)
+    await releaseLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
   }
 
   return {
@@ -1268,7 +1285,7 @@ export async function correctCwd<Session>(
       return { ok: false, status: 'needs-sync', message: '远端还有未同步事件，请先完成同步' }
     }
 
-    const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId)
+    const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
     if (!leased) return { ok: false, status: 'lease-held', message: '会话租约被占用' }
     try {
       // 租约内再读一次，防止 manifest 在租约前被别的设备推进。
@@ -1302,7 +1319,7 @@ export async function correctCwd<Session>(
       await uploadBlob(fetchImpl, base, deps.config.token, sealed)
       const baseFrame = current.frames[current.frames.length - 1]
       if (baseFrame === undefined) throw new Error('manifest 缺少最后一个批次')
-      await appendFrames(fetchImpl, base, deps.config.token, sessionId, {
+      await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
         baseIndex: current.frames.length - 1,
         baseChainHash: baseFrame.chainHash,
         createdAt: handle.header.createdAt,
@@ -1313,7 +1330,7 @@ export async function correctCwd<Session>(
       })
       return { ok: true, status: 'corrected' }
     } finally {
-      await releaseLease(fetchImpl, base, deps.config.token, sessionId).catch(() => {})
+      await releaseLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config)).catch(() => {})
     }
   } catch (error: unknown) {
     return { ok: false, status: 'error', message: error instanceof Error ? error.message : String(error) }

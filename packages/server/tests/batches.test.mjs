@@ -21,6 +21,7 @@ import { sessionKeyOf } from '../../shared/src/sealed-frame.ts'
  */
 async function call(base, path, options = {}) {
   const headers = { ...options.headers }
+  headers['x-client-id'] ??= '0123456789abcdef'
   if (options.token !== undefined) headers.authorization = `Bearer ${options.token}`
   let body = options.body
   if (options.json !== undefined) {

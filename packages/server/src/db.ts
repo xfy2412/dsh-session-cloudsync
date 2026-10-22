@@ -19,7 +19,7 @@ import { DatabaseSync } from 'node:sqlite'
 export const DEFAULT_DATASET = 'default'
 
 /** 当前库结构版本；结构有破坏性变化时递增。 */
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -63,11 +63,28 @@ CREATE TABLE IF NOT EXISTS blobs (
 
 CREATE TABLE IF NOT EXISTS leases (
   dataset TEXT NOT NULL,
-  session_id TEXT NOT NULL,
+  resource TEXT NOT NULL,
   device_id TEXT NOT NULL,
+  client_id TEXT NOT NULL,
   lease_until INTEGER NOT NULL,
-  PRIMARY KEY (dataset, session_id)
+  PRIMARY KEY (dataset, resource)
 );
+
+CREATE TABLE IF NOT EXISTS vault_records (
+  dataset TEXT NOT NULL,
+  writer TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  prev_hash TEXT,
+  blob_sha256 TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  sealed_json TEXT NOT NULL,
+  record_hash TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  PRIMARY KEY (dataset, writer, seq)
+);
+
+CREATE INDEX IF NOT EXISTS vault_records_revision ON vault_records (dataset, revision);
 
 CREATE TABLE IF NOT EXISTS tombstones (
   dataset TEXT NOT NULL,
@@ -101,7 +118,7 @@ export function openDatabase(dataDir: string): ServerDb {
   const version = Number(versionRow?.user_version ?? 0)
   if (version < SCHEMA_VERSION) {
     // M2 之前没有真实部署；旧结构直接重建（设备、blob、meta 不受影响）。
-    handle.exec('DROP TABLE IF EXISTS session_frames; DROP TABLE IF EXISTS frames; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS leases; DROP TABLE IF EXISTS tombstones;')
+    handle.exec('DROP TABLE IF EXISTS session_frames; DROP TABLE IF EXISTS frames; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS leases; DROP TABLE IF EXISTS tombstones; DROP TABLE IF EXISTS vault_records;')
     handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
   }
   handle.exec(SCHEMA)

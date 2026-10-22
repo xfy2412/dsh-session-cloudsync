@@ -14,9 +14,7 @@ import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 import { SyncError } from '../../shared/src/wire.ts'
 import { blobPath } from './blobs.ts'
 import { DEFAULT_DATASET, bumpRevision, readRevision, withTransaction, type ServerDb } from './db.ts'
-
-/** 租约有效期。 */
-export const LEASE_TTL_MS = 60_000
+import { requireLease as requireResourceLease, sessionResource } from './leases.ts'
 
 /** 单个 append 请求体上限（万帧会话首次同步约 1.5 MB）。 */
 export const MAX_APPEND_BODY_BYTES = 8 * 1024 * 1024
@@ -34,23 +32,11 @@ interface SessionRow {
   readonly deleted_at: number | null
 }
 
-interface LeaseRow {
-  readonly device_id: string
-  readonly lease_until: number
-}
-
-/** 租约状态。 */
-export interface LeaseState {
-  readonly sessionId: string
-  readonly deviceId: string
-  readonly leaseUntil: number
-  readonly acquired: boolean
-}
-
 /** append 的入参。 */
 export interface AppendInput {
   readonly sessionId: string
   readonly deviceId: string
+  readonly clientId: string
   readonly baseIndex: number
   readonly baseChainHash: string | null
   readonly createdAt: number
@@ -112,61 +98,6 @@ function sessionRow(db: ServerDb, sessionId: string): SessionRow | undefined {
 }
 
 /**
- * 要求调用者持有有效租约。
- * @param db - 已打开的数据库。
- * @param sessionId - 会话 id。
- * @param deviceId - 调用设备。
- * @param now - 当前时间。
- * @throws 租约不存在、被他人持有或已过期时抛出 `lease-held`。
- */
-function requireLease(db: ServerDb, sessionId: string, deviceId: string, now: number): LeaseRow {
-  const row = db.handle
-    .prepare('SELECT device_id, lease_until FROM leases WHERE dataset = ? AND session_id = ?')
-    .get(DEFAULT_DATASET, sessionId) as LeaseRow | undefined
-  if (row === undefined || row.device_id !== deviceId || row.lease_until <= now) {
-    throw new SyncError('lease-held', `会话 ${sessionId} 的租约未由当前设备持有或已过期`)
-  }
-  return row
-}
-
-/**
- * 申请或续租。
- * @param db - 已打开的数据库。
- * @param sessionId - 会话 id。
- * @param deviceId - 调用设备。
- * @param now - 当前时间。
- * @returns 租约状态。
- * @throws 被其他设备持有时抛出 `lease-held`。
- */
-export function acquireLease(db: ServerDb, sessionId: string, deviceId: string, now = Date.now()): LeaseState {
-  return withTransaction(db, () => {
-    const row = db.handle
-      .prepare('SELECT device_id, lease_until FROM leases WHERE dataset = ? AND session_id = ?')
-      .get(DEFAULT_DATASET, sessionId) as LeaseRow | undefined
-    if (row !== undefined && row.device_id !== deviceId && row.lease_until > now) {
-      throw new SyncError('lease-held', `会话 ${sessionId} 的租约由 ${row.device_id} 持有至 ${row.lease_until}`)
-    }
-    const leaseUntil = now + LEASE_TTL_MS
-    db.handle
-      .prepare('INSERT INTO leases (dataset, session_id, device_id, lease_until) VALUES (?, ?, ?, ?) ON CONFLICT(dataset, session_id) DO UPDATE SET device_id = excluded.device_id, lease_until = excluded.lease_until')
-      .run(DEFAULT_DATASET, sessionId, deviceId, leaseUntil)
-    return { sessionId, deviceId, leaseUntil, acquired: row === undefined || row.device_id !== deviceId || row.lease_until <= now }
-  })
-}
-
-/**
- * 释放自己持有的租约。
- * @param db - 已打开的数据库。
- * @param sessionId - 会话 id。
- * @param deviceId - 调用设备。
- * @returns 是否真的释放了。
- */
-export function releaseLease(db: ServerDb, sessionId: string, deviceId: string): boolean {
-  const result = db.handle.prepare('DELETE FROM leases WHERE dataset = ? AND session_id = ? AND device_id = ?').run(DEFAULT_DATASET, sessionId, deviceId)
-  return Number(result.changes) > 0
-}
-
-/**
  * 校验链并组装 manifest。
  * @param sessionId - 会话 id。
  * @param formatVersion - 格式代际。
@@ -212,7 +143,7 @@ function manifestOf(
  */
 export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, now = Date.now()): SessionSummary {
   return withTransaction(db, () => {
-    requireLease(db, input.sessionId, input.deviceId, now)
+    requireResourceLease(db, sessionResource(input.sessionId), input.deviceId, input.clientId, now)
     const row = sessionRow(db, input.sessionId)
     let combined: SealedFrameRef[]
     let formatVersion = input.formatVersion
@@ -295,9 +226,9 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
  * @returns 会话摘要。
  * @throws 不存在、生命周期不符或已删除时抛出。
  */
-export function deleteSession(db: ServerDb, sessionId: string, deviceId: string, createdAt: number, now = Date.now()): SessionSummary {
+export function deleteSession(db: ServerDb, sessionId: string, deviceId: string, clientId: string, createdAt: number, now = Date.now()): SessionSummary {
   return withTransaction(db, () => {
-    requireLease(db, sessionId, deviceId, now)
+    requireResourceLease(db, sessionResource(sessionId), deviceId, clientId, now)
     const row = sessionRow(db, sessionId)
     if (row === undefined) throw new SyncError('not-found', `没有会话 ${sessionId}`)
     if (row.created_at !== createdAt) throw new SyncError('conflict', 'createdAt 与当前生命周期不符')
@@ -364,7 +295,7 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
   const rows = db.handle
     .prepare(`SELECT s.session_id, s.created_at, s.format_version, s.frame_count, s.last_seq, s.head_chain_hash,
                      s.revision, s.updated_at, s.deleted_at, l.device_id AS lease_device, l.lease_until AS lease_until
-              FROM sessions s LEFT JOIN leases l ON l.dataset = s.dataset AND l.session_id = s.session_id
+              FROM sessions s LEFT JOIN leases l ON l.dataset = s.dataset AND l.resource = 'session:' || s.session_id
               WHERE s.dataset = ? ORDER BY s.updated_at DESC LIMIT ?`)
     .all(DEFAULT_DATASET, limit) as unknown as Array<{
       session_id: string

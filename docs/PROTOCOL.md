@@ -3,8 +3,8 @@
 > 状态：M2 服务端已实现 `/v1/health`、设备 token、`/v1/blobs`、租约、append、墓碑、cursor、manifest/批次引用读取；
 > 管理台（cookie 会话 + 只读页面）已实现。M4 已把协议规范字段改为 `batches` / `batchCount`，旧 `frames` / `frameCount` 保留兼容。
 >
-> 2026-10-22：租约规划扩展为 `session:<id>` / `vault-writer:<writer>`，owner 增加
-> `clientInstanceId`；Vault 路由与租约尚未实现，先按 [VAULT.md](VAULT.md) 落 V0/V1。
+> 2026-10-22：租约已扩展为 `session:<id>` / `vault-writer:<writer>`，owner 增加
+> `clientInstanceId`；Vault V1 的 append/cursor/stream 与 writer 租约已实现，见 [VAULT.md](VAULT.md)。
 >
 > **M3/M4 语义**：同步单位是**连续事件批次**；差异见文末「M3/M4 语义」。
 
@@ -46,7 +46,7 @@
 | GET | `/v1/devices` | setup | 列出未吊销设备 |
 | DELETE | `/v1/devices/:id` | setup | 吊销设备 token |
 | GET | `/v1/me` | 任意 | 当前 token 的角色 |
-| POST | `/v1/blobs?kind=frame\|attachment` | 设备 | 上传密文；返回 `{sha256, bytes, dedup}`；同内容重复上传返回 200 + `dedup: true` |
+| POST | `/v1/blobs?kind=frame\|attachment\|vault` | 设备 | 上传密文；返回 `{sha256, bytes, dedup}`；同内容重复上传返回 200 + `dedup: true` |
 | HEAD | `/v1/blobs/:sha256` | 设备 | 判断密文是否存在（上传去重） |
 | GET | `/v1/blobs/:sha256` | 设备 | 下载密文 |
 | GET | `/v1/cursor?since=<revision>` | 设备 | 自某 revision 以来的变更**摘要** |
@@ -56,11 +56,11 @@
 | POST | `/v1/sessions/:id/lease` | 设备 | 申请/续租租约（带 `X-Client-Id`） |
 | POST | `/v1/sessions/:id/append` | 设备 | 提交新批次（`baseIndex + baseChainHash` + 封批次条目） |
 | POST | `/v1/sessions/:id/delete` | 设备 | 墓碑（绑定 `sessionId + createdAt + formatVersion`） |
-| POST | `/v1/vault/lease` | 设备 | Vault writer 租约（计划） |
-| DELETE | `/v1/vault/lease` | 设备 | 释放 Vault writer 租约（计划） |
-| POST | `/v1/vault/append` | 设备 | 追加 Vault 记录索引（计划） |
-| GET | `/v1/vault/cursor?since=<revision>` | 设备 | Vault 记录 cursor（计划） |
-| GET | `/v1/vault/stream/:writer?from=<seq>&limit=<n>` | 设备 | 某 writer 的 Vault 记录索引（计划） |
+| POST | `/v1/vault/lease` | 设备 | Vault writer 租约 |
+| DELETE | `/v1/vault/lease` | 设备 | 释放 Vault writer 租约 |
+| POST | `/v1/vault/append` | 设备 | 追加 Vault 记录索引 |
+| GET | `/v1/vault/cursor?since=<revision>` | 设备 | Vault 记录 cursor |
+| GET | `/v1/vault/stream/:writer?from=<seq>&limit=<n>` | 设备 | 某 writer 的 Vault 记录索引 |
 
 ### lease 与 append
 
@@ -111,8 +111,8 @@
 
 客户端先比 `batchCount + headChainHash`，一致就跳过；不一致再按页拉 `batches` 找公共前缀。响应里仍带 `frameCount` / `frames` 作为旧字段别名。
 
-> Vault（设备台账 / 工作区映射 / 笔记）的 `/v1/vault/*` 是当前 V0/V1 计划扩展，设计见 [VAULT.md](VAULT.md)；
-> 记录封帧、cursor、writer 租约和配额以该文为准。当前 `/v1` 尚未实现这些路由。
+> Vault（设备台账 / 工作区映射 / 笔记）的 `/v1/vault/*` 已在 V1 实现，
+> 设计见 [VAULT.md](VAULT.md)；记录封帧、cursor、writer 租约和配额以该文为准。
 
 ## 不变量
 

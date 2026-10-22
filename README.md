@@ -12,9 +12,9 @@
 
 # dsh-session-cloudsync
 
-给 DeepSeek Harness（DSH）做的**会话云同步**：自部署服务端、端到端加密，同步会话与附件；设备台账、agent 笔记与多工作区映射见 [docs/VAULT.md](docs/VAULT.md) 设计稿。
+给 DeepSeek Harness（DSH）做的**会话云同步**：自部署服务端、端到端加密，同步会话与附件；设备台账、agent 笔记与多工作区映射见 [docs/VAULT.md](docs/VAULT.md)（V0/V1 已实现）。
 
-> **状态：M1/M2 已完成，M3 已完成，M4 进行中。** 帧工具/加密、服务端（含管理台与初始化）、M0 免重启 ingest 已经可跑；M3 的推送/拉取、安全边界、双 home E2E、durable journal 与错误退避已通过。M4 已完成 A1–A5、B1–B5（凭据、设置页、首启向导）、C1–C4/C6（composer block、列表拦截、行标记、同步气泡）与 E1（`batches` 规范字段）；C5 GUI 回归、D5 故障文案演练与 E3 文档收口顺延到 Vault V0–V2 之后。Vault V0 已完成（本地密钥/记录链），V1 待实现；见 [docs/VAULT.md](docs/VAULT.md)。
+> **状态：M1/M2 已完成，M3 已完成，M4 进行中。** 帧工具/加密、服务端（含管理台与初始化）、M0 免重启 ingest 已经可跑；M3 的推送/拉取、安全边界、双 home E2E、durable journal 与错误退避已通过。M4 已完成 A1–A5、B1–B5（凭据、设置页、首启向导）、C1–C4/C6（composer block、列表拦截、行标记、同步气泡）与 E1（`batches` 规范字段）；C5 GUI 回归、D5 故障文案演练与 E3 文档收口顺延到 Vault V0–V2 之后。Vault V0/V1 已完成（本地记录链、服务端 Vault、writer 租约、设备台账），V2 待实现；见 [docs/VAULT.md](docs/VAULT.md)。
 
 ## 支持版本
 
@@ -75,7 +75,7 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 - [docs/ROADMAP.md](docs/ROADMAP.md)：M0–M4 里程碑、当前状态与文档地图。
 - [docs/M4-PLAN.md](docs/M4-PLAN.md)：M4 工作项、依赖顺序与待拍板项。
 - [docs/DESIGN.md](docs/DESIGN.md)：范围、数据分层、并发与加密的取舍。
-- [docs/VAULT.md](docs/VAULT.md)：加密附加数据层、多工作区映射、设备台账与插件版本匹配（设计稿）。
+- [docs/VAULT.md](docs/VAULT.md)：加密附加数据层、多工作区映射、设备台账与插件版本匹配（V0/V1 已实现，V2+ 设计稿）。
 - [docs/CWD.md](docs/CWD.md)：cwd/工作目录事件处理：header canonical、事件 raw、接收端修正。
 - [docs/DECISIONS.md](docs/DECISIONS.md)：cwd/Canonical 反复讨论后的最终决策记录。
 - [docs/PROMPT-GUIDANCE.md](docs/PROMPT-GUIDANCE.md)：agent 提示词规划：尽量不把会话 cwd 切到工作区外。

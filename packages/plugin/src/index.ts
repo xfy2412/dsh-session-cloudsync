@@ -11,10 +11,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
+import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { SyncController } from './controller.ts'
 import { buildSessionTree, pathAllowed, pathKeyOf } from './closure.ts'
 import { prepareReplaceScript } from './replace.ts'
+import { syncVault } from './vault-sync.ts'
 import {
   correctCwd as correctSessionCwd,
   pullOnce,
@@ -196,6 +198,8 @@ export function apply(ctx: Context, config: Config): void {
   let batchEvents = readVolatile<number>(config.batchEvents) ?? 50
   let batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
   let requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
+  // 每次 DSH 进程启动生成一次；同一进程内 lease/append 复用，重启后换新值。
+  const clientId = randomBytes(16).toString('hex')
 
   const readAllowlist = (): string[] => {
     const raw = readVolatile<unknown>(config.workspaceAllowlist)
@@ -215,6 +219,7 @@ export function apply(ctx: Context, config: Config): void {
     batchEvents,
     batchBytes,
     requestTimeoutMs,
+    clientId,
   }
 
   /**
@@ -326,6 +331,34 @@ export function apply(ctx: Context, config: Config): void {
     } catch (error: unknown) {
       logger.warn(`dsh-session-cloudsync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
     }
+  }
+
+  const runVault = async (): Promise<void> => {
+    if (statePath === undefined) return
+    refreshConfig()
+    await refreshSecrets()
+    let workspaces: Array<{ path: string; title: string }> = []
+    try {
+      workspaces = (workspaceRegistry?.list?.() ?? [])
+        .filter((workspace) => pathAllowed(workspace.path, workspaceAllowlist))
+        .map((workspace) => ({ path: workspace.path, title: workspace.title }))
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-cloudsync: 读取 Vault 工作区失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+    await syncVault({
+      serverUrl,
+      token: engineConfig.token,
+      passphrase: engineConfig.passphrase,
+      ...engineConfig.salt === undefined || engineConfig.salt === '' ? {} : { salt: engineConfig.salt },
+      clientId,
+      requestTimeoutMs,
+      deviceName,
+      dshHome: dirname(dirname(statePath)),
+      stateDir: join(dirname(statePath), 'vault'),
+      workspaces,
+      ...process.env.DSH_VERSION === undefined ? {} : { dshVersion: process.env.DSH_VERSION },
+      ...process.env.DSH_PROFILE === undefined ? {} : { dshProfile: process.env.DSH_PROFILE },
+    }, logger)
   }
 
   const configuration = (): { configured: boolean; reason?: string } => {
@@ -461,7 +494,11 @@ export function apply(ctx: Context, config: Config): void {
   const runSync = async (manual = false): Promise<Awaited<ReturnType<SyncController['run']>>> => {
     refreshConfig()
     await refreshSecrets()
-    return manual ? controller.run({ manual: true }) : controller.run()
+    const result = manual ? await controller.run({ manual: true }) : await controller.run()
+    void runVault().catch((error: unknown) => {
+      logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+    return result
   }
 
   const workspaces = async (): Promise<SyncWorkspaceList> => {
@@ -598,6 +635,9 @@ export function apply(ctx: Context, config: Config): void {
       logger.info(`dsh-session-cloudsync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
     } else {
       void controller.run()
+      void runVault().catch((error: unknown) => {
+        logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
+      })
     }
   })
   if (autoSync) {

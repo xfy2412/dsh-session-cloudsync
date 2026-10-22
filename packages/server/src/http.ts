@@ -31,16 +31,16 @@ import {
 } from './db.ts'
 import {
   MAX_APPEND_BODY_BYTES,
-  acquireLease,
   adminSessions,
   appendFrames,
   deleteSession,
   getManifest,
   listChanges,
   listFrames,
-  releaseLease,
   sessionCounts,
 } from './sessions.ts'
+import { acquireLease, releaseLease, sessionResource, vaultResource } from './leases.ts'
+import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 
 /** `/v1/health` 报告的版本。 */
@@ -227,6 +227,21 @@ function requireDevice(db: ServerDb, req: IncomingMessage): DeviceRef {
 }
 
 /**
+ * 读取当前 DSH 进程的 clientInstanceId。
+ * @param req - 收到的请求。
+ * @returns 16–64 位小写十六进制 id。
+ * @throws 缺头或形状非法时抛出 `bad-request`。
+ */
+function clientIdFrom(req: IncomingMessage): string {
+  const raw = req.headers['x-client-id']
+  const value = Array.isArray(raw) ? raw[0] ?? '' : String(raw ?? '')
+  if (!/^[0-9a-f]{16,64}$/u.test(value)) {
+    throw new SyncError('bad-request', '需要 16–64 位十六进制 X-Client-Id')
+  }
+  return value
+}
+
+/**
  * 从路径里取会话 id。
  * @param pathname - 请求路径。
  * @param pattern - 含一个捕获组的正则。
@@ -303,6 +318,10 @@ const DELETE_PATH = /^\/v1\/sessions\/([^/]+)\/delete$/u
 const MANIFEST_PATH = /^\/v1\/sessions\/([^/]+)\/manifest$/u
 const FRAMES_PATH = /^\/v1\/sessions\/([^/]+)\/(?:frames|batches)$/u
 const CURSOR_PATH = /^\/v1\/cursor$/u
+const VAULT_APPEND_PATH = /^\/v1\/vault\/append$/u
+const VAULT_LEASE_PATH = /^\/v1\/vault\/lease$/u
+const VAULT_CURSOR_PATH = /^\/v1\/vault\/cursor$/u
+const VAULT_STREAM_PATH = /^\/v1\/vault\/stream\/([^/]+)$/u
 const ADMIN_DEVICE_PATH = /^\/admin\/devices\/([0-9a-f]+)$/u
 
 /**
@@ -622,8 +641,8 @@ export function createHttpServer(options: ServerOptions): Server {
         if (auth === undefined) return json(res, 401, errorBody('unauthorized', '需要设备或 setup token'))
         const url = new URL(req.url ?? '/', 'http://localhost')
         const kind = url.searchParams.get('kind') ?? 'frame'
-        if (kind !== 'frame' && kind !== 'attachment') {
-          return json(res, 400, errorBody('bad-request', 'kind 只能是 frame 或 attachment'))
+        if (kind !== 'frame' && kind !== 'attachment' && kind !== 'vault') {
+          return json(res, 400, errorBody('bad-request', 'kind 只能是 frame、attachment 或 vault'))
         }
         const bytes = await readRaw(req, maxBlobBytes)
         if (bytes.length === 0) return json(res, 400, errorBody('bad-request', 'blob 不能为空'))
@@ -677,8 +696,9 @@ export function createHttpServer(options: ServerOptions): Server {
       path: LEASE_PATH,
       handler: async (req, res) => {
         const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
         const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, LEASE_PATH)
-        return json(res, 200, { ok: true, value: acquireLease(db, id, device.deviceId) })
+        return json(res, 200, { ok: true, value: acquireLease(db, sessionResource(id), device.deviceId, clientId) })
       },
     },
     {
@@ -686,8 +706,9 @@ export function createHttpServer(options: ServerOptions): Server {
       path: LEASE_PATH,
       handler: async (req, res) => {
         const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
         const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, LEASE_PATH)
-        return json(res, 200, { ok: true, value: { released: releaseLease(db, id, device.deviceId) } })
+        return json(res, 200, { ok: true, value: { released: releaseLease(db, sessionResource(id), device.deviceId, clientId) } })
       },
     },
     {
@@ -695,10 +716,11 @@ export function createHttpServer(options: ServerOptions): Server {
       path: APPEND_PATH,
       handler: async (req, res) => {
         const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
         const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, APPEND_PATH)
         const body = await readJson(req, MAX_APPEND_BODY_BYTES)
         const parsed = parseAppend(body)
-        const value = appendFrames(db, options.dataDir, { sessionId: id, deviceId: device.deviceId, ...parsed })
+        const value = appendFrames(db, options.dataDir, { sessionId: id, deviceId: device.deviceId, clientId, ...parsed })
         return json(res, 200, { ok: true, value: withBatchAliases(value) })
       },
     },
@@ -707,10 +729,11 @@ export function createHttpServer(options: ServerOptions): Server {
       path: DELETE_PATH,
       handler: async (req, res) => {
         const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
         const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, DELETE_PATH)
         const body = await readJson(req)
         if (!Number.isSafeInteger(body.createdAt)) throw new SyncError('bad-request', 'createdAt 必须是整数')
-        return json(res, 200, { ok: true, value: deleteSession(db, id, device.deviceId, Number(body.createdAt)) })
+        return json(res, 200, { ok: true, value: deleteSession(db, id, device.deviceId, clientId, Number(body.createdAt)) })
       },
     },
     {
@@ -745,6 +768,83 @@ export function createHttpServer(options: ServerOptions): Server {
         const since = intParam(url.searchParams.get('since'), 0, 0, Number.MAX_SAFE_INTEGER)
         const limit = intParam(url.searchParams.get('limit'), 200, 1, 1000)
         return json(res, 200, { ok: true, value: listChanges(db, since, limit) })
+      },
+    },
+    {
+      method: 'POST',
+      path: VAULT_LEASE_PATH,
+      handler: async (req, res) => {
+        const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
+        const resource = vaultResource(device.deviceId)
+        return json(res, 200, { ok: true, value: acquireLease(db, resource, device.deviceId, clientId) })
+      },
+    },
+    {
+      method: 'DELETE',
+      path: VAULT_LEASE_PATH,
+      handler: async (req, res) => {
+        const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
+        const resource = vaultResource(device.deviceId)
+        return json(res, 200, { ok: true, value: { released: releaseLease(db, resource, device.deviceId, clientId) } })
+      },
+    },
+    {
+      method: 'POST',
+      path: VAULT_APPEND_PATH,
+      handler: async (req, res) => {
+        const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
+        const body = await readJson(req)
+        const writer = typeof body.writer === 'string' ? body.writer : device.deviceId
+        if (writer !== device.deviceId) throw new SyncError('bad-request', 'writer 必须等于当前 deviceId')
+        const sealedRaw = body.sealed
+        if (sealedRaw === null || typeof sealedRaw !== 'object' || Array.isArray(sealedRaw)) {
+          throw new SyncError('bad-request', 'sealed 必须是对象')
+        }
+        const sealed = sealedRaw as Record<string, unknown>
+        const result = appendVaultRecord(db, options.dataDir, {
+          writer,
+          deviceId: device.deviceId,
+          clientId,
+          seq: Number(body.seq),
+          prevHash: body.prevHash === null ? null : String(body.prevHash),
+          blobSha256: typeof body.blobSha256 === 'string' ? body.blobSha256 : '',
+          bytes: Number(body.bytes),
+          createdAt: Number(body.createdAt),
+          sealed: {
+            formatVersion: Number(sealed.formatVersion),
+            keyId: typeof sealed.keyId === 'string' ? sealed.keyId : '',
+          },
+        })
+        return json(res, 200, { ok: true, value: { ...result.record, dedup: result.dedup } })
+      },
+    },
+    {
+      method: 'GET',
+      path: VAULT_CURSOR_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const since = intParam(url.searchParams.get('since'), 0, 0, Number.MAX_SAFE_INTEGER)
+        const limit = intParam(url.searchParams.get('limit'), 200, 1, 500)
+        return json(res, 200, { ok: true, value: readVaultCursor(db, since, limit) })
+      },
+    },
+    {
+      method: 'GET',
+      path: VAULT_STREAM_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const match = VAULT_STREAM_PATH.exec(url.pathname)
+        if (match === null) throw new SyncError('bad-request', '缺少 writer')
+        const writer = decodeURIComponent(match[1]!)
+        if (!validVaultWriter(writer)) throw new SyncError('bad-request', 'writer 非法')
+        const from = intParam(url.searchParams.get('from'), 1, 1, Number.MAX_SAFE_INTEGER)
+        const limit = intParam(url.searchParams.get('limit'), 200, 1, 500)
+        return json(res, 200, { ok: true, value: readVaultStream(db, writer, from, limit) })
       },
     },
     {
