@@ -110,7 +110,8 @@ sessionId + createdAt + formatVersion
 | **workspace / 工作区** | DSH 中承载会话的项目目录实体 |
 | **pathKey** | `HMAC(vaultKey, "workspace|" + canonicalWorkspacePath)`；本机工作区派生的 opaque key |
 | **workspaceKey** | 逻辑工作区 key；远端会话携带，用于找本地落点 |
-| **binding / 绑定** | 本机的 `workspaceKey → localPath` 映射 |
+| **workspace/profile** | 远端逻辑工作区的加密可读名记录（label 等）；不等于本机绑定 |
+| **binding / 绑定** | 本机的 `workspaceKey → localPath` 映射；首次确认后不可改绑 |
 | **alias binding / 别名绑定** | `workspaceKey != pathKey` 的绑定；以后从该本机路径推送时复用远端 key |
 | **nonPortable** | 当前/最后 cwd 在工作区外；本地警告，保留原值，不映射到根 |
 | **workspaceAllowlist** | 允许同步的工作区路径列表；空 = 暂不同步 |
@@ -136,7 +137,8 @@ sessionId + createdAt + formatVersion
 |---|---|
 | **push / 推送** | 本机 → 服务端 |
 | **pull / 拉取** | 服务端 → 本机 |
-| **lease / 租约** | 服务端防止多设备同时写同一会话的短期锁 |
+| **lease / 租约** | 服务端资源写锁；资源为 `session:<id>` 或 `vault-writer:<writer>`，owner 为 `(deviceId, clientInstanceId)` |
+| **clientInstanceId** | 每次 DSH 进程启动生成的随机标识，用于区分同一 token 的两个 writer |
 | **append** | 向会话末尾追加批次；只接受前缀延续 |
 | **tailOpen** | 会话尾部是否还有未闭合的 turn |
 | **safeThroughSeq** | 最后一个闭合事件的 seq；读者只 apply 到这个边界 |

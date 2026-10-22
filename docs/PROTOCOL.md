@@ -3,6 +3,9 @@
 > 状态：M2 服务端已实现 `/v1/health`、设备 token、`/v1/blobs`、租约、append、墓碑、cursor、manifest/批次引用读取；
 > 管理台（cookie 会话 + 只读页面）已实现。M4 已把协议规范字段改为 `batches` / `batchCount`，旧 `frames` / `frameCount` 保留兼容。
 >
+> 2026-10-22：租约规划扩展为 `session:<id>` / `vault-writer:<writer>`，owner 增加
+> `clientInstanceId`；Vault 路由与租约尚未实现，先按 [VAULT.md](VAULT.md) 落 V0/V1。
+>
 > **M3/M4 语义**：同步单位是**连续事件批次**；差异见文末「M3/M4 语义」。
 
 ## 认证
@@ -50,14 +53,23 @@
 | GET | `/v1/sessions/:id/manifest` | 设备 | 完整 manifest（大会话只在需要时拉） |
 | GET | `/v1/sessions/:id/frames?from=<index>&limit=<n>` | 设备 | 旧别名；等价于 `/batches` |
 | GET | `/v1/sessions/:id/batches?from=<index>&limit=<n>` | 设备 | 批次引用分页（默认 500/页） |
-| POST | `/v1/sessions/:id/lease` | 设备 | 申请/续租租约 |
+| POST | `/v1/sessions/:id/lease` | 设备 | 申请/续租租约（带 `X-Client-Id`） |
 | POST | `/v1/sessions/:id/append` | 设备 | 提交新批次（`baseIndex + baseChainHash` + 封批次条目） |
 | POST | `/v1/sessions/:id/delete` | 设备 | 墓碑（绑定 `sessionId + createdAt + formatVersion`） |
+| POST | `/v1/vault/lease` | 设备 | Vault writer 租约（计划） |
+| DELETE | `/v1/vault/lease` | 设备 | 释放 Vault writer 租约（计划） |
+| POST | `/v1/vault/append` | 设备 | 追加 Vault 记录索引（计划） |
+| GET | `/v1/vault/cursor?since=<revision>` | 设备 | Vault 记录 cursor（计划） |
+| GET | `/v1/vault/stream/:writer?from=<seq>&limit=<n>` | 设备 | 某 writer 的 Vault 记录索引（计划） |
 
 ### lease 与 append
 
-- 租约 TTL **60 秒**；同一设备续租会顺延，其他设备在过期前拿到 `409 lease-held`，过期后可抢占。
-- `DELETE /v1/sessions/:id/lease` 主动释放。
+- 租约 TTL **60 秒**；owner 为 `(deviceId, clientInstanceId)`，同一 owner 续租会顺延；
+  其他 client 在过期前拿到 `409 lease-held`，过期后可抢占。
+- 会话租约资源为 `session:<sessionId>`；Vault 租约资源为 `vault-writer:<writer>`。
+- 所有 lease/append 请求带 `X-Client-Id`；append 必须匹配租约 owner。
+- `DELETE /v1/sessions/:id/lease` / `DELETE /v1/vault/lease` 主动释放；只允许当前 owner。
+- 读 manifest/cursor/stream 不加租约；不同 session、不同 writer 之间不互斥。
 - append 请求体只带**新增/替换的批次**，不重复整份 manifest：
 
 ```json
@@ -99,7 +111,8 @@
 
 客户端先比 `batchCount + headChainHash`，一致就跳过；不一致再按页拉 `batches` 找公共前缀。响应里仍带 `frameCount` / `frames` 作为旧字段别名。
 
-> Vault（设备台账 / 工作区映射 / 笔记）的 `/v1/vault/*` 是后续扩展，设计见 [VAULT.md](VAULT.md)；当前 `/v1` 不包含这些路由。
+> Vault（设备台账 / 工作区映射 / 笔记）的 `/v1/vault/*` 是当前 V0/V1 计划扩展，设计见 [VAULT.md](VAULT.md)；
+> 记录封帧、cursor、writer 租约和配额以该文为准。当前 `/v1` 尚未实现这些路由。
 
 ## 不变量
 

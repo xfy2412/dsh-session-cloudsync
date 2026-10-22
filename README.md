@@ -14,7 +14,7 @@
 
 给 DeepSeek Harness（DSH）做的**会话云同步**：自部署服务端、端到端加密，同步会话与附件；设备台账、agent 笔记与多工作区映射见 [docs/VAULT.md](docs/VAULT.md) 设计稿。
 
-> **状态：M1/M2 已完成，M3 已完成，M4 进行中。** 帧工具/加密、服务端（含管理台与初始化）、M0 免重启 ingest 已经可跑；M3 的推送/拉取、安全边界、双 home E2E、durable journal 与错误退避已通过。M4 已完成 A1–A5、B1–B5（凭据、设置页、首启向导）、C1–C4/C6（composer block、列表拦截、行标记、同步气泡）与 E1（`batches` 规范字段）；剩 C5 GUI 回归、D5 故障文案演练与 E3 文档收口。里程碑见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+> **状态：M1/M2 已完成，M3 已完成，M4 进行中。** 帧工具/加密、服务端（含管理台与初始化）、M0 免重启 ingest 已经可跑；M3 的推送/拉取、安全边界、双 home E2E、durable journal 与错误退避已通过。M4 已完成 A1–A5、B1–B5（凭据、设置页、首启向导）、C1–C4/C6（composer block、列表拦截、行标记、同步气泡）与 E1（`batches` 规范字段）；C5 GUI 回归、D5 故障文案演练与 E3 文档收口顺延到 Vault V0–V2 之后。Vault V0–V2 见 [docs/VAULT.md](docs/VAULT.md)。
 
 ## 支持版本
 

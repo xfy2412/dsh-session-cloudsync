@@ -1,9 +1,10 @@
 # 里程碑与当前状态
 
-> 当前真值，2026-10-20。以本文件为准。
+> 当前真值，2026-10-22。以本文件为准。
 
 ```
 M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件同步 → M4 自动化/故障/客户端防护
+                                                              → Vault V0–V2（先行）
 ```
 
 | 阶段 | 内容 | 状态 |
@@ -12,12 +13,12 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 | **M1** | 骨架 + `shared`：帧工具、封帧/加密、协议类型、真实会话夹具、官方校验器 | ✅ 基础完成；帧工具保留给本地导出/兼容，**同步链已改为事件批次** |
 | **M2** | 自部署服务端 MVP：设备 token、blob、manifest、租约、append、墓碑、cursor、配额、管理台、首次初始化 | ✅ 已完成；`/v1` 规范字段已改为批次（`batches` / `batchCount`），旧 `frames` 字段保留兼容 |
 | **M3** | 插件 MVP：枚举会话、事件批次哈希、推送/拉取、免重启 ingest、手动触发/状态、断网降级、安全边界（`tailOpen`/`safeThroughSeq`）与 apply journal | ✅ 推送/拉取/安全边界/双 home E2E/durable journal/错误退避已通过；手动入口与状态通道由 M4 A3/A4 补齐 |
-| **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | 🚧 A1–A5、B1–B5、C1–C4/C6、E1 已完成；剩 C5 GUI 回归、D5 UI 文案演练与 E3 文档收口 |
-| **M5** | 公共多租户公益服 | ❌ 不在当前范围；只保留 `dataset` / `token.label` 两个薄接缝 |
+| **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | 🚧 A1–A5、B1–B5、C1–C4/C6、E1 已完成；C5 GUI 回归、D5 UI 文案演练与 E3 文档收口顺延到 Vault V0–V2 之后 |
+| **Vault V0–V2** | 密钥域/记录链 → 服务端 append/cursor + 最小设备台账 → `workspaceKey` + 一次性绑定 + 未映射阻断 | 🚧 设计已收敛，2026-10-22 起先行；见 [VAULT.md](VAULT.md) |
+| **M5** | 公共多租户公益服 | ❌ 不在当前范围；独立 package/仓库，只共享插件对接协议 |
 
-> **下一个设计层（未排期）**：L2 设备台账 / L3 agent 笔记 / 多工作区映射 / 插件版本匹配 /
-> cwd 可移植性 / 启动对账。设计稿见 [VAULT.md](VAULT.md)、[CWD.md](CWD.md)、
-> [RECONCILE.md](RECONCILE.md)；它不阻塞当前 M4 收口。
+> **当前优先级**：先做 Vault V0 → V1 → V2；`workspaceKey` 是多工作区落点的正式方案，
+> 完成后替换 M4 的单一 `workspacePath`。M5 公益服不塞进自部署包。
 
 ## 当前阶段的验收
 
