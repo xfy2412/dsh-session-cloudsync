@@ -30,6 +30,7 @@ window.__ModuleLoader__.load({
       { ms: 300000, label: '5 分钟' },
     ]
     var ONBOARD_DISMISSED = 'dsh-session-cloudsync.onboarding.dismissed'
+    var OPEN_GUARD_MARK = '__dshSessionCloudsyncOpenGuard'
 
     var CSS = [
       '.dssync{--dssync-accent:#5686fe;--dssync-accent-soft:rgba(86,134,254,.14);--dssync-line:var(--dsw-alias-border-l2,rgba(127,127,127,.24));--dssync-line-strong:var(--dsw-alias-border-l4,rgba(127,127,127,.42));--dssync-text:var(--dsw-alias-label-primary,inherit);--dssync-muted:var(--dsw-alias-label-secondary,rgba(220,220,230,.7));--dssync-faint:var(--dsw-alias-label-tertiary,rgba(220,220,230,.46));color:var(--dssync-text);font-size:14px;line-height:1.55}',
@@ -633,6 +634,16 @@ window.__ModuleLoader__.load({
     function findSession(status, sessionId) {
       if (status === null || !Array.isArray(status.sessions)) return null
       return status.sessions.find(function (session) { return session && session.sessionId === sessionId }) || null
+    }
+
+    /** SessionTarget 可以是字符串 id，也可以是 subagent 的 parent/child 地址。 */
+    function sessionTargetId(target) {
+      if (typeof target === 'string') return target === '' ? null : target
+      if (target !== null && typeof target === 'object') {
+        if (typeof target.sessionId === 'string' && target.sessionId !== '') return target.sessionId
+        if (typeof target.childSessionId === 'string' && target.childSessionId !== '') return target.childSessionId
+      }
+      return null
     }
 
     /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策 / 已分叉 / 租约。 */
@@ -2033,6 +2044,79 @@ window.__ModuleLoader__.load({
           document.removeEventListener('keydown', interceptKeydown, true)
         }
       }, 'dsh-session-cloudsync: row interception')
+
+      /**
+       * 包一层 uiWorkspace.openSession，覆盖搜索结果/schedule/feedback 等没有
+       * data-row-key 的入口。只做同步拦/放，不 await；探测/安装失败一律放行。
+       */
+      function installOpenGuard(workspace) {
+        if (workspace === null || typeof workspace !== 'object'
+          || typeof workspace.openSession !== 'function') return undefined
+        var previous = workspace[OPEN_GUARD_MARK]
+        if (previous && typeof previous.restore === 'function' && previous.wrapper === workspace.openSession) {
+          try { previous.restore() } catch (error) { /* 旧 guard 清理失败不应阻塞新 guard */ }
+        }
+        var original = workspace.openSession
+        var own = Object.prototype.hasOwnProperty.call(workspace, 'openSession')
+        function uninstall() {
+          try {
+            if (workspace.openSession === wrapper) {
+              if (own) workspace.openSession = original
+              else delete workspace.openSession
+            }
+          } catch (error) { /* 恢复失败只影响 HMR，保持 fail-open */ }
+          try {
+            if (workspace[OPEN_GUARD_MARK] === guard) delete workspace[OPEN_GUARD_MARK]
+          } catch (error) { /* 标记清理失败不影响运行 */ }
+        }
+        function wrapper(target) {
+          var sessionId = sessionTargetId(target)
+          if (sessionId !== null) {
+            var reason = sessionBlockReason(model.getSnapshot().status, sessionId, true)
+            if (reason !== null) {
+              model.toast(reason, true)
+              return undefined
+            }
+          }
+          return original.apply(this, arguments)
+        }
+        var guard = { wrapper: wrapper, restore: uninstall }
+        try {
+          workspace.openSession = wrapper
+          if (workspace.openSession !== wrapper) throw new Error('openSession 不可写')
+          workspace[OPEN_GUARD_MARK] = guard
+        } catch (error) {
+          uninstall()
+          console.warn('dsh-session-cloudsync: uiWorkspace.openSession guard 不可用，回退 DOM 拦截', error)
+          return undefined
+        }
+        return function () {
+          if (workspace[OPEN_GUARD_MARK] === guard) uninstall()
+        }
+      }
+
+      function installOpenGuardFrom(scope) {
+        var workspace = null
+        try {
+          workspace = typeof scope.get === 'function' ? scope.get('uiWorkspace') : scope.uiWorkspace
+        } catch (error) {
+          workspace = null
+        }
+        if (workspace === null || workspace === undefined) return
+        var restore = installOpenGuard(workspace)
+        if (restore === undefined) return
+        if (typeof scope.effect === 'function') {
+          scope.effect(function () { return restore }, 'dsh-session-cloudsync: openSession guard')
+        }
+      }
+
+      if (typeof ctx.inject === 'function') {
+        try { ctx.inject(['uiWorkspace'], installOpenGuardFrom) } catch (error) {
+          console.warn('dsh-session-cloudsync: 无法探测 uiWorkspace，回退 DOM 拦截', error)
+        }
+      } else {
+        installOpenGuardFrom(ctx)
+      }
 
       ctx.slots.inject('conversation.input.dock', function () {
         return ctx.slots.register({

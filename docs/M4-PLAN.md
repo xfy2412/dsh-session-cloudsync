@@ -89,7 +89,7 @@
 | C5 | GUI 回归：下拉、拖拽、键盘、深链打开都不误 resume | C2–C4 |
 | C6 | 顶部居中的分段进度气泡：收起态是唯一云图标，点击后同一图标展开成卡片，完成缩回；进度条按会话等分，黄→绿/红，子先父后并发推进；展开逐会话列表，不占标题栏 | A3、C1 |
 
-> C 进度：C1 状态下发到 `/status` v2 的每会话聚合（`phase`、push/pull、`pending`、`tailOpen`/`remoteAhead`/`lease`）和 `/events` SSE；C2 用 `conversation.input.dock` 的不可见守卫调用 `conversation.blocks.set`；C3 在 document 捕获阶段拦列表行 click/pointerdown/keydown；C4 用 `sidebar.session.row.leading` 渲染同步标记、`sidebar.session.row.hover` 渲染原因。C5 仍需在真实 GUI 做一次点击/拖拽/键盘回归。
+> C 进度：C1 状态下发到 `/status` v2 的每会话聚合（`phase`、push/pull、`pending`、`tailOpen`/`remoteAhead`/`lease`）和 `/events` SSE；C2 用 `conversation.input.dock` 的不可见守卫调用 `conversation.blocks.set`；C3 在 document 捕获阶段拦列表行 click/pointerdown/keydown，并额外包一层可选 `uiWorkspace.openSession` 覆盖搜索结果等非侧栏入口（fail-open）；C4 用 `sidebar.session.row.leading` 渲染同步标记、`sidebar.session.row.hover` 渲染原因。C5 仍需在真实 GUI 做一次点击/拖拽/键盘回归。
 
 ### D. 故障演练
 

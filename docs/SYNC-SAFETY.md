@@ -163,7 +163,9 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
    live 会话允许打开/切换，只由 composer block 拦输入。
    当前捕获只覆盖侧栏行；搜索结果（`SearchResultItem` 没有 `data-row-key`）以及
    `ui-schedule` / `ui-message-feedback` / `ui-workflow-run` / `ui-subagent` 等直接调用
-   `uiWorkspace.openSession` 的入口不在覆盖范围，需要上游 open 准入 hook 或入口级扩展。
+   `uiWorkspace.openSession` 的入口由 **client 侧 `uiWorkspace.openSession` 包装**覆盖：
+   探测服务失败、方法不可写、状态未加载时一律 fail-open，回退到 DOM 捕获。该包装是可选
+   的兼容层，DSH 升级后方法形状变化不应影响插件加载。
    不能把“侧栏拦住了”当成“所有复活路径都拦住了”。
 3. **视觉蒙版**：临时在页面上给行注入过 `position:absolute; inset:0` 的覆盖层，精确覆盖 256×32 的行；可用，但需要自己维护行定位/滚动，作为增强而不是唯一防线；
 4. **最终兜底**：拉取完成前不 `attachSession`，让会话尽量不出现在工作区列表；已经可见/已选中的会话仍靠捕获拦截 + composer block。
@@ -201,8 +203,9 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 - 客户端 projection 在列表行里的可见性还没端到端验证；
 - **durable revision + pending journal 已实现**：拉取前落盘 `{sessionId,targetSeq}`，成功后清除；启动先补 pending。若崩溃到 reconcile 前用户 resume，仍可能写入 closers 造成冲突，这条竞态仍需 UI/守卫兜底；
 - **pending 只有一条**：一个会话失败后 `pullOnce` 立即停止，不再开始下一个会话，避免覆盖前一个未完成的恢复记录；代价是失败会话解决前，本轮后续会话暂不拉取。逐会话 journal 条目留到后续按需再拆；
-- `data-row-key` 是应用内部属性，不是公开 API；捕获拦截依赖它，升级时要回归；当前只覆盖侧栏会话行；
-- 搜索结果（`SearchResultItem` 没有 `data-row-key`）以及 `ui-schedule` / `ui-message-feedback` / `ui-workflow-run` / `ui-subagent` 等直接调用 `uiWorkspace.openSession` 的入口不在捕获范围；这些入口仍可能复活冷会话。composer block 只能阻止继续输入，不能撤回已经发生的 resume/end-seed 写入；需要上游 open 准入 hook 或入口级扩展；
+- `data-row-key` 是应用内部属性，不是公开 API；捕获拦截依赖它，升级时要回归；捕获层只覆盖侧栏会话行；
+- 搜索结果（`SearchResultItem` 没有 `data-row-key`）以及 `ui-schedule` / `ui-message-feedback` / `ui-workflow-run` / `ui-subagent` 等直接调用 `uiWorkspace.openSession` 的入口由 client 侧包装覆盖；服务探测失败、`openSession` 不可写、状态未加载时 fail-open。不能把该包装当成稳定 API，DSH 升级后要跑一次 capability 回归；
+- 即使 open 被 guard 拦住，其他直接调用 `replaceMain`/私有导航的路径、提前解构缓存 `openSession` 的消费者、以及 `openWorkspace` 复用已有会话的路径仍可能绕过；composer block 只能阻止继续输入，不能撤回已经发生的 resume/end-seed 写入；
 - 按 0.2.1-rc.2 源码确认：冷打开会 `history.follow` → `promote` → `agents.resume`，并可能补 closers/end-seed；因此“打开”本身已是写操作，不是只在发消息时写；
 - **live 会话没有公开的 close/dispose 方法**：`AgentHandle.dispose()` 存在，但 session-controller 只保留 `.agent`；`archiveSession({stopActivity:true})` 只取消 running turn，不会 dispose Agent。一个会话一旦在本进程里 live，pull 会一直 `local-active`，只能重启 DSH 后才可 apply；期间另一设备写入会让本地停在 `remote-ahead`。
 - **设备独占租约已实现**：仅对 live 会话持有；cold 不持有。租约在“会话变 live 后”的下一次扫描（最多 20s）拿到；没有 pre-open 租约，冷打开仍可能与另一台设备形成短暂窗口。进程正常退出会主动释放，异常退出靠 60s TTL；没有 close API 时交接仍只能重启。
@@ -220,7 +223,8 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 - [x] 运行中行的 hover 卡片状态说明（`sidebar.session.row.hover` 的 `session-cloudsync-hover`）；
 - [x] 冷/live 拦截矩阵落地：冷 `remote-ahead`（含尾部已是 end-seed 的会话）硬拦，live 放宽为只拦输入；
 - [x] 设备独占租约：live 会话 20s 续租、push 不误释放 presence lease、客户端 foreign/lost 拦输入；
-- [ ] pre-open 租约与搜索结果等非侧栏入口的覆盖（当前只有 live 后扫描，存在短暂窗口）；
+- [x] client `uiWorkspace.openSession` 包装：覆盖搜索结果/ schedule / feedback 等入口，探测/安装失败 fail-open；
+- [ ] pre-open 租约：冷会话打开前拿租约（当前仍是 live 后扫描，存在短暂窗口）；
 - [ ] `diverged`/未同步会话的输入拦截、风险说明与“强行写入分叉”确认；
 - [ ] `nonPortable` 会话的本地警告、确认后接收端追加修正与租约推送；
 - [ ] 可选视觉蒙版；

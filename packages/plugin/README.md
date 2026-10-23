@@ -11,6 +11,7 @@ DSH 会话云同步插件：自部署服务端、端到端加密，同步根会�
 - 工作区映射：未映射会话持久化、映射后按 cursor revision 回填；本地工作区自己的 key 自动解析；已有远端会话沿用原 key；绑定前二次确认；
 - Plugins 页自定义设置页 + 首启向导 + 顶部同步气泡；
 - 状态 v2：每个会话只有一行（push/pull 作为两个方向子状态），每行带待上传/待下载事件数、已完成/总数与 `statusVersion`；
+- **入口级 open guard**：client 侧包一层 `uiWorkspace.openSession`，覆盖搜索结果、schedule、feedback、workflow-run、subagent 等没有 `data-row-key` 的入口；冷危险会话直接 toast + 不导航，live 会话放行；服务探测/安装失败一律 fail-open，不影响插件加载；
 - **按需长连接**：默认只轮询 `/status`；手动同步或接近 `nextRunAt` 时打开 `/api/session-cloudsync/events?until=idle`，空闲/终态后关闭，SSE 失败退避到 1s 轮询；页面隐藏时断开；
 - **自调度**：自动同步用绝对 `nextRunAt`（`setTimeout`）取代固定 `setInterval`，手动触发会清掉当前排期并在结束后重排；失败退避时间参与下一次排期；
 - 气泡标题优先 durable title，空白会话显示“未命名会话”，不再把 cwd 目录名当标题；
