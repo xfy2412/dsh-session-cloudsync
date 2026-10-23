@@ -211,33 +211,8 @@
   .cred-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
   .cred-head .pill { margin-left: auto; }
 
-  .ws-toolbar { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
-  .ws-toolbar .hint { margin-right: auto; }
-  .ws-list { display: flex; flex-direction: column; gap: 8px; }
-  .ws-row {
-    position: relative; display: flex; align-items: center; gap: 11px;
-    padding: 10px 11px; border: 1px solid var(--border); border-radius: 10px;
-    background: rgba(0, 0, 0, .1); cursor: pointer; transition: border-color .15s, background .15s;
-  }
-  .ws-row:hover { border-color: var(--border-strong); background: rgba(255, 255, 255, .025); }
-  .ws-row.on { border-color: var(--accent-line); background: var(--accent-soft); }
-  .ws-input { position: absolute; opacity: 0; pointer-events: none; }
-  .ws-check {
-    width: 18px; height: 18px; flex: 0 0 auto; border-radius: 5px;
-    border: 1.5px solid rgba(255, 255, 255, .24); display: grid; place-items: center;
-    color: #fff; background: rgba(0, 0, 0, .12); transition: background .15s, border-color .15s;
-  }
-  .ws-check svg { opacity: 0; transform: scale(.7); transition: opacity .12s, transform .12s; }
-  .ws-row.on .ws-check { background: var(--accent); border-color: var(--accent); }
-  .ws-row.on .ws-check svg { opacity: 1; transform: scale(1); }
-  .ws-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .ws-title { font-size: 13px; line-height: 1.4; }
-  .ws-path { color: var(--faint); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ws-meta { margin-left: auto; flex: 0 0 auto; text-align: right; color: var(--muted); font-size: 11px; line-height: 1.4; }
-  .ws-meta small { display: block; color: var(--faint); font-size: 10.5px; }
-  .ws-empty { padding: 22px; border: 1px dashed var(--border-strong); border-radius: 10px; text-align: center; color: var(--faint); font-size: 12px; }
-  .ws-summary { margin-top: 10px; color: var(--faint); font-size: 11.5px; }
-  .ws-summary strong { color: var(--muted); font-weight: 500; }
+  .session-summary { margin-top: 10px; color: var(--faint); font-size: 11.5px; }
+  .session-summary strong { color: var(--muted); font-weight: 500; }
 
   /* V2.1 workspace mapping */
   .map-embed { display: flex; flex-direction: column; gap: 10px; }
@@ -305,6 +280,51 @@
   @keyframes map-shimmer { to { background-position: -200% 0; } }
   .map-onboard-note { color: var(--faint); font-size: 11px; line-height: 1.55; }
   .map-onboard-note code { color: var(--muted); }
+
+  /* V2.1 session precision */
+  .session-scope { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .session-scope-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+  .session-scope-head b { display: block; font-size: 12.5px; font-weight: 600; }
+  .session-scope-head .hint { display: block; margin-top: 2px; }
+  .scope-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .scope-count { color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .session-groups { display: flex; flex-direction: column; gap: 8px; }
+  .session-group { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: rgba(255,255,255,.012); }
+  .session-group-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; background: rgba(255,255,255,.025);
+    border-bottom: 1px solid var(--border);
+  }
+  .session-group-head .group-title { min-width: 0; color: var(--muted); font-size: 11px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-group-head .group-path { min-width: 0; color: var(--faint); font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-group-head .group-count { margin-left: auto; flex: 0 0 auto; color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .session-rows { display: flex; flex-direction: column; }
+  .session-row {
+    display: flex; align-items: center; gap: 9px; cursor: pointer;
+    padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.045);
+    transition: opacity .15s, background .15s;
+  }
+  .session-row:last-child { border-bottom: 0; }
+  .session-row:hover { background: rgba(255,255,255,.025); }
+  .session-row.excluded { opacity: .52; }
+  .session-row.excluded:hover { opacity: .7; }
+  .session-input { position: absolute; opacity: 0; pointer-events: none; }
+  .session-check {
+    width: 16px; height: 16px; flex: 0 0 auto; display: grid; place-items: center;
+    border-radius: 4px; border: 1.5px solid rgba(255,255,255,.22);
+    color: transparent; transition: background .15s, border-color .15s, color .15s;
+  }
+  .session-check svg { width: 10px; height: 10px; }
+  .session-row:not(.excluded) .session-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .session-main { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 1px; }
+  .session-title { color: var(--text); font-size: 12px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-id { color: var(--faint); font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-meta { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 10px; }
+  .session-status { padding: 2px 6px; border-radius: 999px; white-space: nowrap; }
+  .session-status.on { color: #9ce8bc; background: var(--success-soft); }
+  .session-status.off { color: var(--warn); background: var(--warn-soft); }
+  .session-note { margin: 8px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.5; }
+  .session-summary .excluded { color: var(--warn); }
 
   .behavior-row { display: flex; align-items: center; gap: 12px; padding: 3px 0; }
   .behavior-row + .behavior-row { margin-top: 10px; padding-top: 13px; border-top: 1px solid var(--border); }
@@ -601,6 +621,10 @@
     .map-row { align-items: stretch; flex-direction: column; gap: 9px; }
     .map-side { flex: 1 1 auto; min-width: 0; }
     .map-hint { text-align: left; }
+    .session-scope-head { align-items: stretch; flex-direction: column; gap: 7px; }
+    .scope-actions { justify-content: space-between; }
+    .session-group-head .group-path { display: none; }
+    .session-meta { flex-direction: column; align-items: flex-end; gap: 3px; }
   }
 </style>
 </head>
@@ -625,10 +649,24 @@
 
 <script>
   const WORKSPACES = [
-    { path: 'D:/git-repo/dsh-session-cloudsync', title: 'dsh-session-cloudsync', key: 'ws-dsh-cloudsync-0001', roots: 12, subs: 37 },
-    { path: 'D:/git-repo/ServerPluginCore', title: 'ServerPluginCore', key: 'ws-server-plugin-0002', roots: 8, subs: 19 },
-    { path: 'D:/git-repo/deepseek-harness', title: 'deepseek-harness', key: 'ws-deepseek-harness-0003', roots: 3, subs: 2 },
-    { path: 'D:/git-repo/_audit', title: '_audit', key: 'ws-audit-notes-0004', roots: 5, subs: 0 },
+    { path: 'D:/git-repo/dsh-session-cloudsync', title: 'dsh-session-cloudsync', key: 'ws-dsh-cloudsync-0001' },
+    { path: 'D:/git-repo/ServerPluginCore', title: 'ServerPluginCore', key: 'ws-server-plugin-0002' },
+    { path: 'D:/git-repo/deepseek-harness', title: 'deepseek-harness', key: 'ws-deepseek-harness-0003' },
+    { path: 'D:/git-repo/_audit', title: '_audit', key: 'ws-audit-notes-0004' },
+  ];
+
+  // 根会话列表：真实宿主若没有标题，UI 用 session id + 创建时间兜底。
+  const ROOT_SESSIONS = [
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9R1', title: '会话同步设计', workspace: 'D:/git-repo/dsh-session-cloudsync', createdAt: Date.now() - 1000 * 60 * 60 * 26, subs: 2, events: 418 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9R2', title: 'M4 host 调试', workspace: 'D:/git-repo/dsh-session-cloudsync', createdAt: Date.now() - 1000 * 60 * 60 * 18, subs: 1, events: 207 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9R3', title: '采集范围复盘', workspace: 'D:/git-repo/dsh-session-cloudsync', createdAt: Date.now() - 1000 * 60 * 60 * 9, subs: 1, events: 88 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9R4', title: '服务端部署笔记', workspace: 'D:/git-repo/dsh-session-cloudsync', createdAt: Date.now() - 1000 * 60 * 60 * 3, subs: 2, events: 801 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9S1', title: 'ServerPluginCore 重构', workspace: 'D:/git-repo/ServerPluginCore', createdAt: Date.now() - 1000 * 60 * 60 * 30, subs: 2, events: 322 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9S2', title: 'WASM 验收', workspace: 'D:/git-repo/ServerPluginCore', createdAt: Date.now() - 1000 * 60 * 60 * 12, subs: 1, events: 145 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9S3', title: '依赖冒烟', workspace: 'D:/git-repo/ServerPluginCore', createdAt: Date.now() - 1000 * 60 * 60 * 5, subs: 1, events: 64 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9T1', title: 'deepseek-harness 调研', workspace: 'D:/git-repo/deepseek-harness', createdAt: Date.now() - 1000 * 60 * 60 * 40, subs: 1, events: 133 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9T2', title: '插件 API 对照', workspace: 'D:/git-repo/deepseek-harness', createdAt: Date.now() - 1000 * 60 * 60 * 7, subs: 0, events: 51 },
+    { id: '01J9Z7Q8N6W3C4B5A2M0K1P9U1', title: '审计清单', workspace: 'D:/git-repo/_audit', createdAt: Date.now() - 1000 * 60 * 60 * 55, subs: 0, events: 29 },
   ];
 
   // V2.1 映射预览：远端 label 来自 workspace/profile；未映射项展示同路径建议。
@@ -636,17 +674,17 @@
     {
       key: 'ws-dsh-cloudsync-0001',
       label: 'dsh-session-cloudsync',
-      sessions: 12,
+      sessions: 10,
       roots: 4,
-      subs: 8,
+      subs: 6,
       lastSeenAt: Date.now() - 1000 * 60 * 2,
     },
     {
       key: 'ws-server-plugin-0002',
       label: 'ServerPluginCore',
-      sessions: 8,
+      sessions: 7,
       roots: 3,
-      subs: 5,
+      subs: 4,
       lastSeenAt: Date.now() - 1000 * 60 * 18,
     },
     {
@@ -678,7 +716,6 @@
     status: 'ready',
     serverUrl: 'http://127.0.0.1:8787',
     deviceName: 'XFY-COLORFUL',
-    allowlist: ['D:/git-repo/dsh-session-cloudsync', 'D:/git-repo/ServerPluginCore'],
     autoSync: true,
     interval: 60,
     includeSubagents: true,
@@ -688,6 +725,8 @@
     bindings: { 'ws-dsh-cloudsync-0001': 'D:/git-repo/dsh-session-cloudsync' },
     mappingChoice: {},
     autoBindSamePath: false,
+    // 默认全选；只记录被排除的根会话。
+    sessionExcluded: new Set(['01J9Z7Q8N6W3C4B5A2M0K1P9R3']),
     onboardStep: 0,
     onboardAnim: '',
     onboardStepAnim: '',
@@ -716,15 +755,25 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
   }
 
-  function selectedWorkspaces() {
-    return WORKSPACES.filter((ws) => state.allowlist.includes(ws.path));
+  function allWorkspaces() {
+    return WORKSPACES;
   }
 
   function selectedSummary() {
-    const selected = selectedWorkspaces();
-    const roots = selected.reduce((sum, ws) => sum + ws.roots, 0);
-    const subs = selected.reduce((sum, ws) => sum + ws.subs, 0);
-    return { workspaces: selected.length, roots, subs };
+    const eligible = ROOT_SESSIONS;
+    const included = eligible.filter((session) => !state.sessionExcluded.has(session.id));
+    return {
+      workspaces: new Set(included.map((session) => session.workspace)).size,
+      roots: included.length,
+      subs: included.reduce((sum, session) => sum + session.subs, 0),
+      eligibleRoots: eligible.length,
+      excluded: eligible.length - included.length,
+    };
+  }
+
+  function shortSessionTime(value) {
+    const date = new Date(value);
+    return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
   }
 
   function badge() {
@@ -747,25 +796,84 @@
     return `<label class="switch" aria-label="${esc(label)}"><input type="checkbox" data-toggle="${name}" ${checked ? 'checked' : ''}><span></span></label>`;
   }
 
-  function workspaceRowsHtml() {
-    if (WORKSPACES.length === 0) return '<div class="ws-empty">还没有注册的工作区</div>';
-    return WORKSPACES.map((ws) => {
-      const on = state.allowlist.includes(ws.path);
-      return `<label class="ws-row ${on ? 'on' : ''}">
-        <input class="ws-input" type="checkbox" data-ws="${esc(ws.path)}" ${on ? 'checked' : ''}>
-        <span class="ws-check">${icons.check}</span>
-        <span class="ws-main"><span class="ws-title">${esc(ws.title)}</span><span class="ws-path">${esc(ws.path)}</span></span>
-        <span class="ws-meta">${ws.roots} 个会话<small>${ws.subs} 个子代理</small></span>
-      </label>`;
-    }).join('');
-  }
-
   function summaryHtml() {
     const summary = selectedSummary();
-    if (summary.workspaces === 0) {
-      return '<div class="ws-summary hint warn">还没有选择工作区；同步会保持暂停，直到你至少选择一个。</div>';
+    if (summary.roots === 0) {
+      return '<div class="session-summary hint warn">还没有选中任何根会话；同步会保持暂停。</div>';
     }
-    return `<div class="ws-summary">已选 <strong>${summary.workspaces}</strong> 个工作区 · <strong>${summary.roots}</strong> 个根会话 · <strong>${summary.subs}</strong> 个子代理</div>`;
+    const excluded = summary.excluded > 0 ? ` · <span class="excluded">${summary.excluded} 个根会话已排除</span>` : '';
+    return `<div class="session-summary">同步 <strong>${summary.roots}</strong> / <strong>${summary.eligibleRoots}</strong> 个根会话 · <strong>${summary.workspaces}</strong> 个工作区 · <strong>${summary.subs}</strong> 个子代理${excluded}</div>`;
+  }
+
+  function sessionScopeHtml() {
+    const groups = allWorkspaces().filter((workspace) => ROOT_SESSIONS.some((session) => session.workspace === workspace.path));
+    if (groups.length === 0) {
+      return `<div class="session-scope">
+        <div class="session-scope-head"><div><b>会话精度选择</b><span class="hint">还没有可同步的根会话。</span></div></div>
+      </div>`;
+    }
+    const eligible = ROOT_SESSIONS;
+    const included = eligible.filter((session) => !state.sessionExcluded.has(session.id));
+    const allSelected = included.length === eligible.length;
+    return `<div class="session-scope">
+      <div class="session-scope-head">
+        <div><b>会话精度选择</b><span class="hint">默认勾选全部根会话；取消会排除该根及其子代理。</span></div>
+        <div class="scope-actions">
+          <span class="scope-count">${included.length} / ${eligible.length} 个根会话</span>
+          <button class="btn small" data-session-select-all>${allSelected ? '清空会话' : '全选会话'}</button>
+        </div>
+      </div>
+      <div class="session-groups">${groups.map((workspace) => {
+        const sessions = ROOT_SESSIONS.filter((session) => session.workspace === workspace.path);
+        const chosen = sessions.filter((session) => !state.sessionExcluded.has(session.id)).length;
+        return `<div class="session-group">
+          <div class="session-group-head">
+            <span class="group-title">${esc(workspace.title)}</span>
+            <span class="group-path">${esc(workspace.path)}</span>
+            <span class="group-count">${chosen} / ${sessions.length}</span>
+          </div>
+          <div class="session-rows">${sessions.map((session) => {
+            const excluded = state.sessionExcluded.has(session.id);
+            return `<label class="session-row ${excluded ? 'excluded' : ''}">
+              <input class="session-input" type="checkbox" data-session="${esc(session.id)}" ${excluded ? '' : 'checked'}>
+              <span class="session-check">${icons.check}</span>
+              <span class="session-main">
+                <span class="session-title">${esc(session.title)}</span>
+                <span class="session-id">${esc(session.id)} · ${shortSessionTime(session.createdAt)}</span>
+              </span>
+              <span class="session-meta">
+                <span>${session.subs} 个子代理</span>
+                <span class="session-status ${excluded ? 'off' : 'on'}">${excluded ? '已排除' : '同步'}</span>
+              </span>
+            </label>`;
+          }).join('')}</div>
+        </div>`;
+      }).join('')}</div>
+      <p class="session-note">选择只在本设备生效；不会删除远端历史。子代理跟随根会话，新根会话默认勾选。</p>
+    </div>`;
+  }
+
+  function bindSessionScopeEvents() {
+    document.querySelectorAll('[data-session]').forEach((input) => {
+      input.addEventListener('change', () => {
+        const id = input.dataset.session;
+        if (input.checked) state.sessionExcluded.delete(id);
+        else state.sessionExcluded.add(id);
+        render();
+      });
+    });
+    document.querySelectorAll('[data-session-select-all]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const eligible = ROOT_SESSIONS;
+        const allSelected = eligible.every((session) => !state.sessionExcluded.has(session.id));
+        for (const session of eligible) {
+          if (allSelected) state.sessionExcluded.add(session.id);
+          else state.sessionExcluded.delete(session.id);
+        }
+        toast(allSelected ? `已排除 ${eligible.length} 个根会话（原型）` : '已全选全部根会话');
+        render();
+      });
+    });
   }
 
   function mappingCounts() {
@@ -775,20 +883,19 @@
   }
 
   function suggestionFor(remote) {
-    return selectedWorkspaces().find((workspace) => workspace.key === remote.key);
+    return allWorkspaces().find((workspace) => workspace.key === remote.key);
   }
 
   function mappingRowsHtml() {
     if (state.remoteWorkspaces.length === 0) {
       return '<div class="map-empty"><b>还没有远端工作区</b>完成一次推送后，这里会出现带 label 的远端工作区。</div>';
     }
-    const candidates = selectedWorkspaces();
+    const candidates = allWorkspaces();
     return `<div class="map-list">${state.remoteWorkspaces.map((remote, index) => {
       const boundPath = state.bindings[remote.key];
       const suggestion = suggestionFor(remote);
       const choice = state.mappingChoice[remote.key] ?? suggestion?.path ?? '';
       const validChoice = candidates.some((workspace) => workspace.path === choice) ? choice : '';
-      const boundInScope = boundPath === undefined ? false : candidates.some((workspace) => workspace.path === boundPath);
       const tag = boundPath !== undefined
         ? '<span class="map-tag bound">已绑定</span>'
         : suggestion !== undefined
@@ -796,7 +903,6 @@
           : '<span class="map-tag pending">待映射</span>';
       const side = boundPath !== undefined
         ? `<div class="map-bound"><span class="map-path" title="${esc(boundPath)}">${esc(boundPath)}</span><span class="map-lock">${icons.lock}不可改绑</span></div>
-           ${boundInScope ? '' : '<span class="map-warning">本地工作区已不在同步范围</span>'}
            <span class="map-hint">该 key 已占用的本机落点</span>`
         : `<div class="map-controls">
              <select class="select map-select" data-map-select="${esc(remote.key)}" aria-label="为 ${esc(remote.label)} 选择本地工作区">
@@ -805,7 +911,7 @@
              </select>
              <button class="btn small primary" data-bind-key="${esc(remote.key)}" ${validChoice === '' ? 'disabled' : ''}>绑定</button>
            </div>
-           <span class="map-hint">${candidates.length === 0 ? '先在同步范围选择本地工作区' : suggestion !== undefined ? '已按同路径预选，确认后生效' : '选择别名工作区后确认'}</span>`;
+           <span class="map-hint">${suggestion !== undefined ? '已按同路径预选，确认后生效' : '选择别名工作区后确认'}</span>`;
       return `<div class="map-row ${boundPath !== undefined ? 'bound' : 'unmapped'}" style="animation-delay:${index * 40}ms">
         <div class="map-main">
           <div class="map-title"><b>${esc(remote.label)}</b>${tag}</div>
@@ -905,7 +1011,6 @@
   }
 
   function renderSettings() {
-    const allSelected = state.allowlist.length === WORKSPACES.length && WORKSPACES.length > 0;
     stage.innerHTML = `<div class="page">
       <header class="page-head">
         <div class="head-icon">${icons.cloud}</div>
@@ -936,10 +1041,10 @@
       </section>
 
       <section class="card">
-        <div class="card-head"><h2>同步范围</h2><span class="hint">按工作区同步根会话及其子代理闭包</span><span class="right"><button class="btn small" id="select-all">${allSelected ? '清空' : '全选'}</button></span></div>
-        <p class="hint" style="margin:0 0 10px">没有选择任何工作区时，插件不会推送或拉取。</p>
-        <div class="ws-list" id="ws-list">${workspaceRowsHtml()}</div>
+        <div class="card-head"><h2>同步范围</h2><span class="hint">按根会话选择，子代理跟随</span></div>
+        <p class="hint" style="margin:0 0 10px">只同步勾选的根会话及其子代理；取消勾选不会删除远端历史。</p>
         ${summaryHtml()}
+        ${sessionScopeHtml()}
       </section>
 
       ${mappingSettingsHtml()}
@@ -968,21 +1073,6 @@
       </div>
     </div>`;
 
-    document.querySelectorAll('[data-ws]').forEach((input) => {
-      input.addEventListener('change', () => {
-        const path = input.dataset.ws;
-        if (input.checked) {
-          if (!state.allowlist.includes(path)) state.allowlist.push(path);
-        } else {
-          state.allowlist = state.allowlist.filter((item) => item !== path);
-        }
-        renderSettings();
-      });
-    });
-    document.getElementById('select-all').addEventListener('click', () => {
-      state.allowlist = allSelected ? [] : WORKSPACES.map((ws) => ws.path);
-      renderSettings();
-    });
     document.getElementById('test-connection').addEventListener('click', () => runTest('test-connection', 'test-result'));
     document.getElementById('save').addEventListener('click', () => saveSettings());
     document.getElementById('sync-now').addEventListener('click', () => {
@@ -1001,6 +1091,7 @@
     const interval = document.getElementById('interval');
     if (interval) interval.addEventListener('change', () => { state.interval = Number(interval.value); });
     bindMappingEvents();
+    bindSessionScopeEvents();
   }
 
   function collectSettings() {
@@ -1011,14 +1102,13 @@
     if (token !== '') state.hasToken = true;
     if (passphrase !== '') state.hasPassphrase = true;
     state.interval = Number(document.getElementById('interval').value);
-    state.status = state.serverUrl && state.hasToken && state.hasPassphrase && state.allowlist.length > 0
-      ? 'ready' : 'unconfigured';
+    state.status = state.serverUrl && state.hasToken && state.hasPassphrase ? 'ready' : 'unconfigured';
   }
 
   function saveSettings() {
     collectSettings();
     renderSettings();
-    toast(state.status === 'ready' ? '设置已保存（原型）' : '已保存；还需要补齐凭据或工作区才能同步');
+    toast(state.status === 'ready' ? '设置已保存（原型）' : '已保存；还需要补齐凭据才能同步');
   }
 
   function runTest(buttonId, resultId) {
@@ -1086,9 +1176,9 @@
           <input class="input" id="ob-passphrase" type="password" autocomplete="new-password" placeholder="${state.hasPassphrase ? '已配置；留空保持不变' : '至少 8 位，所有设备一致'}"></div>
         <p class="wizard-note" style="margin-top:16px">凭据保存在 DSH 凭据库（引用 <code>DSH_SESSION_CLOUDSYNC_TOKEN</code> / <code>DSH_SESSION_CLOUDSYNC_PASSPHRASE</code>），不会写入普通配置。</p>`;
       if (step === 2) return `
-        <div class="row between" style="margin-bottom:8px"><span class="hint">没有选择工作区时不会同步。</span><button class="btn small" id="ob-select-all">${state.allowlist.length === WORKSPACES.length && WORKSPACES.length > 0 ? '清空' : '全选'}</button></div>
-        <div class="ws-list" id="ob-ws-list">${workspaceRowsHtml()}</div>
-        ${summaryHtml()}`;
+        <p class="hint" style="margin:0 0 10px">只同步勾选的根会话及其子代理；取消勾选不会删除远端历史。</p>
+        ${summaryHtml()}
+        ${sessionScopeHtml()}`;
       if (step === 3) return `
         <div class="map-embed">
           <div class="map-stats">
@@ -1115,7 +1205,7 @@
         <p class="wizard-note" style="margin-top:18px">首次同步会在后台运行；可以在设置页或顶部气泡查看进度。同步中的会话不应 resume。</p>`;
     })();
 
-    const steps = ['连接', '凭据', '范围', '映射', '完成'];
+    const steps = ['连接', '凭据', '会话', '映射', '完成'];
     const stepper = steps.map((label, index) => {
       const cls = index === step ? 'on' : index < step ? 'done' : '';
       return `<span class="step ${cls}"><span class="num">${index < step ? '✓' : index + 1}</span>${label}</span>${index < steps.length - 1 ? '<span class="step-line"></span>' : ''}`;
@@ -1194,17 +1284,8 @@
       dismissOnboarding(startMockSync);
     });
     document.getElementById('ob-test')?.addEventListener('click', () => runTest('ob-test', 'ob-test-result'));
-    document.querySelectorAll('[data-ws]').forEach((input) => input.addEventListener('change', () => {
-      const path = input.dataset.ws;
-      if (input.checked) { if (!state.allowlist.includes(path)) state.allowlist.push(path); }
-      else state.allowlist = state.allowlist.filter((item) => item !== path);
-      renderOnboarding();
-    }));
-    document.getElementById('ob-select-all')?.addEventListener('click', () => {
-      state.allowlist = state.allowlist.length === WORKSPACES.length ? [] : WORKSPACES.map((ws) => ws.path);
-      renderOnboarding();
-    });
     bindMappingEvents();
+    bindSessionScopeEvents();
   }
 
   function collectOnboarding() {
@@ -1621,13 +1702,11 @@
       state.autoHide = false;
       if (next === 'unconfigured') {
         state.hasToken = false;
-        state.allowlist = [];
         state.bubbleVisible = true;
       }
       if (next === 'ready') {
         state.hasToken = true;
         state.hasPassphrase = true;
-        state.allowlist = ['D:/git-repo/dsh-session-cloudsync', 'D:/git-repo/ServerPluginCore'];
         setSessionMode('ready');
         state.bubbleVisible = true;
         state.bubbleOpen = false;
