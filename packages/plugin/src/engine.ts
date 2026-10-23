@@ -154,17 +154,25 @@ export interface SyncProgress {
   /** 推送或拉取。 */
   readonly direction: 'push' | 'pull'
   /** 当前阶段。 */
-  readonly phase: 'start' | 'transferred' | 'committed' | 'done' | 'error'
+  readonly phase: 'start' | 'progress' | 'transferred' | 'committed' | 'done' | 'error'
   /** 0–1 的粗粒度进度。 */
   readonly progress: number
-  /** 失败说明。 */
-  readonly error?: string
-  /** 本次推送的批次数量（完成时）。 */
-  readonly batches?: number
   /** 本方向计划处理的事件数。 */
   readonly totalEvents?: number
   /** 本方向已完成的事件数。 */
   readonly doneEvents?: number
+  /** 本方向计划处理的批次数。 */
+  readonly totalBatches?: number
+  /** 本方向已完成的批次数。 */
+  readonly doneBatches?: number
+  /** 本方向计划传输的密文字节数。 */
+  readonly bytes?: number
+  /** 本方向已传输的密文字节数。 */
+  readonly doneBytes?: number
+  /** 失败说明。 */
+  readonly error?: string
+  /** 本次推送的批次数量（完成时）。 */
+  readonly batches?: number
 }
 
 /** 引擎依赖。 */
@@ -903,7 +911,7 @@ async function syncSession<Session>(
     if (remote.safeThroughSeq !== undefined) safeThroughSeq = Math.max(safeThroughSeq, remote.safeThroughSeq)
   }
 
-  const sealedEntries: SealedFrame[] = []
+  const uploadSteps: Array<{ readonly entry: SealedFrame; readonly events: number }> = []
   let baseIndex: number
   let baseChainHash: string | null
   let pushedBatches = 0
@@ -911,11 +919,14 @@ async function syncSession<Session>(
 
   if (remote === undefined) {
     const headerEntry = sealHeader(meta, sessionId, sessionKey)
-    sealedEntries.push(headerEntry)
+    uploadSteps.push({ entry: headerEntry, events: 0 })
     const batches = planEventBatches(events, -1, batchOptions(deps.config))
     batches.forEach((batch, offset) => {
       totalEvents += batch.events.length
-      sealedEntries.push(sealEventBatch(batch.events, sessionId, offset + 1, sessionKey))
+      uploadSteps.push({
+        entry: sealEventBatch(batch.events, sessionId, offset + 1, sessionKey),
+        events: batch.events.length,
+      })
     })
     pushedBatches = batches.length
     baseIndex = -1
@@ -927,14 +938,45 @@ async function syncSession<Session>(
     }
     batches.forEach((batch, offset) => {
       totalEvents += batch.events.length
-      sealedEntries.push(sealEventBatch(batch.events, sessionId, remote.frames.length + offset, sessionKey))
+      uploadSteps.push({
+        entry: sealEventBatch(batch.events, sessionId, remote.frames.length + offset, sessionKey),
+        events: batch.events.length,
+      })
     })
     pushedBatches = batches.length
     baseIndex = remote.frames.length - 1
     baseChainHash = remote.frames[remote.frames.length - 1]!.chainHash
   }
 
-  for (const entry of sealedEntries) await uploadBlob(fetchImpl, base, deps.config.token, entry)
+  const totalBytes = uploadSteps.reduce((total, step) => total + step.entry.ref.bytes, 0)
+  let doneEvents = 0
+  let doneBatches = 0
+  let doneBytes = 0
+  const notifyUpload = (): void => {
+    notifyProgress(deps, {
+      sessionId,
+      direction: 'push',
+      phase: 'progress',
+      progress: totalEvents === 0 ? 1 : doneEvents / totalEvents,
+      totalEvents,
+      doneEvents,
+      totalBatches: pushedBatches,
+      doneBatches,
+      bytes: totalBytes,
+      doneBytes,
+    })
+  }
+  notifyUpload()
+  for (const step of uploadSteps) {
+    await uploadBlob(fetchImpl, base, deps.config.token, step.entry)
+    doneBytes += step.entry.ref.bytes
+    if (step.events > 0) {
+      doneEvents += step.events
+      doneBatches += 1
+    }
+    notifyUpload()
+  }
+  const sealedEntries = uploadSteps.map((step) => step.entry)
 
   const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
   if (!leased) {
@@ -971,7 +1013,7 @@ async function syncSession<Session>(
     sessionId,
     status: 'pushed',
     batches: pushedBatches,
-    bytes: sealedEntries.reduce((total, entry) => total + entry.ref.bytes, 0),
+    bytes: totalBytes,
     totalEvents,
     doneEvents: totalEvents,
     tailOpen,
@@ -1016,7 +1058,14 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
         sessionId, direction: 'push',
         phase: report.status === 'error' ? 'error' : 'done',
         progress: report.status === 'error' ? 0 : 1,
-        ...report.batches === undefined ? {} : { batches: report.batches },
+        ...report.totalEvents === undefined ? {} : { totalEvents: report.totalEvents },
+        ...report.doneEvents === undefined ? {} : { doneEvents: report.doneEvents },
+        ...report.batches === undefined ? {} : {
+          batches: report.batches,
+          totalBatches: report.batches,
+          doneBatches: report.batches,
+        },
+        ...report.bytes === undefined ? {} : { bytes: report.bytes, doneBytes: report.bytes },
         ...report.error === undefined ? {} : { error: report.error },
       })
     } catch (error: unknown) {
@@ -1184,6 +1233,7 @@ async function downloadBlob(
  * @param localLast - 本地已有的最后一个 seq。
  * @param safe - 安全边界。
  * @param sessionKey - 会话密钥。
+ * @param onProgress - 每下载完一帧后的累计事件数回调（可选）。
  * @returns 按 seq 升序的事件。
  */
 async function downloadSafeEvents(
@@ -1195,8 +1245,10 @@ async function downloadSafeEvents(
   localLast: number,
   safe: number,
   sessionKey: Buffer,
+  onProgress?: (doneEvents: number, totalEvents: number) => void,
 ): Promise<SyncEvent[]> {
   const events: SyncEvent[] = []
+  const totalEvents = safe - localLast
   for (const frame of frames.slice(1)) {
     if (frame.seqFrom > safe) break
     if (frame.seqTo <= localLast) continue
@@ -1204,6 +1256,7 @@ async function downloadSafeEvents(
     for (const event of openEventBatch(sealed, frame, sessionId, sessionKey)) {
       if (event.seq > localLast && event.seq <= safe) events.push(event)
     }
+    if (totalEvents > 0) onProgress?.(events.length, totalEvents)
   }
   events.sort((left, right) => left.seq - right.seq)
   events.forEach((event, offset) => {
@@ -1378,7 +1431,22 @@ async function pullSession<Session>(
           ...localCwdNonPortable ? { cwdNonPortable: true } : {},
         }
       }
-      const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, localLast, safe, sessionKey)
+      const totalEvents = safe - localLast
+      const notifyDownload = (doneEvents: number): void => {
+        notifyProgress(deps, {
+          sessionId,
+          direction: 'pull',
+          phase: 'progress',
+          progress: totalEvents === 0 ? 1 : doneEvents / totalEvents,
+          totalEvents,
+          doneEvents,
+        })
+      }
+      notifyDownload(0)
+      const events = await downloadSafeEvents(
+        fetchImpl, base, deps.config.token, sessionId, remote.frames, localLast, safe, sessionKey,
+        (doneEvents) => { notifyDownload(doneEvents) },
+      )
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
       await deps.beforeApply?.(sessionId, safe)
       await handle.append(events)
@@ -1404,7 +1472,22 @@ async function pullSession<Session>(
     return { sessionId, status: 'local-active', totalEvents: safe + 1, pendingEvents: safe + 1 }
   }
 
-  const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, -1, safe, sessionKey)
+  const totalEvents = safe + 1
+  const notifyDownload = (doneEvents: number): void => {
+    notifyProgress(deps, {
+      sessionId,
+      direction: 'pull',
+      phase: 'progress',
+      progress: totalEvents === 0 ? 1 : doneEvents / totalEvents,
+      totalEvents,
+      doneEvents,
+    })
+  }
+  notifyDownload(0)
+  const events = await downloadSafeEvents(
+    fetchImpl, base, deps.config.token, sessionId, remote.frames, -1, safe, sessionKey,
+    (doneEvents) => { notifyDownload(doneEvents) },
+  )
   const header: CreateHeaderLike = {
     version: meta.formatVersion,
     id: sessionId,
@@ -1710,6 +1793,8 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
           sessionId: item.sessionId, direction: 'pull',
           phase: report.status === 'error' ? 'error' : 'done',
           progress: report.status === 'error' ? 0 : 1,
+          ...report.totalEvents === undefined ? {} : { totalEvents: report.totalEvents },
+          ...report.applied === undefined ? {} : { doneEvents: report.applied },
           ...report.error === undefined ? {} : { error: report.error },
         })
       } catch (error: unknown) {

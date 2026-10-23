@@ -1827,10 +1827,21 @@ window.__ModuleLoader__.load({
                               : session.cwdPending ? 'cwd 外' : '等待')
                         : '等待'
         var counts = []
-        if (session.pending && session.pending.upload > 0) counts.push('↑ ' + session.pending.upload)
-        else if (session.push && session.push.totalEvents > 0) counts.push('↑ ' + session.push.doneEvents + '/' + session.push.totalEvents)
-        if (session.pending && session.pending.download > 0) counts.push('↓ ' + session.pending.download)
-        else if (session.pull && session.pull.totalEvents > 0) counts.push('↓ ' + session.pull.doneEvents + '/' + session.pull.totalEvents)
+        var liveRunning = session.phase === 'running'
+        if (session.push && session.push.totalEvents > 0 && (liveRunning || session.push.doneEvents > 0)) {
+          counts.push('↑ ' + session.push.doneEvents + '/' + session.push.totalEvents)
+        } else if (session.pending && session.pending.upload > 0) {
+          counts.push('↑ ' + session.pending.upload)
+        }
+        if (session.pull && session.pull.totalEvents > 0 && (liveRunning || session.pull.doneEvents > 0)) {
+          var pullText = '↓ ' + session.pull.doneEvents + '/' + session.pull.totalEvents
+          if (!liveRunning && session.pending && session.pending.download > 0) {
+            pullText += '（待 ' + session.pending.download + '）'
+          }
+          counts.push(pullText)
+        } else if (session.pending && session.pending.download > 0) {
+          counts.push('↓ ' + session.pending.download)
+        }
         var attention = tag === '远端领先' || tag === '已加载' || tag === '待映射' || tag === 'cwd 外' || leaseTag !== ''
         var stateClass = isBlocked || session.phase === 'failed' || leaseEntry !== null && leaseEntry.state === 'lost' ? 'bad'
           : session.phase === 'done' || session.phase === 'skipped' ? 'ok'

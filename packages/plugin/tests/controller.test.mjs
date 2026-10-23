@@ -266,6 +266,26 @@ test('控制器：local-active 聚合为 deferred 并保留待下载事件数', 
   assert.equal(session.pending.download, 5)
 })
 
+test('控制器：实时进度计数进入 live 聚合', async () => {
+  let fixture
+  fixture = createController({
+    push: async () => {
+      fixture.controller.updateProgress({
+        sessionId: 's1', direction: 'push', phase: 'progress', progress: 0.4,
+        totalEvents: 10, doneEvents: 4, totalBatches: 2, doneBatches: 1,
+      })
+      return pushReport([])
+    },
+  })
+  const running = fixture.controller.run()
+  const live = fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's1')
+  assert.equal(live.phase, 'running')
+  assert.equal(live.push.totalEvents, 10)
+  assert.equal(live.push.doneEvents, 4)
+  assert.equal(live.pending.upload, 6)
+  await running
+})
+
 test('控制器：subscribe 在状态变化时通知，可取消', async () => {
   const fixture = createController()
   let calls = 0

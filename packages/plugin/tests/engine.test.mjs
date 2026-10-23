@@ -127,18 +127,28 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         serverUrl: base,
         token: device.token,
         passphrase: 'v2 pass',
-        batchEvents: 50,
+        batchEvents: 2,
       }
+      const pushedProgress = []
       const pushed = await syncOnce({
         persistence: fakeStore(header, events(0, 5)),
         sessions,
         config,
         isTailOpen: () => false,
         workspaceKeyOf: () => workspaceKey,
+        onProgress: (progress) => { pushedProgress.push(progress) },
       })
       assert.equal(pushed.sessions[0].status, 'pushed')
       assert.equal(pushed.sessions[0].totalEvents, 6)
       assert.equal(pushed.sessions[0].doneEvents, 6)
+      assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
+        && progress.totalEvents === 6 && progress.doneEvents === 6))
+      assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
+        && progress.phase === 'progress' && progress.doneEvents === 2))
+      assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
+        && progress.phase === 'progress' && progress.doneEvents === 4))
+      assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
+        && progress.phase === 'done' && progress.doneEvents === 6))
       const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.body.value.manifest.workspaceKey, workspaceKey)
 
@@ -185,16 +195,24 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       assert.deepEqual(secondPull.sessions, [])
 
       const mappedStore = fakeStore(undefined)
+      const mappedProgress = []
       const mapped = await pullOnce({
         persistence: mappedStore,
         sessions,
         config,
         workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
+        onProgress: (progress) => { mappedProgress.push(progress) },
       })
       assert.equal(mapped.sessions[0].status, 'pulled')
       assert.equal(mapped.sessions[0].applied, 6)
       assert.equal(mapped.sessions[0].totalEvents, 6)
       assert.equal(mapped.sessions[0].pendingEvents, 0)
+      assert.ok(mappedProgress.some((progress) => progress.direction === 'pull'
+        && progress.totalEvents === 6 && progress.doneEvents === 6))
+      assert.ok(mappedProgress.some((progress) => progress.direction === 'pull'
+        && progress.phase === 'progress' && progress.doneEvents === 2))
+      assert.ok(mappedProgress.some((progress) => progress.direction === 'pull'
+        && progress.phase === 'progress' && progress.doneEvents === 4))
       assert.equal(mappedStore.sessions.get(sessionId).header.cwd, 'D:/mapped')
 
       // 已加载但已经是最新：只读判断后返回 up-to-date，不能因为 live 就兜底

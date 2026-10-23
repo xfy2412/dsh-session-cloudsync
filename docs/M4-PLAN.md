@@ -2,7 +2,7 @@
 
 > 状态：M3 核心链路已完成（推送/拉取/安全边界/断网降级/双 home 验收）；M4 进行中。本文件是 M4 的唯一清单，ROADMAP 只保留状态摘要。
 >
-> 进度（2026-10-20）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已删除旧别名，只保留 `batches` / `batchCount`；当前 133 tests。下一步 D5/C5 的端到端演练与 E3 文档收口。
+> 进度（2026-10-23）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已删除旧别名，只保留 `batches` / `batchCount`；当前 155 tests，状态 v2/SSE/入口守卫/引擎实时事件计数已接入。下一步 D5/C5 的端到端演练与 E3 文档收口。
 >
 > 2026-10-22 调整：先做 [VAULT.md](VAULT.md) V0 → V1 → V2（`workspaceKey` 多工作区落点），
 > 再做 C5/D5/E3；本文件 A–E 不删除，只调整顺序。
@@ -87,7 +87,7 @@
 | C3 | 列表行捕获拦截：click / pointerdown / keydown（运行中/同步中的行） | C1 |
 | C4 | 空闲行 `sidebar.session.row.leading` 同步标记 + hover 说明 | C1 |
 | C5 | GUI 回归：下拉、拖拽、键盘、深链打开都不误 resume | C2–C4 |
-| C6 | 顶部居中的分段进度气泡：收起态是唯一云图标，点击后同一图标展开成卡片，完成缩回；进度条按会话等分，黄→绿/红，子先父后并发推进；展开逐会话列表，不占标题栏 | A3、C1 |
+| C6 | 顶部居中的分段进度气泡：收起态是唯一云图标，点击后同一图标展开成卡片，完成缩回；进度条按会话等分，黄→绿/红，子先父后并发推进；展开逐会话列表，不占标题栏；运行中显示上传/下载事件完成数，进度按事件比例 | A3、C1 |
 
 > C 进度：C1 状态下发到 `/status` v2 的每会话聚合（`phase`、push/pull、`pending`、`tailOpen`/`remoteAhead`/`lease`）和 `/events` SSE；C2 用 `conversation.input.dock` 的不可见守卫调用 `conversation.blocks.set`；C3 在 document 捕获阶段拦列表行 click/pointerdown/keydown，并额外包一层可选 `uiWorkspace.openSession` 覆盖搜索结果等非侧栏入口（fail-open）；C4 用 `sidebar.session.row.leading` 渲染同步标记、`sidebar.session.row.hover` 渲染原因。C5 仍需在真实 GUI 做一次点击/拖拽/键盘回归。
 

@@ -341,7 +341,12 @@ export class SyncController {
       totalEvents: progress.totalEvents ?? 0,
       doneEvents: progress.doneEvents ?? 0,
       ...progress.error === undefined ? {} : { error: progress.error },
-      ...progress.batches === undefined ? {} : { batches: progress.batches },
+      ...progress.batches === undefined && progress.doneBatches === undefined
+        ? {}
+        : { batches: progress.batches ?? progress.doneBatches },
+      ...progress.doneBytes === undefined && progress.bytes === undefined
+        ? {}
+        : { bytes: progress.doneBytes ?? progress.bytes },
     }
     const next = this.live.filter((item) => !(item.sessionId === view.sessionId && item.direction === view.direction))
     next.push(view)
