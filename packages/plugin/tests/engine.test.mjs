@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createDevice } from '../../server/src/http.ts'
+import { createDevice, SERVER_VERSION } from '../../server/src/http.ts'
+import { PROTOCOL_VERSION } from '../../shared/src/protocol.ts'
 import { openDatabase } from '../../server/src/db.ts'
 import { listenServer } from '../../server/tests/listen.mjs'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
@@ -126,7 +127,6 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         serverUrl: base,
         token: device.token,
         passphrase: 'v2 pass',
-        workspaceAllowlist: ['D:/local', 'D:/mapped'],
         batchEvents: 50,
       }
       const pushed = await syncOnce({
@@ -140,15 +140,45 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.body.value.manifest.workspaceKey, workspaceKey)
 
-      const mismatch = await syncOnce({
+      // 已有远端 manifest 的会话沿用远端 key：映射到本地路径后不会因为本地
+      // 解析出的 key 变化而被判成分叉。
+      const reused = await syncOnce({
         persistence: fakeStore(header, events(0, 5)),
         sessions,
         config,
         isTailOpen: () => false,
         workspaceKeyOf: () => 'differentworkspacekey',
       })
-      assert.equal(mismatch.sessions[0].status, 'error')
-      assert.match(mismatch.sessions[0].error ?? '', /workspaceKey/)
+      assert.equal(reused.sessions[0].status, 'up-to-date')
+      const reusedManifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      assert.equal(reusedManifest.body.value.manifest.workspaceKey, workspaceKey)
+
+      // 活跃会话本轮不 apply，游标必须停在它之前，否则 push 会一直 remote-ahead。
+      const active = await pullOnce({
+        persistence: fakeStore(undefined),
+        sessions: { ...sessions, get: () => ({}) },
+        config,
+        workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
+      }, { revision: 0 })
+      assert.equal(active.sessions[0].status, 'local-active')
+      assert.equal(active.revision, 0)
+
+      // 未映射报告带 cursor revision；游标越过之后不会再次交付。
+      const firstPull = await pullOnce({
+        persistence: fakeStore(undefined),
+        sessions,
+        config,
+        workspacePathOf: () => undefined,
+      }, { revision: 0 })
+      assert.equal(firstPull.sessions[0].status, 'unmapped')
+      assert.equal(typeof firstPull.sessions[0].revision, 'number')
+      const secondPull = await pullOnce({
+        persistence: fakeStore(undefined),
+        sessions,
+        config,
+        workspacePathOf: () => undefined,
+      }, { revision: firstPull.revision })
+      assert.deepEqual(secondPull.sessions, [])
 
       const mappedStore = fakeStore(undefined)
       const mapped = await pullOnce({
@@ -160,6 +190,17 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       assert.equal(mapped.sessions[0].status, 'pulled')
       assert.equal(mappedStore.sessions.get(sessionId).header.cwd, 'D:/mapped')
 
+      // 已加载但已经是最新：只读判断后返回 up-to-date，不能因为 live 就兜底
+      // local-active 卡住游标。
+      const liveCurrent = await pullOnce({
+        persistence: mappedStore,
+        sessions: { ...sessions, get: () => ({}) },
+        config,
+        workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
+      }, { revision: 0 })
+      assert.equal(liveCurrent.sessions[0].status, 'up-to-date')
+      assert.equal(liveCurrent.revision, mapped.revision)
+
       const unmappedStore = fakeStore(undefined)
       const unmapped = await pullOnce({
         persistence: unmappedStore,
@@ -169,6 +210,16 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       })
       assert.equal(unmapped.sessions[0].status, 'unmapped')
       assert.equal(unmappedStore.sessions.has(sessionId), false)
+
+      const excludedStore = fakeStore(undefined)
+      const excluded = await pullOnce({
+        persistence: excludedStore,
+        sessions,
+        config: { ...config, excludedSessionIds: [sessionId] },
+        workspacePathOf: () => 'D:/mapped',
+      })
+      assert.equal(excluded.sessions[0].status, 'excluded')
+      assert.equal(excludedStore.sessions.has(sessionId), false)
     } finally {
       await close()
       db.close()
@@ -200,7 +251,6 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
         serverUrl: base,
         token: device.token,
         passphrase: 'correct horse battery staple',
-        workspaceAllowlist: ['D:/local'],
         batchEvents: 50,
       }
       const persistence = fakePersistence(header, state)
@@ -265,7 +315,6 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
         serverUrl: base,
         token: device.token,
         passphrase: 'prefix pass',
-        workspaceAllowlist: ['D:/local'],
         batchEvents: 50,
       }
       const source = fakeStore(header, events(0, 119))
@@ -344,7 +393,6 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
         serverUrl: base,
         token: device.token,
         passphrase: 'nonportable pass',
-        workspaceAllowlist: ['D:/local'],
         batchEvents: 50,
       }
       const outside = [...events(0, 2), cwdEvent(3, 'D:/other')]
@@ -419,7 +467,6 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
         serverUrl: base,
         token: device.token,
         passphrase: 'correct pass',
-        workspaceAllowlist: ['D:/local'],
         batchEvents: 50,
       }
       await syncOnce({
@@ -485,7 +532,6 @@ test('拉取引擎：一个只读阶段失败后继续其他安全会话', async
         serverUrl: base,
         token: device.token,
         passphrase: 'pull continue pass',
-        workspaceAllowlist: ['D:/work'],
         batchEvents: 50,
       }
       const source = fakeStore(headerA, events(0, 2))
@@ -526,7 +572,7 @@ test('拉取引擎：一个只读阶段失败后继续其他安全会话', async
   }
 })
 
-test('推送引擎：白名单为空时整体不执行', async () => {
+test('推送引擎：本地排除根会话时不推送', async () => {
   const header = { id: 'session-no-allowlist', version: 4, createdAt: 1, isSeeded: false, delegationDepth: 0, cwd: 'D:/work' }
   const report = await syncOnce({
     persistence: fakePersistence(header, { events: events(0, 2) }),
@@ -535,15 +581,16 @@ test('推送引擎：白名单为空时整体不执行', async () => {
       serverUrl: 'http://127.0.0.1:1',
       token: 'token',
       passphrase: 'pass',
-      workspaceAllowlist: [],
+      excludedSessionIds: [header.id],
     },
   })
-  assert.equal(report.configured, false)
-  assert.equal(report.reason, 'workspaceAllowlist 未配置')
-  assert.deepEqual(report.sessions, [])
+  assert.equal(report.configured, true)
+  assert.deepEqual(report.sessions.map((entry) => [entry.sessionId, entry.status, entry.error]), [
+    [header.id, 'skipped', '根会话未选中'],
+  ])
 })
 
-test('推送引擎：默认同步子代理闭包，子先父后，白名单外的根跳过', async () => {
+test('推送引擎：默认同步子代理闭包，子先父后，被排除的根跳过', async () => {
   const temp = createTempHome('plugin-closure')
   try {
     const db = openDatabase(temp.dataDir)
@@ -578,7 +625,7 @@ test('推送引擎：默认同步子代理闭包，子先父后，白名单外�
           serverUrl: base,
           token: device.token,
           passphrase: 'closure pass',
-          workspaceAllowlist: ['D:/work'],
+          excludedSessionIds: [other.id],
         },
         isTailOpen: () => false,
       })
@@ -591,7 +638,7 @@ test('推送引擎：默认同步子代理闭包，子先父后，白名单外�
       assert.deepEqual(report.sessions.find((entry) => entry.sessionId === other.id), {
         sessionId: other.id,
         status: 'skipped',
-        error: '工作区不在同步白名单',
+        error: '根会话未选中',
       })
     } finally {
       await close()
@@ -635,7 +682,6 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
           serverUrl: base,
           token: device.token,
           passphrase: 'pull closure pass',
-          workspaceAllowlist: ['D:/work'],
         },
         isTailOpen: () => false,
       })
@@ -650,7 +696,6 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
           serverUrl: base,
           token: device.token,
           passphrase: 'pull closure pass',
-          workspaceAllowlist: ['D:/work', 'D:/b'],
         },
         workspacePathOf: () => 'D:/b',
         attach: async (id) => {
@@ -679,49 +724,34 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
   }
 })
 
-test('拉取引擎：白名单为空时整体不执行', async () => {
-  const base = {
-    serverUrl: 'http://127.0.0.1:1',
-    token: 'token',
-    passphrase: 'pass',
-  }
-  const store = fakeStore(undefined)
-  const empty = await pullOnce({
-    persistence: store,
-    sessions,
-    config: { ...base, workspaceAllowlist: [] },
-    workspacePathOf: () => 'D:/b',
-  }, { revision: 0 })
-  assert.equal(empty.configured, false)
-  assert.equal(empty.reason, 'workspaceAllowlist 未配置')
-})
-
-test('连接测试：token 有效时通过，无效时分类为 auth，离线为 network', async () => {
+test('连接测试：只探测公开的 /v1/health，不读配置也不带 token', async () => {
   const temp = createTempHome('plugin-test-connection')
   try {
     const db = openDatabase(temp.dataDir)
-    const device = createDevice(db, 'test-connection')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
-      const config = { serverUrl: base, token: device.token, passphrase: 'pass' }
-      assert.deepEqual(await testConnection(config), { ok: true })
+      const result = await testConnection(`${base}/`)
+      assert.equal(result.ok, true)
+      assert.equal(result.version, SERVER_VERSION)
+      assert.equal(result.protocol, PROTOCOL_VERSION)
 
-      const badToken = await testConnection({ ...config, token: 'invalid-token' })
-      assert.equal(badToken.ok, false)
-      assert.equal(badToken.kind, 'auth')
-
-      const offline = await testConnection({
-        serverUrl: 'http://127.0.0.1:1',
-        token: 'token',
-        passphrase: 'pass',
-      })
+      const offline = await testConnection('http://127.0.0.1:1')
       assert.equal(offline.ok, false)
       assert.equal(offline.kind, 'network')
 
-      assert.deepEqual(await testConnection({ ...config, serverUrl: '' }), {
+      const wrongPath = await testConnection(`${base}/missing`)
+      assert.equal(wrongPath.ok, false)
+      assert.equal(wrongPath.kind, 'not-found')
+
+      assert.deepEqual(await testConnection(''), {
         ok: false,
         kind: 'config',
         message: 'serverUrl 未配置',
+      })
+      assert.deepEqual(await testConnection('not a url'), {
+        ok: false,
+        kind: 'config',
+        message: 'serverUrl 非法',
       })
     } finally {
       await close()
@@ -733,11 +763,9 @@ test('连接测试：token 有效时通过，无效时分类为 auth，离线为
 })
 
 test('连接测试：读取超时归类为 network', async () => {
-  const result = await testConnection({
-    serverUrl: 'http://127.0.0.1:1', token: 'token', passphrase: 'pass', requestTimeoutMs: 10,
-  }, (_input, init) => new Promise((_resolve, reject) => {
+  const result = await testConnection('http://127.0.0.1:1', (_input, init) => new Promise((_resolve, reject) => {
     init?.signal?.addEventListener('abort', () => reject(new Error('request timeout')))
-  }))
+  }), 10)
   assert.equal(result.ok, false)
   assert.equal(result.kind, 'network')
   assert.equal(result.message, 'request timeout')
@@ -796,7 +824,6 @@ test('拉取引擎：append 失败留下 pending，重启后按 pending 补完',
         serverUrl: base,
         token: device.token,
         passphrase: 'pending pass',
-        workspaceAllowlist: ['D:/a', 'D:/b'],
         batchEvents: 20,
       }
       assert.equal((await syncOnce({ persistence: storeA, sessions, config, isTailOpen: () => false })).sessions[0].status, 'pushed')
@@ -859,7 +886,6 @@ test('拉取引擎：一个会话失败后停止，不覆盖它的 pending', asy
         serverUrl: base,
         token: device.token,
         passphrase: 'pending stop pass',
-        workspaceAllowlist: ['D:/a', 'D:/b'],
         batchEvents: 20,
       }
       const pushed = await syncOnce({ persistence: storeA, sessions, config, isTailOpen: () => false })
@@ -918,7 +944,6 @@ test('推送引擎：未配置时不动作，离线时只报告错误不抛出',
       serverUrl: 'http://127.0.0.1:1',
       token: 'token',
       passphrase: 'pass',
-      workspaceAllowlist: ['D:/offline'],
     },
   })
   assert.equal(offline.configured, true)
@@ -950,7 +975,6 @@ test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', asyn
         serverUrl: base,
         token: device.token,
         passphrase: 'pull pass',
-        workspaceAllowlist: ['D:/device-a', 'D:/device-b'],
         batchEvents: 50,
       }
 

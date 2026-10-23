@@ -108,6 +108,22 @@ test('首次初始化向导：密钥 → 密码 → 配额 → 设备 → 完成
       assert.equal(overview.body.value.devices, 1)
       assert.equal(overview.body.value.maxBytes, 5 * 1024 ** 3)
 
+      // 会话卡片按 manifest 里的 workspaceKey 分组所需字段。
+      const insert = db.handle.prepare(`INSERT INTO sessions
+        (dataset, session_id, created_at, format_version, last_seq, frame_count, head_chain_hash,
+         manifest_json, manifest_digest, revision, updated_at, deleted_at)
+        VALUES ('default', ?, 1, 4, 1, ?, 'hash', ?, 'digest', 1, ?, ?)`)
+      insert.run('workspace-a-1', 3, JSON.stringify({ workspaceKey: 'workspace-a' }), 10, null)
+      insert.run('workspace-a-2', 2, JSON.stringify({ workspaceKey: 'workspace-a' }), 20, 21)
+      insert.run('subagent-1', 1, JSON.stringify({}), 30, null)
+      const sessions = await call(base, '/admin/sessions', { cookie: loginCookie })
+      assert.equal(sessions.status, 200)
+      const byId = new Map(sessions.body.value.map((session) => [session.sessionId, session]))
+      assert.equal(byId.get('workspace-a-1').workspaceKey, 'workspace-a')
+      assert.equal(byId.get('workspace-a-2').workspaceKey, 'workspace-a')
+      assert.equal(byId.get('workspace-a-2').deletedAt, 21)
+      assert.equal(byId.get('subagent-1').workspaceKey, null)
+
       // 配额可在管理台修改。
       const changed = await call(base, '/admin/quota', { method: 'POST', cookie: loginCookie, json: { maxBytes: 20 * 1024 ** 3 } })
       assert.equal(changed.status, 200)

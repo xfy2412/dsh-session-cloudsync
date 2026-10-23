@@ -300,6 +300,35 @@ test('控制器：不会用另一个会话的 pending 覆盖未完成的恢复�
   assert.equal(fixture.controller.snapshot().pending, null)
 })
 
+test('控制器：未映射会话跨轮次持久化，回填成功后移除', async () => {
+  const unmapped = {
+    sessionId: 's1', status: 'unmapped', workspaceKey: 'workspace-key-0001', revision: 5,
+    createdAt: 1, formatVersion: 4,
+  }
+  const fixture = createController({
+    pull: async () => pullReport([unmapped], 9),
+  })
+
+  await fixture.controller.run()
+  assert.deepEqual(fixture.controller.unmappedSessions(), [{
+    sessionId: 's1', workspaceKey: 'workspace-key-0001', revision: 5, at: 1_000,
+    createdAt: 1, formatVersion: 4,
+  }])
+  assert.deepEqual(fixture.persists.at(-1).unmapped, fixture.controller.unmappedSessions())
+
+  // 下一轮游标已到 9、没有新变更：未映射记录不能丢。
+  await fixture.controller.run()
+  assert.equal(fixture.controller.unmappedSessions().length, 1)
+
+  // 模拟新进程从 journal 恢复。
+  const restored = createController({ initial: { revision: 9, unmapped: fixture.controller.unmappedSessions() } })
+  assert.equal(restored.controller.unmappedSessions().length, 1)
+
+  fixture.controller.recordBackfill(pullReport([{ sessionId: 's1', status: 'pulled', applied: 3 }], 9))
+  assert.deepEqual(fixture.controller.unmappedSessions(), [])
+  assert.equal(fixture.persists.at(-1).unmapped, undefined)
+})
+
 test('控制器：并发触发返回 already-running，上一轮结束后才允许下一轮', async () => {
   let release
   const gate = new Promise((resolve) => { release = resolve })

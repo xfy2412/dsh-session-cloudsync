@@ -155,7 +155,7 @@ test('应用接线：Schemastery volatile 引用按 .get() 读取', async () => 
     token: ref('token-value'),
     passphrase: ref('pass-value'),
     deviceName: ref('dev-box'),
-    workspaceAllowlist: ref([]),
+    excludedSessionIds: ref(['session-a']),
     autoSync: ref(false),
     intervalMs: ref(15_000),
     includeSubagents: ref(false),
@@ -170,13 +170,14 @@ test('应用接线：Schemastery volatile 引用按 .get() 读取', async () => 
   assert.equal(body.value.intervalMs, 15_000)
   assert.equal(body.value.autoSync, false)
   assert.equal(body.value.includeSubagents, false)
-  assert.equal(body.value.reason, 'workspaceAllowlist 未配置')
+  assert.deepEqual(body.value.excludedSessionIds, ['session-a'])
+  assert.equal(body.value.reason, null)
 })
 
 test('应用接线：volatile 引用原地更新后 setup/status 立即读到新值', async () => {
   const connection = fakeConnection()
   const { ctx } = fakeContext(connection)
-  const values = { serverUrl: '', allowlist: [] }
+  const values = { serverUrl: '', excluded: [] }
   const ref = (read) => ({ get: read })
   apply(ctx, {
     enabled: true,
@@ -184,7 +185,7 @@ test('应用接线：volatile 引用原地更新后 setup/status 立即读到新
     token: 'token-value',
     passphrase: 'pass-value',
     deviceName: 'dev-box',
-    workspaceAllowlist: ref(() => values.allowlist),
+    excludedSessionIds: ref(() => values.excluded),
     autoSync: false,
     intervalMs: 15_000,
     includeSubagents: false,
@@ -196,12 +197,12 @@ test('应用接线：volatile 引用原地更新后 setup/status 立即读到新
   assert.equal((JSON.parse(await first.text())).value.reason, 'serverUrl 未配置')
 
   values.serverUrl = 'http://127.0.0.1:8787'
-  values.allowlist = ['D:/work']
+  values.excluded = ['session-a']
   const second = await connection.routes[1].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await second.text())
   assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
   assert.equal(body.value.configured, true)
-  assert.deepEqual(body.value.workspaceAllowlist, ['D:/work'])
+  assert.deepEqual(body.value.excludedSessionIds, ['session-a'])
 })
 
 test('应用接线：设置信息不回传 token/passphrase', async () => {
@@ -265,20 +266,27 @@ test('应用接线：workspaces 汇总工作区、根会话与子代理计数', 
     serverUrl: '',
     token: '',
     passphrase: '',
-    workspaceAllowlist: ['D:/work'],
+    excludedSessionIds: ['root'],
     autoSync: false,
   })
 
   const response = await connection.routes[2].fetch(new Request('http://host/api/session-cloudsync/workspaces'))
   const body = JSON.parse(await response.text())
-  assert.equal(body.value.allowlistConfigured, true)
-  assert.deepEqual(body.value.selectedPaths, ['D:/work'])
+  assert.deepEqual(body.value.excludedSessionIds, ['root'])
+  assert.deepEqual(body.value.sessions, [{
+    sessionId: 'root',
+    workspacePath: 'D:/work',
+    createdAt: 1,
+    formatVersion: 0,
+    eventCount: 1,
+    subagentSessions: 1,
+    excluded: true,
+  }])
   assert.deepEqual(body.value.workspaces, [{
     path: 'D:/work',
     title: 'Work',
     rootSessions: 1,
     subagentSessions: 1,
-    selected: true,
   }])
 })
 
@@ -300,7 +308,7 @@ test('应用接线：token/passphrase 优先取 DSH 凭据库', async () => {
     serverUrl: 'http://127.0.0.1:1',
     token: '',
     passphrase: '',
-    workspaceAllowlist: ['D:/work'],
+    excludedSessionIds: [],
     autoSync: false,
   })
 

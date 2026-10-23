@@ -295,6 +295,8 @@ export interface AdminSession {
   readonly revision: number
   readonly updatedAt: number
   readonly deletedAt: number | null
+  /** manifest 里的 opaque workspaceKey；子代理或旧 manifest 为 null。 */
+  readonly workspaceKey: string | null
   readonly lease: { readonly deviceId: string; readonly leaseUntil: number } | null
 }
 
@@ -307,7 +309,9 @@ export interface AdminSession {
 export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
   const rows = db.handle
     .prepare(`SELECT s.session_id, s.created_at, s.format_version, s.frame_count, s.last_seq, s.head_chain_hash,
-                     s.revision, s.updated_at, s.deleted_at, l.device_id AS lease_device, l.lease_until AS lease_until
+                     s.revision, s.updated_at, s.deleted_at,
+                     json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key,
+                     l.device_id AS lease_device, l.lease_until AS lease_until
               FROM sessions s LEFT JOIN leases l ON l.dataset = s.dataset AND l.resource = 'session:' || s.session_id
               WHERE s.dataset = ? ORDER BY s.updated_at DESC LIMIT ?`)
     .all(DEFAULT_DATASET, limit) as unknown as Array<{
@@ -320,6 +324,7 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
       revision: number
       updated_at: number
       deleted_at: number | null
+      workspace_key: string | null
       lease_device: string | null
       lease_until: number | null
     }>
@@ -333,6 +338,7 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
     revision: row.revision,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    workspaceKey: row.workspace_key === null ? null : String(row.workspace_key),
     lease: row.lease_device === null || row.lease_until === null ? null : { deviceId: row.lease_device, leaseUntil: row.lease_until },
   }))
 }

@@ -104,7 +104,7 @@ export interface SyncStatus {
 
 /** 设置页/首启向导读取的非敏感配置。 */
 export interface SetupInfo {
-  /** 服务端凭据与工作区白名单是否齐全。 */
+  /** 服务端凭据是否齐全。 */
   readonly configured: boolean
   /** 未配置原因。 */
   readonly reason: string | null
@@ -112,10 +112,10 @@ export interface SetupInfo {
   readonly serverUrl: string
   /** 本设备短标签。 */
   readonly deviceName: string
-  /** 允许同步的工作区路径；空数组表示未配置。 */
-  readonly workspaceAllowlist: readonly string[]
-  /** 白名单是否已配置。 */
-  readonly allowlistConfigured: boolean
+  /** 本地排除的根会话 id。 */
+  readonly excludedSessionIds: readonly string[]
+  /** 是否自动绑定同路径远端工作区。 */
+  readonly autoBindSamePath: boolean
   /** 是否按间隔自动同步。 */
   readonly autoSync: boolean
   /** 自动同步间隔（毫秒）。 */
@@ -139,7 +139,7 @@ export interface SetupInfo {
 
 /** 同步列表里的一个工作区（或未注册的 cwd 分组）。 */
 export interface SyncWorkspaceCandidate {
-  /** 工作区路径；选择后写入白名单。 */
+  /** 工作区路径；映射目标。 */
   readonly path: string
   /** 显示标题：注册表标题，或路径最后一段。 */
   readonly title: string
@@ -149,8 +149,18 @@ export interface SyncWorkspaceCandidate {
   readonly rootSessions: number
   /** 该路径下根会话的子代理后代数。 */
   readonly subagentSessions: number
-  /** 当前白名单是否包含这个路径。 */
-  readonly selected: boolean
+}
+
+/** 一个可勾选的根会话。 */
+export interface SyncSessionCandidate {
+  readonly sessionId: string
+  readonly workspacePath: string
+  readonly createdAt: number
+  readonly formatVersion: number
+  readonly eventCount: number
+  readonly subagentSessions: number
+  /** 是否被本地排除。 */
+  readonly excluded: boolean
 }
 
 /** 一条本机 workspace 绑定。 */
@@ -164,17 +174,19 @@ export interface SyncWorkspaceBinding {
 /** 一个尚未映射的远端工作区。 */
 export interface SyncUnmappedWorkspace {
   readonly workspaceKey: string | null
+  /** 远端 workspace/profile 解密出的 label（若有）。 */
+  readonly label?: string
   readonly sessions: number
 }
 
 /** 首启/设置页的同步列表。 */
 export interface SyncWorkspaceList {
-  /** 白名单是否已配置。 */
-  readonly allowlistConfigured: boolean
-  /** 当前白名单原样返回。 */
-  readonly selectedPaths: readonly string[]
-  /** 候选工作区；`全选` 即取全部 path。 */
+  /** 本机注册工作区；映射目标从这里选。 */
   readonly workspaces: readonly SyncWorkspaceCandidate[]
+  /** 根会话选择列表。 */
+  readonly sessions: readonly SyncSessionCandidate[]
+  /** 当前本地排除的根会话 id。 */
+  readonly excludedSessionIds: readonly string[]
   /** 本机一次性映射。 */
   readonly bindings: readonly SyncWorkspaceBinding[]
   /** 最近一次拉取中未映射的远端工作区。 */

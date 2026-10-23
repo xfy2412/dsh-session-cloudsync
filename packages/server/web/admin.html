@@ -250,6 +250,14 @@
   th { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; background: rgba(255,255,255,.025); position: sticky; top: 0; }
   tr:last-child td { border-bottom: 0; }
   tbody tr:hover td { background: rgba(255,255,255,.025); }
+
+  /* session groups */
+  .session-group td { background: rgba(255,255,255,.03); padding: 7px 10px; }
+  .session-group-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .workspace-alias { width: 150px; min-height: 26px; font-size: 11px; }
+  .session-group-key { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; }
+  .session-group-key code { color: var(--muted); font-size: 10.5px; }
+  .session-group-meta { margin-left: auto; color: var(--faint); font-size: 10.5px; }
   td.session-id { max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
   td.session-id code { color: #b8c7de; }
   .row-copy { border: 0; background: transparent; color: var(--faint); padding: 2px 4px; border-radius: 5px; font-size: 10px; }
@@ -632,27 +640,75 @@ function filteredSessions() {
   })
 }
 
+function sessionRow(session) {
+  const row = el('tr')
+  const idCell = el('td', 'session-id')
+  idCell.append(el('code', null, session.sessionId))
+  const copy = el('button', 'row-copy', '复制')
+  copy.type = 'button'
+  copy.onclick = () => copyText(session.sessionId)
+  idCell.append(copy)
+  row.append(idCell, el('td', null, 'v' + session.formatVersion), el('td', null, String(session.batchCount)), el('td', null, String(session.lastSeq)), el('td', null, time(session.updatedAt)))
+  if (session.lease === null) row.append(el('td', null, '—'))
+  else row.append(el('td', 'lease', session.lease.deviceId + ' · ' + time(session.lease.leaseUntil)))
+  const status = el('td')
+  status.append(el('span', 'badge' + (session.deletedAt === null ? ' good' : ' bad'), session.deletedAt === null ? '正常' : '已删除'))
+  row.append(status)
+  return row
+}
+
+function workspaceGroupRow(group) {
+  const row = el('tr', 'session-group')
+  const cell = el('td')
+  cell.colSpan = 7
+  const head = el('div', 'session-group-head')
+  if (group.key) {
+    const input = el('input', 'workspace-alias')
+    input.value = workspaceAlias(group.key)
+    input.placeholder = '工作区本机别名（仅浏览器）'
+    input.setAttribute('aria-label', '工作区别名')
+    input.onchange = () => saveWorkspaceAlias(group.key, input.value)
+    head.append(input)
+  }
+  const keyLine = el('div', 'session-group-key')
+  keyLine.append(el('code', null, group.key ? group.key.slice(0, 16) + '…' : '未归属（子代理/旧 manifest）'))
+  if (group.key) {
+    const copy = el('button', 'row-copy', '复制')
+    copy.type = 'button'
+    copy.onclick = () => copyText(group.key)
+    keyLine.append(copy)
+  }
+  head.append(keyLine)
+  head.append(el('div', 'session-group-meta', group.sessions.length + ' 个会话 · 最近 ' + time(group.sessions[0].updatedAt)))
+  cell.append(head)
+  row.append(cell)
+  return row
+}
+
 function renderSessions() {
   const all = state.sessions
   const sessions = filteredSessions()
   $('sessionBadge').textContent = (sessions.length === all.length ? all.length : sessions.length + ' / ' + all.length) + ' 个'
   const body = $('sessions')
-  body.replaceChildren(...sessions.map((session) => {
-    const row = el('tr')
-    const idCell = el('td', 'session-id')
-    idCell.append(el('code', null, session.sessionId))
-    const copy = el('button', 'row-copy', '复制')
-    copy.type = 'button'
-    copy.onclick = () => copyText(session.sessionId)
-    idCell.append(copy)
-    row.append(idCell, el('td', null, 'v' + session.formatVersion), el('td', null, String(session.batchCount)), el('td', null, String(session.lastSeq)), el('td', null, time(session.updatedAt)))
-    if (session.lease === null) row.append(el('td', null, '—'))
-    else row.append(el('td', 'lease', session.lease.deviceId + ' · ' + time(session.lease.leaseUntil)))
-    const status = el('td')
-    status.append(el('span', 'badge' + (session.deletedAt === null ? ' good' : ' bad'), session.deletedAt === null ? '正常' : '已删除'))
-    row.append(status)
-    return row
-  }))
+  // 会话按 manifest 里的 opaque workspaceKey 分组；子代理没有 key，归到“未归属”。
+  const groups = new Map()
+  for (const session of sessions) {
+    const key = session.workspaceKey || null
+    const group = groups.get(key) || { key, sessions: [] }
+    group.sessions.push(session)
+    groups.set(key, group)
+  }
+  const ordered = [...groups.values()].sort((left, right) => {
+    if (left.key === null) return 1
+    if (right.key === null) return -1
+    return right.sessions[0].updatedAt - left.sessions[0].updatedAt
+  })
+  const rows = []
+  for (const group of ordered) {
+    rows.push(workspaceGroupRow(group))
+    for (const session of group.sessions) rows.push(sessionRow(session))
+  }
+  body.replaceChildren(...rows)
   const empty = $('sessionsEmpty')
   const table = body.closest('.table-wrap')
   if (sessions.length === 0) {
@@ -678,6 +734,24 @@ function renderSessions() {
   }
 }
 
+const WORKSPACE_ALIAS_PREFIX = 'dsh-sync-workspace-alias:'
+
+function workspaceAlias(key) {
+  if (!key) return ''
+  try { return localStorage.getItem(WORKSPACE_ALIAS_PREFIX + key) || '' } catch { return '' }
+}
+
+function saveWorkspaceAlias(key, value) {
+  if (!key) return
+  try {
+    const trimmed = String(value || '').trim()
+    if (trimmed === '') localStorage.removeItem(WORKSPACE_ALIAS_PREFIX + key)
+    else localStorage.setItem(WORKSPACE_ALIAS_PREFIX + key, trimmed)
+  } catch {
+    // 浏览器禁用 localStorage 时别名只是不持久化，不影响服务端数据。
+  }
+}
+
 async function refresh(silent) {
   const button = $('refresh')
   if (!silent) {
@@ -696,7 +770,8 @@ async function refresh(silent) {
     showApp()
     renderMetrics(overview)
     renderDevices(devices)
-    renderSessions()
+    // 正在编辑工作区别名时不重绘会话表，避免 10 秒轮询抢走焦点。
+    if (!$('sessions').contains(document.activeElement)) renderSessions()
     $('healthText').textContent = '服务正常'
   } catch (error) {
     if (error.message !== 'unauthorized') {

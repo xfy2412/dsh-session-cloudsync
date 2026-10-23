@@ -20,10 +20,10 @@
         salt: ''
         # 本设备在台账/日志里的短标签；空表示未使用。
         deviceName: ''
-        # 拉取会话挂载的本地工作区路径；空表示只推送不拉取。
-        workspacePath: ''
-        # 允许同步的工作区路径；空表示未配置、暂不同步。
-        workspaceAllowlist: []
+        # 本地排除的根会话 id；默认同步全部根会话，子代理跟随所属根。
+        excludedSessionIds: []
+        # 是否在同步后自动绑定同路径的远端工作区（一次性绑定）；默认关闭。
+        autoBindSamePath: false
         # 是否按间隔自动推送；false 时只做一次启动推送。
         autoSync: true
         # 自动推送间隔（毫秒）。

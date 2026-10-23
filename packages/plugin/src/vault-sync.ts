@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path'
 import { deriveMasterKey, sha256 } from '../../shared/src/crypto.ts'
 import { stableStringify } from '../../shared/src/chain.ts'
 import {
+  openVaultRecord,
   sealVaultRecord,
   vaultKeyOf,
   workspaceKeyOf,
@@ -355,6 +356,64 @@ export function vaultKeyForConfig(config: Pick<VaultSyncConfig, 'serverUrl' | 'p
   const base = config.serverUrl.trim().replace(/\/+$/u, '')
   if (base === '') throw new Error('serverUrl 非法')
   return vaultKeyOf(masterKeyOf(config, base))
+}
+
+/** 远端 workspace/profile 的 label 缓存。 */
+export interface WorkspaceProfileLabels {
+  readonly labels: Record<string, string>
+  readonly revision: number
+}
+
+/**
+ * 读取远端 Vault 里的 workspace/profile label。
+ * 只取最新的 workspace/profile 记录；坏记录跳过，不影响其他 label。
+ * @param config - Vault 配置。
+ * @param fetchImpl - fetch 实现。
+ * @returns workspaceKey → label 与最后 revision。
+ */
+export async function readWorkspaceProfileLabels(
+  config: VaultSyncConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<WorkspaceProfileLabels> {
+  const base = config.serverUrl.trim().replace(/\/+$/u, '')
+  if (base === '') throw new Error('serverUrl 非法')
+  const vaultKey = vaultKeyOf(masterKeyOf(config, base))
+  const labels: Record<string, { label: string; at: number }> = {}
+  let since = 0
+  for (let page = 0; page < 50; page += 1) {
+    const cursor = await requestJson(base, `/v1/vault/cursor?since=${since}&limit=500`, config.token, fetchImpl, { method: 'GET' })
+    const value = cursor.value as {
+      readonly revision?: unknown
+      readonly records?: unknown
+      readonly hasMore?: unknown
+    } | undefined
+    const records = Array.isArray(value?.records) ? value.records as VaultRecordRef[] : []
+    for (const record of records) {
+      try {
+        const response = await fetchImpl(`${base}/v1/blobs/${record.blobSha256}`, {
+          headers: { authorization: `Bearer ${config.token}` },
+        })
+        if (!response.ok) continue
+        const bytes = Buffer.from(await response.arrayBuffer())
+        const payload = openVaultRecord({ ref: record, bytes }, vaultKey)
+        if (payload.kind !== 'workspace/profile') continue
+        const data = payload.data as { readonly label?: unknown } | undefined
+        if (typeof data?.label !== 'string' || data.label.trim() === '') continue
+        const at = Number.isSafeInteger(payload.at) ? payload.at : record.createdAt
+        const previous = labels[payload.entity]
+        if (previous === undefined || at >= previous.at) labels[payload.entity] = { label: data.label, at }
+      } catch {
+        // 单个坏记录不影响其他 workspace；下次刷新会重试。
+      }
+    }
+    const revision = typeof value?.revision === 'number' ? value.revision : since
+    since = Math.max(since, revision)
+    if (value?.hasMore !== true || revision <= 0) break
+  }
+  return {
+    labels: Object.fromEntries(Object.entries(labels).map(([key, value]) => [key, value.label])),
+    revision: since,
+  }
 }
 
 /** 由配置派生 masterKey。 */

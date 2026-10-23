@@ -14,9 +14,8 @@ import z from '@deepseek-ai/schemastery'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { SyncController } from './controller.ts'
-import { buildSessionTree, pathAllowed, pathKeyOf } from './closure.ts'
+import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { prepareReplaceScript } from './replace.ts'
-import { syncVault } from './vault-sync.ts'
 import {
   correctCwd as correctSessionCwd,
   pullOnce,
@@ -32,9 +31,9 @@ import {
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
-import { vaultKeyForConfig } from './vault-sync.ts'
+import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
 import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
-import type { SetupInfo, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
+import type { SetupInfo, SyncSessionCandidate, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
 export const name = 'dsh-session-cloudsync'
@@ -62,8 +61,10 @@ export interface Config {
   salt?: string
   /** 本设备短标签；空表示未使用。 */
   deviceName?: string
-  /** 允许同步的工作区路径；空数组表示未配置、暂不同步任何会话。 */
-  workspaceAllowlist?: string[]
+  /** 本地排除的根会话 id；子代理跟随根。 */
+  excludedSessionIds?: string[]
+  /** 是否自动绑定同路径的远端工作区；默认关闭。 */
+  autoBindSamePath?: boolean
   /** 是否自动按间隔推送，默认 true；关闭后只做一次启动推送。 */
   autoSync?: boolean
   /** 自动推送间隔（毫秒），默认 60000，最小 1000。 */
@@ -86,7 +87,8 @@ export const Config = z.object({
   passphrase: z.string().default(''),
   salt: z.string().default(''),
   deviceName: z.string().default('').volatile(),
-  workspaceAllowlist: z.array(z.string()).default([]).volatile(),
+  excludedSessionIds: z.array(z.string()).default([]).volatile(),
+  autoBindSamePath: z.boolean().default(false).volatile(),
   autoSync: z.boolean().default(true).volatile(),
   intervalMs: z.number().min(1000).default(60000).volatile(),
   includeSubagents: z.boolean().default(true).volatile(),
@@ -189,7 +191,8 @@ export function apply(ctx: Context, config: Config): void {
   const configToken = readVolatile<string>(config.token) ?? ''
   const configPassphrase = readVolatile<string>(config.passphrase) ?? ''
   let intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
-  let workspaceAllowlist: string[] = []
+  let excludedSessionIds: string[] = []
+  let autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
   let salt = readVolatile<string>(config.salt) ?? ''
   let includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
   let deviceName = readVolatile<string>(config.deviceName) ?? ''
@@ -200,13 +203,13 @@ export function apply(ctx: Context, config: Config): void {
   // 每次 DSH 进程启动生成一次；同一进程内 lease/append 复用，重启后换新值。
   const clientId = randomBytes(16).toString('hex')
 
-  const readAllowlist = (): string[] => {
-    const raw = readVolatile<unknown>(config.workspaceAllowlist)
+  const readExcludedSessions = (): string[] => {
+    const raw = readVolatile<unknown>(config.excludedSessionIds)
     return Array.isArray(raw)
-      ? raw.filter((path): path is string => typeof path === 'string' && path.trim() !== '')
+      ? raw.filter((id): id is string => typeof id === 'string' && id.trim() !== '')
       : []
   }
-  workspaceAllowlist = readAllowlist()
+  excludedSessionIds = readExcludedSessions()
 
   const engineConfig: MutableEngineConfig = {
     serverUrl,
@@ -214,7 +217,7 @@ export function apply(ctx: Context, config: Config): void {
     passphrase: configPassphrase,
     ...salt === '' ? {} : { salt },
     includeSubagents,
-    workspaceAllowlist,
+    excludedSessionIds,
     batchEvents,
     batchBytes,
     requestTimeoutMs,
@@ -228,7 +231,8 @@ export function apply(ctx: Context, config: Config): void {
   const refreshConfig = (): void => {
     serverUrl = readVolatile<string>(config.serverUrl) ?? ''
     intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
-    workspaceAllowlist = readAllowlist()
+    excludedSessionIds = readExcludedSessions()
+    autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
     salt = readVolatile<string>(config.salt) ?? ''
     includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
     deviceName = readVolatile<string>(config.deviceName) ?? ''
@@ -238,7 +242,7 @@ export function apply(ctx: Context, config: Config): void {
     requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
     engineConfig.serverUrl = serverUrl
     engineConfig.includeSubagents = includeSubagents
-    engineConfig.workspaceAllowlist = workspaceAllowlist
+    engineConfig.excludedSessionIds = excludedSessionIds
     engineConfig.batchEvents = batchEvents
     engineConfig.batchBytes = batchBytes
     engineConfig.requestTimeoutMs = requestTimeoutMs
@@ -320,6 +324,36 @@ export function apply(ctx: Context, config: Config): void {
   const refreshBindings = async (): Promise<void> => {
     bindings = bindingsDir === undefined ? emptyBindings() : await readBindings(bindingsDir)
   }
+  let workspaceLabels: Record<string, string> = {}
+  let labelsIdentity: string | undefined
+  let labelsFetchedAt = 0
+  const refreshWorkspaceLabels = async (): Promise<void> => {
+    if (statePath === undefined || bindingsDir === undefined) return
+    if (engineConfig.token.trim() === '' || engineConfig.passphrase === '') return
+    const identity = `${serverUrl}\u0000${engineConfig.token}\u0000${engineConfig.passphrase}\u0000${engineConfig.salt ?? ''}`
+    if (identity === labelsIdentity && Date.now() - labelsFetchedAt < 60_000) return
+    try {
+      const result = await readWorkspaceProfileLabels({
+        serverUrl,
+        token: engineConfig.token,
+        passphrase: engineConfig.passphrase,
+        ...engineConfig.salt === undefined || engineConfig.salt === '' ? {} : { salt: engineConfig.salt },
+        clientId: engineConfig.clientId ?? '0000000000000000',
+        deviceName,
+        dshHome: dirname(dirname(statePath)),
+        stateDir: dirname(statePath),
+        workspaces: [],
+        ...engineConfig.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: engineConfig.requestTimeoutMs },
+      })
+      workspaceLabels = result.labels
+      labelsIdentity = identity
+      labelsFetchedAt = Date.now()
+    } catch (error: unknown) {
+      labelsIdentity = identity
+      labelsFetchedAt = Date.now()
+      logger.warn(`dsh-session-cloudsync: 读取 Vault 工作区 label 失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   let vaultKeyCache: { readonly identity: string; readonly key: Buffer } | undefined
   const currentVaultKey = (): Buffer | undefined => {
     const identity = `${serverUrl}\u0000${engineConfig.passphrase}\u0000${engineConfig.salt ?? ''}`
@@ -347,6 +381,27 @@ export function apply(ctx: Context, config: Config): void {
     return vaultKey === undefined ? undefined : deriveWorkspaceKey(vaultKey, localPath)
   }
 
+  /**
+   * 本地工作区自己的 key 直接视为已映射：同一路径在任意设备上应当得到同一个
+   * workspaceKey，不需要用户在映射页里“把自己映射给自己”。
+   */
+  const localWorkspacePathForKey = (key: string): string | undefined => {
+    try {
+      const vaultKey = currentVaultKey()
+      for (const workspace of workspaceRegistry?.list?.() ?? []) {
+        if (keyForPath(bindings, workspace.path) === key) return workspace.path
+        // 已绑定别的远端 key 后，本路径自己的派生 key 仍然属于它。
+        if (vaultKey !== undefined && deriveWorkspaceKey(vaultKey, workspace.path) === key) return workspace.path
+      }
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-cloudsync: 读取本地工作区失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+    return undefined
+  }
+
+  const resolveWorkspacePath = (key: string): string | undefined =>
+    pathForKey(bindings, key) ?? localWorkspacePathForKey(key)
+
   const persistState = (state: PullState): void => {
     if (statePath === undefined) return
     try {
@@ -357,6 +412,7 @@ export function apply(ctx: Context, config: Config): void {
         ...state.cwdPending === undefined || state.cwdPending.length === 0 ? {} : { cwdPending: state.cwdPending },
         ...state.blocked === undefined || state.blocked.length === 0 ? {} : { blocked: state.blocked },
         ...state.blockedDecisions === undefined || state.blockedDecisions.length === 0 ? {} : { blockedDecisions: state.blockedDecisions },
+        ...state.unmapped === undefined || state.unmapped.length === 0 ? {} : { unmapped: state.unmapped },
       })
     } catch (error: unknown) {
       logger.warn(`dsh-session-cloudsync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
@@ -370,12 +426,11 @@ export function apply(ctx: Context, config: Config): void {
     let workspaces: Array<{ path: string; title: string }> = []
     try {
       workspaces = (workspaceRegistry?.list?.() ?? [])
-        .filter((workspace) => pathAllowed(workspace.path, workspaceAllowlist))
         .map((workspace) => ({ path: workspace.path, title: workspace.title }))
     } catch (error: unknown) {
       logger.warn(`dsh-session-cloudsync: 读取 Vault 工作区失败：${error instanceof Error ? error.message : String(error)}`)
     }
-    await syncVault({
+    const result = await syncVault({
       serverUrl,
       token: engineConfig.token,
       passphrase: engineConfig.passphrase,
@@ -389,6 +444,7 @@ export function apply(ctx: Context, config: Config): void {
       ...process.env.DSH_VERSION === undefined ? {} : { dshVersion: process.env.DSH_VERSION },
       ...process.env.DSH_PROFILE === undefined ? {} : { dshProfile: process.env.DSH_PROFILE },
     }, logger)
+    if (result.appended > 0) labelsIdentity = undefined
   }
 
   const configuration = (): { configured: boolean; reason?: string } => {
@@ -396,7 +452,6 @@ export function apply(ctx: Context, config: Config): void {
     if (serverUrl.trim() === '') return { configured: false, reason: 'serverUrl 未配置' }
     if (engineConfig.token.trim() === '') return { configured: false, reason: 'token 未配置' }
     if (engineConfig.passphrase === '') return { configured: false, reason: 'passphrase 未配置' }
-    if (workspaceAllowlist.length === 0) return { configured: false, reason: 'workspaceAllowlist 未配置' }
     return { configured: true }
   }
 
@@ -420,6 +475,7 @@ export function apply(ctx: Context, config: Config): void {
       ...initialJournal.cwdPending === undefined ? {} : { cwdPending: initialJournal.cwdPending },
       ...initialJournal.blocked === undefined ? {} : { blocked: initialJournal.blocked },
       ...initialJournal.blockedDecisions === undefined ? {} : { blockedDecisions: initialJournal.blockedDecisions },
+      ...initialJournal.unmapped === undefined ? {} : { unmapped: initialJournal.unmapped },
     },
     logger,
   })
@@ -497,9 +553,36 @@ export function apply(ctx: Context, config: Config): void {
     refreshConfig()
     return pullOnce({
       ...pullDeps,
-      workspacePathOf: (key: string) => pathForKey(bindings, key),
+      workspacePathOf: resolveWorkspacePath,
       onProgress: (progress) => controller.updateProgress(progress),
     }, state)
+  }
+
+  let backfilling = false
+  /**
+   * 映射完成后重放未映射会话：从它们最初的 cursor revision 之前再拉一次，
+   * 不推进主游标。这样即使映射页打开时游标已经越过它们，也能补回来。
+   */
+  const backfillMappedWorkspaces = async (): Promise<void> => {
+    if (backfilling || controller.snapshot().running) return
+    const pending = controller.unmappedSessions()
+      .filter((entry) => bindings.bindings[entry.workspaceKey] !== undefined)
+    if (pending.length === 0) return
+    const revision = Math.max(0, Math.min(...pending.map((entry) => entry.revision)) - 1)
+    backfilling = true
+    try {
+      const snapshot = controller.snapshot()
+      const report = await pullWithDeps({
+        revision,
+        ...snapshot.pending === null ? {} : { pending: snapshot.pending },
+      })
+      controller.recordBackfill(report)
+      await refreshBindings()
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-cloudsync: 映射回填失败：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      backfilling = false
+    }
   }
 
   const setup = async (): Promise<SetupInfo> => {
@@ -511,8 +594,8 @@ export function apply(ctx: Context, config: Config): void {
       reason: state.reason ?? null,
       serverUrl,
       deviceName,
-      workspaceAllowlist,
-      allowlistConfigured: workspaceAllowlist.length > 0,
+      excludedSessionIds,
+      autoBindSamePath,
       autoSync,
       intervalMs,
       includeSubagents,
@@ -524,11 +607,41 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
+  const autoBindMatchingWorkspaces = async (): Promise<void> => {
+    if (!autoBindSamePath || bindingsDir === undefined || workspaceRegistry === undefined) return
+    let registered: readonly WorkspaceLike[] = []
+    try {
+      registered = workspaceRegistry.list?.() ?? []
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-cloudsync: 自动绑定读取工作区失败：${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    let bound = false
+    for (const session of controller.snapshot().sessions) {
+      if (session.direction !== 'pull' || session.status !== 'unmapped' || session.workspaceKey === undefined) continue
+      if (bindings.bindings[session.workspaceKey] !== undefined) continue
+      const candidate = registered.find((workspace) => workspaceKeyForCwd('', workspace.path) === session.workspaceKey)
+      if (candidate === undefined) continue
+      try {
+        await bindWorkspaceFile(bindingsDir, session.workspaceKey, candidate.path, candidate.title)
+        bound = true
+      } catch (error: unknown) {
+        logger.warn(`dsh-session-cloudsync: 自动绑定 ${candidate.path} 失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    if (bound) {
+      await refreshBindings()
+      labelsIdentity = undefined
+    }
+  }
+
   const runSync = async (manual = false): Promise<Awaited<ReturnType<SyncController['run']>>> => {
     refreshConfig()
     await refreshSecrets()
     await refreshBindings()
     const result = manual ? await controller.run({ manual: true }) : await controller.run()
+    await autoBindMatchingWorkspaces()
+    await backfillMappedWorkspaces()
     void runVault().catch((error: unknown) => {
       logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
     })
@@ -538,18 +651,33 @@ export function apply(ctx: Context, config: Config): void {
   const workspaces = async (): Promise<SyncWorkspaceList> => {
     refreshConfig()
     await refreshBindings()
+    await refreshSecrets()
+    await refreshWorkspaceLabels()
     const snapshots = await ctx.sessionPersistence.list()
     const tree = buildSessionTree(snapshots)
+    const excludedSet = new Set(excludedSessionIds)
+    const sessions: SyncSessionCandidate[] = []
     const groups = new Map<string, { path: string; rootSessions: number; subagentSessions: number }>()
     for (const entry of tree.roots) {
       const cwd = entry.root.header.cwd?.trim()
       if (cwd === undefined || cwd === '') continue
+      const sessionId = String(entry.root.header.id)
       const key = pathKeyOf(cwd)
       const group = groups.get(key) ?? { path: cwd, rootSessions: 0, subagentSessions: 0 }
       group.rootSessions += 1
       group.subagentSessions += entry.descendants.length
       groups.set(key, group)
+      sessions.push({
+        sessionId,
+        workspacePath: cwd,
+        createdAt: entry.root.header.createdAt ?? 0,
+        formatVersion: entry.root.header.version ?? 0,
+        eventCount: entry.root.eventCount ?? 0,
+        subagentSessions: entry.descendants.length,
+        excluded: excludedSet.has(sessionId),
+      })
     }
+    sessions.sort((left, right) => right.createdAt - left.createdAt || left.sessionId.localeCompare(right.sessionId))
 
     let registered: readonly WorkspaceLike[] = []
     try {
@@ -571,7 +699,6 @@ export function apply(ctx: Context, config: Config): void {
         ...candidateKey === undefined ? {} : { workspaceKey: candidateKey },
         rootSessions: group?.rootSessions ?? 0,
         subagentSessions: group?.subagentSessions ?? 0,
-        selected: pathAllowed(workspace.path, workspaceAllowlist),
       })
     }
     for (const [key, group] of groups) {
@@ -583,29 +710,40 @@ export function apply(ctx: Context, config: Config): void {
         ...candidateKey === undefined ? {} : { workspaceKey: candidateKey },
         rootSessions: group.rootSessions,
         subagentSessions: group.subagentSessions,
-        selected: pathAllowed(group.path, workspaceAllowlist),
       })
     }
 
-    const unmapped = new Map<string | null, number>()
-    for (const session of controller.snapshot().sessions) {
-      if (session.direction !== 'pull' || session.status !== 'unmapped') continue
-      const key = session.workspaceKey ?? null
-      if (key !== null && bindings.bindings[key] !== undefined) continue
-      unmapped.set(key, (unmapped.get(key) ?? 0) + 1)
+    const unmapped = new Map<string, number>()
+    for (const entry of controller.unmappedSessions()) {
+      if (bindings.bindings[entry.workspaceKey] !== undefined) continue
+      if (localWorkspacePathForKey(entry.workspaceKey) !== undefined) continue
+      unmapped.set(entry.workspaceKey, (unmapped.get(entry.workspaceKey) ?? 0) + 1)
+    }
+    // 首启映射步骤通常发生在第一次同步之前；Vault 里已有 workspace/profile，
+    // 用它补出远端工作区列表，避免“没有未映射工作区”的假象。
+    for (const key of Object.keys(workspaceLabels)) {
+      if (bindings.bindings[key] !== undefined) continue
+      if (localWorkspacePathForKey(key) !== undefined) continue
+      if (!unmapped.has(key)) unmapped.set(key, 0)
     }
 
     return {
-      allowlistConfigured: workspaceAllowlist.length > 0,
-      selectedPaths: workspaceAllowlist,
       workspaces: candidates,
+      sessions,
+      excludedSessionIds,
       bindings: Object.values(bindings.bindings).map((binding) => ({
         workspaceKey: binding.key,
         localPath: binding.localPath,
         label: binding.label,
         createdAt: binding.createdAt,
       })),
-      unmapped: [...unmapped.entries()].map(([workspaceKey, sessions]) => ({ workspaceKey, sessions })),
+      unmapped: [...unmapped.entries()]
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .map(([workspaceKey, count]) => ({
+          workspaceKey,
+          sessions: count,
+          ...workspaceLabels[workspaceKey] === undefined ? {} : { label: workspaceLabels[workspaceKey] },
+        })),
     }
   }
 
@@ -632,10 +770,7 @@ export function apply(ctx: Context, config: Config): void {
     status: () => controller.snapshot(),
     setup,
     workspaces,
-    test: async () => {
-      await refreshSecrets()
-      return testConnection(engineConfig)
-    },
+    test: async (serverUrl: string) => testConnection(serverUrl, fetch, engineConfig.requestTimeoutMs),
     syncNow: () => runSync(true),
     cwdDecision: async (sessionId: string, action: 'fix' | 'skip') => {
       if (action === 'skip') {
@@ -675,12 +810,12 @@ export function apply(ctx: Context, config: Config): void {
     bindWorkspace: async (workspaceKey: string, localPath: string) => {
       refreshConfig()
       if (bindingsDir === undefined) throw new Error('找不到 Vault 状态目录')
-      if (!pathAllowed(localPath, workspaceAllowlist)) throw new Error('本地工作区不在同步白名单')
       if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
       const workspace = await workspaceRegistry.resolveByPath(localPath)
       if (workspace === undefined) throw new Error('本地工作区不存在')
       await bindWorkspaceFile(bindingsDir, workspaceKey, workspace.path, workspace.title)
       await refreshBindings()
+      void backfillMappedWorkspaces()
       return workspaces()
     },
   }
@@ -704,9 +839,8 @@ export function apply(ctx: Context, config: Config): void {
       logger.info(`dsh-session-cloudsync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
     } else {
       await refreshBindings()
-      void controller.run()
-      void runVault().catch((error: unknown) => {
-        logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
+      void runSync().catch((error: unknown) => {
+        logger.warn(`dsh-session-cloudsync: 启动同步失败：${error instanceof Error ? error.message : String(error)}`)
       })
     }
   })

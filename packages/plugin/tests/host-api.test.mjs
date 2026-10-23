@@ -25,8 +25,7 @@ function control(overrides = {}) {
       reason: null,
       serverUrl: 'http://127.0.0.1:8787',
       deviceName: 'dev',
-      workspaceAllowlist: ['D:/work'],
-      allowlistConfigured: true,
+      excludedSessionIds: ['session-a'],
       autoSync: true,
       intervalMs: 60_000,
       includeSubagents: true,
@@ -40,15 +39,24 @@ function control(overrides = {}) {
       },
     },
     workspaces: overrides.workspaces ?? (async () => ({
-      allowlistConfigured: true,
-      selectedPaths: ['D:/work'],
       workspaces: [{
         path: 'D:/work',
         title: 'work',
         rootSessions: 2,
         subagentSessions: 3,
-        selected: true,
       }],
+      sessions: [{
+        sessionId: 'session-a',
+        workspacePath: 'D:/work',
+        createdAt: 1,
+        formatVersion: 4,
+        eventCount: 3,
+        subagentSessions: 1,
+        excluded: true,
+      }],
+      excludedSessionIds: ['session-a'],
+      bindings: [],
+      unmapped: [],
     })),
     test: overrides.test ?? (async () => ({ ok: true })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
@@ -62,9 +70,9 @@ function control(overrides = {}) {
       steps: ['step'],
     })),
     bindWorkspace: overrides.bindWorkspace ?? (async () => ({
-      allowlistConfigured: true,
-      selectedPaths: ['/tmp/work'],
       workspaces: [],
+      sessions: [],
+      excludedSessionIds: [],
       bindings: [],
       unmapped: [],
     })),
@@ -118,7 +126,7 @@ test('宿主 API：setup 只返回非敏感字段', async () => {
   assert.equal(JSON.stringify(body).includes('token-value'), false)
 })
 
-test('宿主 API：workspaces 返回同步列表与选中项', async () => {
+test('宿主 API：workspaces 返回会话选择列表', async () => {
   const routes = createHostApi(control())
   const response = await route(routes, '/api/session-cloudsync/workspaces').fetch(
     new Request('http://host/api/session-cloudsync/workspaces'),
@@ -126,7 +134,8 @@ test('宿主 API：workspaces 返回同步列表与选中项', async () => {
   assert.equal(response.status, 200)
   const body = await bodyOf(response)
   assert.equal(body.value.workspaces[0].rootSessions, 2)
-  assert.equal(body.value.workspaces[0].selected, true)
+  assert.equal(body.value.sessions[0].sessionId, 'session-a')
+  assert.deepEqual(body.value.excludedSessionIds, ['session-a'])
 })
 
 test('宿主 API：workspaces 读取失败时返回 500', async () => {
@@ -142,13 +151,35 @@ test('宿主 API：workspaces 读取失败时返回 500', async () => {
   assert.equal(body.error.message, '无法读取工作区')
 })
 
-test('宿主 API：test 返回连接测试结果', async () => {
-  const routes = createHostApi(control({ test: async () => ({ ok: false, kind: 'auth', message: 'token 无效' }) }))
+test('宿主 API：test 用请求体里的 serverUrl 探测，不读控制面配置', async () => {
+  let seen = ''
+  const routes = createHostApi(control({
+    test: async (serverUrl) => {
+      seen = serverUrl
+      return { ok: true, version: '0.0.0', protocol: 1 }
+    },
+  }))
+  const response = await route(routes, '/api/session-cloudsync/test').fetch(
+    new Request('http://host/api/session-cloudsync/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serverUrl: '  http://127.0.0.1:8787  ' }),
+    }),
+  )
+  assert.equal(response.status, 200)
+  assert.equal(seen, 'http://127.0.0.1:8787')
+  assert.deepEqual((await bodyOf(response)).value, { ok: true, version: '0.0.0', protocol: 1 })
+})
+
+test('宿主 API：test 缺少 serverUrl 时返回 400', async () => {
+  const routes = createHostApi(control())
   const response = await route(routes, '/api/session-cloudsync/test').fetch(
     new Request('http://host/api/session-cloudsync/test', { method: 'POST' }),
   )
-  assert.equal(response.status, 200)
-  assert.deepEqual((await bodyOf(response)).value, { ok: false, kind: 'auth', message: 'token 无效' })
+  assert.equal(response.status, 400)
+  const body = await bodyOf(response)
+  assert.equal(body.ok, false)
+  assert.equal(body.error.message, '需要 serverUrl')
 })
 
 test('宿主 API：sync 返回控制器结果', async () => {

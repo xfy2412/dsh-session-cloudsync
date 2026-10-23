@@ -49,8 +49,8 @@ export interface SessionTree<T> {
 export interface ClosureOptions {
   /** 是否把子代理后代一起同步。 */
   readonly includeSubagents: boolean
-  /** 允许同步的工作区路径；空数组表示全部不允许。 */
-  readonly workspaceAllowlist: readonly string[]
+  /** 用户本地排除的根会话 id；子代理跟随根。 */
+  readonly excludedSessionIds?: readonly string[]
 }
 
 /** 计划同步的会话。 */
@@ -93,18 +93,6 @@ export interface ClosurePlan<T> {
 export function pathKeyOf(value: string): string {
   const normalized = value.trim().replace(/\\/gu, '/').replace(/\/+$/u, '')
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
-}
-
-/**
- * 判断一个工作区路径是否在白名单里。
- * @param cwd - 会话的工作目录。
- * @param allowlist - 白名单路径。
- * @returns 命中时为 true；空 cwd 或空白名单为 false。
- */
-export function pathAllowed(cwd: string | undefined, allowlist: readonly string[]): boolean {
-  if (cwd === undefined || cwd.trim() === '' || allowlist.length === 0) return false
-  const key = pathKeyOf(cwd)
-  return allowlist.some((path) => path.trim() !== '' && pathKeyOf(path) === key)
 }
 
 /**
@@ -171,12 +159,13 @@ export function planSessionClosure<T extends ClosureSnapshot>(
   const tree = buildSessionTree(snapshots)
   const planned: PlannedSession<T>[] = []
   const skipped: SkippedSession<T>[] = [...tree.orphans]
+  const excluded = new Set(options.excludedSessionIds ?? [])
 
   for (const { root, descendants } of tree.roots) {
-    if (!pathAllowed(root.header.cwd, options.workspaceAllowlist)) {
-      skipped.push({ snapshot: root, reason: '工作区不在同步白名单' })
+    if (excluded.has(root.header.id)) {
+      skipped.push({ snapshot: root, reason: '根会话未选中' })
       for (const descendant of descendants) {
-        skipped.push({ snapshot: descendant.snapshot, reason: '根会话不在同步白名单' })
+        skipped.push({ snapshot: descendant.snapshot, reason: '根会话未选中' })
       }
       continue
     }

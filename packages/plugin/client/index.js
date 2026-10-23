@@ -68,6 +68,7 @@ window.__ModuleLoader__.load({
       '.dssync-bindrow b,.dssync-maprow b{font-size:12px;font-weight:600}',
       '.dssync-bindrow code{font-size:10.5px;color:var(--dssync-faint)}',
       '.dssync-mapkey{display:flex;flex-direction:column;gap:2px;min-width:150px;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--dssync-muted)}',
+      '.dssync-mapkey b{font:12px/1.35 var(--dssync-font,system-ui);font-weight:600;color:var(--dssync-text)}',
       '.dssync-mapkey span{font:10.5px var(--dssync-font,system-ui);color:var(--dssync-faint)}',
       '.dssync-maprow select{flex:1 1 220px;height:28px;border:1px solid var(--dssync-line-strong);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#1d1d1f);color:inherit;font:inherit;font-size:11px}',
       '.dssync-ws{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--dssync-line);border-radius:9px;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.025))}',
@@ -77,6 +78,27 @@ window.__ModuleLoader__.load({
       '.dssync-ws-main b{display:block;font-size:12.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dssync-ws-main span{display:block;color:var(--dssync-faint);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dssync-ws-count{color:var(--dssync-faint);font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums}',
+      '.dssync-sessionlist{display:flex;flex-direction:column;gap:8px}',
+      '.dssync-sessiongroup{border:1px solid var(--dssync-line);border-radius:9px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.02))}',
+      '.dssync-sessiongroup-head{display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid var(--dssync-line);background:rgba(255,255,255,.025)}',
+      '.dssync-sessiongroup-head b{min-width:0;color:var(--dssync-muted);font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dssync-sessiongroup-head span{min-width:0;color:var(--dssync-faint);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dssync-sessiongroup-head span:last-child{margin-left:auto;flex:0 0 auto;font-variant-numeric:tabular-nums}',
+      '.dssync-session{display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid rgba(255,255,255,.045);cursor:pointer;transition:opacity .15s,background .15s}',
+      '.dssync-session:last-child{border-bottom:0}',
+      '.dssync-session:hover{background:rgba(255,255,255,.025)}',
+      '.dssync-session.off{opacity:.5}',
+      '.dssync-session input{width:14px;height:14px;accent-color:var(--dssync-accent);flex:0 0 auto}',
+      '.dssync-session-check{display:none}',
+      '.dssync-session-main{min-width:0;flex:1 1 auto;display:flex;flex-direction:column;gap:1px}',
+      '.dssync-session-main b{font:10.5px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;font-weight:500;color:var(--dssync-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dssync-session-main span{color:var(--dssync-faint);font-size:10px}',
+      '.dssync-session-meta{flex:0 0 auto;display:flex;align-items:center;gap:7px;color:var(--dssync-faint);font-size:10px}',
+      '.dssync-session-status{padding:1px 6px;border-radius:999px;background:rgba(34,197,94,.12);color:#9ce8bc}',
+      '.dssync-session-status.off{background:rgba(240,182,74,.12);color:#f0c87a}',
+      '.dssync-maprow.suggested{border-color:rgba(240,182,74,.28);background:rgba(240,182,74,.035)}',
+      '.dssync-mapconfirm{display:flex;align-items:center;gap:8px;flex:1 1 100%;flex-wrap:wrap;padding-top:7px;border-top:1px dashed var(--dssync-line)}',
+      '.dssync-mapconfirm .dssync-note{flex:1 1 220px}',
       '.dssync-switch{position:relative;display:inline-flex;width:38px;height:22px;flex:0 0 auto}',
       '.dssync-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}',
       '.dssync-switch i{position:absolute;inset:0;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.3));transition:background .16s;pointer-events:none}',
@@ -331,8 +353,8 @@ window.__ModuleLoader__.load({
         return result
       }
 
-      async function testConnection() {
-        return fetchJson('/test', { method: 'POST', body: '{}' })
+      async function testConnection(serverUrl) {
+        return fetchJson('/test', { method: 'POST', body: JSON.stringify({ serverUrl: serverUrl }) })
       }
 
       async function correctCwd(sessionId, action) {
@@ -463,7 +485,13 @@ window.__ModuleLoader__.load({
         tail = status.sessions.some(function (view) {
           return view.sessionId === sessionId && view.direction === 'push' && view.tailOpen === true
         })
-        lag = status.sessions.some(function (view) {
+        // push 先于 pull 执行：本轮 push 看到 remote-ahead 后，同轮 pull 可能
+        // 已经把远端事件补齐。此时不应继续按“落后”拦截，否则会多挂一分钟。
+        var pulledThisRun = status.sessions.some(function (view) {
+          return view.sessionId === sessionId && view.direction === 'pull'
+            && view.status === 'pulled' && (view.applied || 0) > 0
+        })
+        lag = !pulledThisRun && status.sessions.some(function (view) {
           return view.sessionId === sessionId && view.direction === 'push' && view.status === 'remote-ahead'
         })
       }
@@ -494,7 +522,10 @@ window.__ModuleLoader__.load({
       return {
         serverUrl: source.serverUrl !== undefined ? source.serverUrl : (fallback.serverUrl || ''),
         deviceName: source.deviceName !== undefined ? source.deviceName : (fallback.deviceName || ''),
-        workspaceAllowlist: Array.isArray(source.workspaceAllowlist) ? source.workspaceAllowlist.slice() : ((fallback.workspaceAllowlist || []).slice()),
+        excludedSessionIds: Array.isArray(source.excludedSessionIds)
+          ? source.excludedSessionIds.slice()
+          : (Array.isArray(fallback.excludedSessionIds) ? fallback.excludedSessionIds.slice() : []),
+        autoBindSamePath: source.autoBindSamePath !== undefined ? source.autoBindSamePath === true : fallback.autoBindSamePath === true,
         autoSync: source.autoSync !== undefined ? source.autoSync !== false : fallback.autoSync !== false,
         intervalMs: source.intervalMs !== undefined ? source.intervalMs : (fallback.intervalMs || 60000),
         includeSubagents: source.includeSubagents !== undefined ? source.includeSubagents !== false : fallback.includeSubagents !== false,
@@ -521,41 +552,83 @@ window.__ModuleLoader__.load({
     function WorkspaceMappingRow(props) {
       var model = props.model
       var options = props.options
-      var choiceState = useState(options.length > 0 ? options[0].path : '')
+      var suggested = props.suggestedPath
+      var key = props.workspaceKey
+      var boundPaths = props.boundPaths || []
+      var usable = options.filter(function (item) {
+        return boundPaths.indexOf(item.path) === -1 || item.workspaceKey === key
+      })
+      var hasSuggestion = typeof suggested === 'string' && usable.some(function (item) { return item.path === suggested })
+      var choiceState = useState(hasSuggestion ? suggested : '')
       var choice = choiceState[0]
       var setChoice = choiceState[1]
       var busyState = useState(false)
       var busy = busyState[0]
       var setBusy = busyState[1]
-      var key = props.workspaceKey
-      return h('div', { className: 'dssync-maprow' },
-        h('div', { className: 'dssync-mapkey', title: key || '远端没有 workspaceKey' },
-          key === null ? '未知工作区' : key.slice(0, 12) + '…',
-          h('span', null, props.sessions + ' 个会话')),
-        options.length === 0
-          ? h('span', { className: 'dssync-note warn' }, '先选择一个同步工作区')
-          : h('select', {
+      var confirmState = useState(false)
+      var confirming = confirmState[0]
+      var setConfirming = confirmState[1]
+      var selected = usable.find(function (item) { return item.path === choice })
+      var selectedTitle = selected ? (selected.title || selected.path) : choice
+
+      function bindNow() {
+        if (key === null || choice === '') return
+        setBusy(true)
+        model.bindWorkspace(key, choice).then(function (result) {
+          if (!result || result.ok !== true) {
+            model.toast((result && result.error && result.error.message) || '绑定失败', true)
+            return
+          }
+          model.toast('已建立工作区映射；不能改绑')
+          setConfirming(false)
+        }).catch(function (error) { model.toast(errorText(error), true) })
+          .finally(function () { setBusy(false) })
+      }
+
+      var controls
+      if (usable.length === 0) {
+        controls = [h('span', { className: 'dssync-note warn' }, '没有可用的本地工作区；已绑定的不能改绑，先注册一个新工作区')]
+      } else if (confirming) {
+        controls = [
+          h('div', { className: 'dssync-mapconfirm', role: 'group', 'aria-label': '确认工作区映射' },
+            h('span', { className: 'dssync-note warn' },
+              '绑定不可撤销：把 ' + (props.label || (key === null ? '未知工作区' : key.slice(0, 12) + '…'))
+              + ' 永久绑定到「' + selectedTitle + '」？'),
+            h('button', {
+              className: 'dssync-pill', type: 'button', disabled: busy,
+              onClick: function () { setConfirming(false) },
+            }, '取消'),
+            h('button', {
+              className: 'dssync-pill primary', type: 'button', disabled: busy,
+              onClick: bindNow,
+            }, busy ? '绑定中…' : '确认绑定')),
+        ]
+      } else {
+        controls = [
+          h('select', {
             value: choice,
             onChange: function (event) { setChoice(event.target.value) },
-          }, options.map(function (item) {
+          }, h('option', { value: '' }, '选择本地工作区…'), usable.map(function (item) {
             return h('option', { value: item.path, key: item.path }, item.title || item.path)
           })),
-        h('button', {
-          className: 'dssync-pill', type: 'button',
-          disabled: busy || key === null || choice === '',
-          onClick: function () {
-            if (key === null || choice === '') return
-            setBusy(true)
-            model.bindWorkspace(key, choice).then(function (result) {
-              if (!result || result.ok !== true) {
-                model.toast((result && result.error && result.error.message) || '绑定失败', true)
-                return
-              }
-              model.toast('已建立工作区映射；不能改绑')
-            }).catch(function (error) { model.toast(errorText(error), true) })
-              .finally(function () { setBusy(false) })
-          },
-        }, busy ? '绑定中…' : '绑定'))
+          h('button', {
+            className: 'dssync-pill', type: 'button',
+            disabled: busy || key === null || choice === '',
+            onClick: function () {
+              if (key === null || choice === '') return
+              setConfirming(true)
+            },
+          }, '绑定…'),
+        ]
+      }
+
+      return h('div', { className: 'dssync-maprow' + (hasSuggestion ? ' suggested' : '') },
+        h('div', { className: 'dssync-mapkey', title: key || '远端没有 workspaceKey' },
+          h('b', null, props.label || (key === null ? '未知工作区' : key.slice(0, 12) + '…')),
+          h('span', null, (key === null ? '' : key.slice(0, 12) + '… · ')
+            + (props.sessions > 0 ? props.sessions + ' 个会话' : '远端工作区')
+            + (hasSuggestion ? ' · 同路径建议' : ''))),
+        ...controls)
     }
 
     function SyncSettingsPage(props) {
@@ -610,13 +683,13 @@ window.__ModuleLoader__.load({
         })
       }
 
-      function toggleWorkspace(path) {
+      function toggleSession(sessionId) {
         setFields(function (previous) {
-          var list = previous.workspaceAllowlist.slice()
-          var index = list.indexOf(path)
+          var list = previous.excludedSessionIds.slice()
+          var index = list.indexOf(sessionId)
           if (index >= 0) list.splice(index, 1)
-          else list.push(path)
-          return Object.assign({}, previous, { workspaceAllowlist: list })
+          else list.push(sessionId)
+          return Object.assign({}, previous, { excludedSessionIds: list })
         })
       }
 
@@ -628,7 +701,8 @@ window.__ModuleLoader__.load({
         var ops = [
           { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
           { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
-          { op: 'set', path: ['workspaceAllowlist'], value: fields.workspaceAllowlist.slice() },
+          { op: 'set', path: ['excludedSessionIds'], value: fields.excludedSessionIds.slice() },
+          { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
           { op: 'set', path: ['intervalMs'], value: Number(fields.intervalMs) || 60000 },
           { op: 'set', path: ['includeSubagents'], value: fields.includeSubagents === true },
@@ -667,21 +741,22 @@ window.__ModuleLoader__.load({
       }
 
       async function test() {
+        var serverUrl = String(fields.serverUrl || '').trim()
+        if (serverUrl === '') {
+          setMessage({ bad: true, text: '先填写服务端地址' })
+          return
+        }
         setBusy('test')
         setMessage(null)
         try {
-          // 测试按钮必须测当前输入：先落盘非敏感字段和本次填写的凭据，
-          // 再让宿主用它自己的配置发请求。
-          if (!await persistFields()) return
-          await new Promise(function (resolve) { setTimeout(resolve, 250) })
-          var result = await model.testConnection()
+          // 只测当前输入的服务端地址：不落盘、不带 token，也不必等配置热更新。
+          var result = await model.testConnection(serverUrl)
           if (result && result.ok) {
-            setMessage({ bad: false, text: '服务端可达，token 有效' })
-            model.toast('服务端可达，token 有效')
+            setMessage({ bad: false, text: '服务端可达' })
+            model.toast('服务端可达')
           } else {
             setMessage({ bad: true, text: (result && result.message) || '连接失败' })
           }
-          await model.refreshAll()
         } catch (error) {
           setMessage({ bad: true, text: errorText(error) })
         } finally {
@@ -713,15 +788,20 @@ window.__ModuleLoader__.load({
       }
       if (props.view === 'summary') {
         var setup = state.setup
-        var selected = setup ? setup.workspaceAllowlist.length : fields.workspaceAllowlist.length
-        return h('span', null, '自部署同步 · ' + (setup && setup.configured ? '已配置' : '未配置') + ' · ' + selected + ' 个工作区')
+        var summarySessions = state.workspaces && Array.isArray(state.workspaces.sessions) ? state.workspaces.sessions : []
+        var excludedNow = fields.excludedSessionIds || []
+        var selected = summarySessions.filter(function (session) { return excludedNow.indexOf(session.sessionId) < 0 }).length
+        return h('span', null, '自部署同步 · ' + (setup && setup.configured ? '已配置' : '未配置') + ' · ' + selected + ' 个根会话')
       }
 
       var workspaces = state.workspaces
       var candidates = workspaces ? workspaces.workspaces : []
-      var allPaths = candidates.map(function (item) { return item.path })
-      var allSelected = allPaths.length > 0 && allPaths.every(function (path) { return fields.workspaceAllowlist.indexOf(path) >= 0 })
-      var pullChoices = candidates.filter(function (item) { return fields.workspaceAllowlist.indexOf(item.path) >= 0 })
+      var sessions = workspaces && Array.isArray(workspaces.sessions) ? workspaces.sessions : []
+      var excludedIds = fields.excludedSessionIds || []
+      var includedCount = sessions.filter(function (session) { return excludedIds.indexOf(session.sessionId) < 0 }).length
+      var sessionGroups = candidates.filter(function (item) {
+        return sessions.some(function (session) { return session.workspacePath === item.path })
+      })
       var setupInfo = state.setup
       var tokenConfigured = setupInfo ? setupInfo.hasToken : false
       var passConfigured = setupInfo ? setupInfo.hasPassphrase : false
@@ -771,29 +851,41 @@ window.__ModuleLoader__.load({
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
             h('h3', null, '同步范围'),
-            h('span', null, '根会话 + 子代理闭包；空 = 暂不同步')),
+            h('span', null, '按根会话选择；子代理跟随')),
           h('div', { className: 'dssync-btnrow' },
             h('button', {
-              className: 'dssync-pill', type: 'button', disabled: disabled || candidates.length === 0,
-              onClick: function () { set('workspaceAllowlist', allSelected ? [] : allPaths.slice()) },
-            }, allSelected ? '清空' : '全选'),
-            h('span', { className: 'dssync-note' }, '已选 ' + fields.workspaceAllowlist.length + ' 个工作区'),
+              className: 'dssync-pill', type: 'button', disabled: disabled || sessions.length === 0,
+              onClick: function () {
+                set('excludedSessionIds', includedCount === sessions.length ? sessions.map(function (session) { return session.sessionId }) : [])
+              },
+            }, includedCount === sessions.length && sessions.length > 0 ? '清空会话' : '全选会话'),
+            h('span', { className: 'dssync-note' }, '同步 ' + includedCount + ' / ' + sessions.length + ' 个根会话'),
             h('span', { className: 'spacer' }),
-            workspaces === null ? h('span', { className: 'dssync-note' }, '读取工作区…') : null),
-          candidates.length === 0 && workspaces !== null
-            ? h('div', { className: 'dssync-note warn' }, '还没有可同步的工作区；先打开一个项目。')
-            : h('div', { className: 'dssync-wslist' }, candidates.map(function (item) {
-              var selected = fields.workspaceAllowlist.indexOf(item.path) >= 0
-              return h('label', { className: 'dssync-ws' + (selected ? ' on' : ''), key: item.path },
-                h('input', { type: 'checkbox', checked: selected, onChange: function () { toggleWorkspace(item.path) } }),
-                h('span', { className: 'dssync-ws-main' },
-                  h('b', null, item.title || item.path),
-                  h('span', null, item.path)),
-                h('span', { className: 'dssync-ws-count' }, item.rootSessions + ' 个会话 · ' + item.subagentSessions + ' 个子代理'))
+            workspaces === null ? h('span', { className: 'dssync-note' }, '读取会话…') : null),
+          sessions.length === 0 && workspaces !== null
+            ? h('div', { className: 'dssync-note warn' }, '还没有可同步的根会话。')
+            : h('div', { className: 'dssync-sessionlist' }, sessionGroups.map(function (workspace) {
+              var workspaceSessions = sessions.filter(function (session) { return session.workspacePath === workspace.path })
+              var workspaceSelected = workspaceSessions.filter(function (session) { return excludedIds.indexOf(session.sessionId) < 0 }).length
+              return h('div', { className: 'dssync-sessiongroup', key: workspace.path },
+                h('div', { className: 'dssync-sessiongroup-head' },
+                  h('b', null, workspace.title || workspace.path),
+                  h('span', null, workspace.path),
+                  h('span', null, workspaceSelected + ' / ' + workspaceSessions.length)),
+                workspaceSessions.map(function (session) {
+                  var excluded = excludedIds.indexOf(session.sessionId) >= 0
+                  return h('label', { className: 'dssync-session' + (excluded ? ' off' : ''), key: session.sessionId },
+                    h('input', { type: 'checkbox', checked: !excluded, onChange: function () { toggleSession(session.sessionId) } }),
+                    h('span', { className: 'dssync-session-check' }, '✓'),
+                    h('span', { className: 'dssync-session-main' },
+                      h('b', null, session.sessionId),
+                      h('span', null, new Date(session.createdAt).toLocaleString())),
+                    h('span', { className: 'dssync-session-meta' },
+                      h('span', null, session.subagentSessions + ' 个子代理'),
+                      h('span', { className: 'dssync-session-status' + (excluded ? ' off' : '') }, excluded ? '已排除' : '同步')))
+                }))
             })),
-          fields.workspaceAllowlist.length === 0
-            ? h('div', { className: 'dssync-note warn' }, '没有选择任何工作区时，插件不会推送或拉取。')
-            : null),
+          h('div', { className: 'dssync-note' }, '选择只在本设备生效；取消勾选不会删除远端历史。')),
 
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
@@ -813,15 +905,29 @@ window.__ModuleLoader__.load({
               : h('div', { className: 'dssync-note' }, '还没有本机映射。'),
           workspaces !== null && (workspaces.unmapped || []).length > 0
             ? h('div', { className: 'dssync-maplist' }, (workspaces.unmapped || []).map(function (item) {
+              var suggested = item.workspaceKey === null ? undefined : candidates.find(function (candidate) { return candidate.workspaceKey === item.workspaceKey })
               return h(WorkspaceMappingRow, {
                 key: String(item.workspaceKey) + ':' + item.sessions,
                 model: model,
                 workspaceKey: item.workspaceKey,
+                label: item.label,
                 sessions: item.sessions,
-                options: pullChoices,
+                suggestedPath: suggested ? suggested.path : undefined,
+                options: candidates,
+                boundPaths: (workspaces.bindings || []).map(function (binding) { return binding.localPath }),
               })
             }))
-            : h('div', { className: 'dssync-note' }, '当前没有未映射的远端工作区。')),
+            : h('div', { className: 'dssync-note' }, '当前没有未映射的远端工作区。'),
+          h('div', { className: 'dssync-row' },
+            h('div', { className: 'dssync-rowtext' },
+              h('b', null, '同路径自动绑定'),
+              h('span', null, '默认关闭；开启后同名工作区匹配即建立一次性绑定')),
+            h(Switch, {
+              checked: fields.autoBindSamePath === true,
+              disabled: disabled,
+              label: '同路径自动绑定',
+              onChange: function (value) { set('autoBindSamePath', value) },
+            }))),
 
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
@@ -929,13 +1035,13 @@ window.__ModuleLoader__.load({
         })
       }
 
-      function toggleWorkspace(path) {
+      function toggleSession(sessionId) {
         setFields(function (previous) {
-          var list = previous.workspaceAllowlist.slice()
-          var index = list.indexOf(path)
+          var list = previous.excludedSessionIds.slice()
+          var index = list.indexOf(sessionId)
           if (index >= 0) list.splice(index, 1)
-          else list.push(path)
-          return Object.assign({}, previous, { workspaceAllowlist: list })
+          else list.push(sessionId)
+          return Object.assign({}, previous, { excludedSessionIds: list })
         })
       }
 
@@ -943,7 +1049,8 @@ window.__ModuleLoader__.load({
         var ops = [
           { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
           { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
-          { op: 'set', path: ['workspaceAllowlist'], value: fields.workspaceAllowlist.slice() },
+          { op: 'set', path: ['excludedSessionIds'], value: fields.excludedSessionIds.slice() },
+          { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
           { op: 'set', path: ['intervalMs'], value: Number(fields.intervalMs) || 60000 },
           { op: 'set', path: ['includeSubagents'], value: fields.includeSubagents === true },
@@ -953,15 +1060,18 @@ window.__ModuleLoader__.load({
       }
 
       async function test() {
+        var serverUrl = String(fields.serverUrl || '').trim()
+        if (serverUrl === '') {
+          setMessage({ bad: true, text: '先填写服务端地址' })
+          return
+        }
         setBusy('test')
         setMessage(null)
         try {
-          await saveFields()
-          await new Promise(function (resolve) { setTimeout(resolve, 250) })
-          var result = await model.testConnection()
+          // 首启第 1 步还不该有 token：直接用当前输入测可达性，不落盘也不看配置。
+          var result = await model.testConnection(serverUrl)
           if (result && result.ok) {
-            setMessage({ bad: false, text: '服务端可达，token 有效' })
-            await model.refreshSetup()
+            setMessage({ bad: false, text: '服务端可达' })
           } else {
             setMessage({ bad: true, text: (result && result.message) || '连接失败' })
           }
@@ -1014,20 +1124,21 @@ window.__ModuleLoader__.load({
           return
         }
         if (step === 2) {
-          if (fields.workspaceAllowlist.length === 0) {
-            setMessage({ bad: true, text: '至少选择一个工作区；空列表不会同步' })
-            return
-          }
           setBusy('save')
           try {
             await saveFields()
             await model.refreshSetup()
+            await model.refreshWorkspaces()
             setStep(3)
           } catch (error) {
             setMessage({ bad: true, text: errorText(error) })
           } finally {
             setBusy('')
           }
+          return
+        }
+        if (step === 3) {
+          setStep(4)
           return
         }
         setBusy('finish')
@@ -1049,7 +1160,10 @@ window.__ModuleLoader__.load({
 
       var workspaces = state.workspaces
       var candidates = workspaces ? workspaces.workspaces : []
-      var steps = ['连接', '凭据', '范围', '完成']
+      var sessions = workspaces && Array.isArray(workspaces.sessions) ? workspaces.sessions : []
+      var excludedIds = fields.excludedSessionIds || []
+      var includedCount = sessions.filter(function (session) { return excludedIds.indexOf(session.sessionId) < 0 }).length
+      var steps = ['连接', '凭据', '会话', '映射', '完成']
       var body
       if (step === 0) {
         body = [
@@ -1071,25 +1185,60 @@ window.__ModuleLoader__.load({
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else if (step === 2) {
-        var allPaths = candidates.map(function (item) { return item.path })
-        var selected = fields.workspaceAllowlist
         body = [
           h('div', { className: 'dssync-btnrow' },
             h('button', {
               className: 'dssync-pill', type: 'button',
-              onClick: function () { set('workspaceAllowlist', selected.length === allPaths.length ? [] : allPaths.slice()) },
-            }, selected.length === allPaths.length && allPaths.length > 0 ? '清空' : '全选'),
-            h('span', { className: 'dssync-note' }, '已选 ' + selected.length + ' 个工作区')),
-          candidates.length === 0
-            ? h('div', { className: 'dssync-note warn' }, '还没有可同步的工作区；可以稍后在 Plugins 设置里选。')
-            : h('div', { className: 'dssync-wslist' }, candidates.map(function (item) {
-              var on = selected.indexOf(item.path) >= 0
-              return h('label', { className: 'dssync-ws' + (on ? ' on' : ''), key: item.path },
-                h('input', { type: 'checkbox', checked: on, onChange: function () { toggleWorkspace(item.path) } }),
-                h('span', { className: 'dssync-ws-main' }, h('b', null, item.title || item.path), h('span', null, item.path)),
-                h('span', { className: 'dssync-ws-count' }, item.rootSessions + ' 会话 · ' + item.subagentSessions + ' 子代理'))
+              onClick: function () {
+                set('excludedSessionIds', includedCount === sessions.length ? sessions.map(function (session) { return session.sessionId }) : [])
+              },
+            }, includedCount === sessions.length && sessions.length > 0 ? '清空会话' : '全选会话'),
+            h('span', { className: 'dssync-note' }, '同步 ' + includedCount + ' / ' + sessions.length + ' 个根会话')),
+          sessions.length === 0
+            ? h('div', { className: 'dssync-note warn' }, '还没有可同步的根会话；可以稍后在设置里处理。')
+            : h('div', { className: 'dssync-sessionlist' }, candidates.map(function (workspace) {
+              var workspaceSessions = sessions.filter(function (session) { return session.workspacePath === workspace.path })
+              if (workspaceSessions.length === 0) return null
+              var workspaceSelected = workspaceSessions.filter(function (session) { return excludedIds.indexOf(session.sessionId) < 0 }).length
+              return h('div', { className: 'dssync-sessiongroup', key: workspace.path },
+                h('div', { className: 'dssync-sessiongroup-head' },
+                  h('b', null, workspace.title || workspace.path),
+                  h('span', null, workspace.path),
+                  h('span', null, workspaceSelected + ' / ' + workspaceSessions.length)),
+                workspaceSessions.map(function (session) {
+                  var excluded = excludedIds.indexOf(session.sessionId) >= 0
+                  return h('label', { className: 'dssync-session' + (excluded ? ' off' : ''), key: session.sessionId },
+                    h('input', { type: 'checkbox', checked: !excluded, onChange: function () { toggleSession(session.sessionId) } }),
+                    h('span', { className: 'dssync-session-main' },
+                      h('b', null, session.sessionId),
+                      h('span', null, new Date(session.createdAt).toLocaleString())),
+                    h('span', { className: 'dssync-session-meta' },
+                      h('span', null, session.subagentSessions + ' 个子代理'),
+                      h('span', { className: 'dssync-session-status' + (excluded ? ' off' : '') }, excluded ? '已排除' : '同步')))
+                }))
             })),
-          h('div', { className: 'dssync-note warn' }, '没有选择工作区时不会同步。'),
+          h('div', { className: 'dssync-note' }, '选择只在本设备生效；子代理跟随根会话。'),
+          message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
+        ]
+      } else if (step === 3) {
+        var unmapped = workspaces && Array.isArray(workspaces.unmapped) ? workspaces.unmapped : []
+        body = [
+          h('div', { className: 'dssync-note' }, '远端工作区按 workspaceKey 一次性绑定；未映射的会话不会写入本机。'),
+          unmapped.length === 0
+            ? h('div', { className: 'dssync-note' }, '当前没有待映射的远端工作区，可以继续。')
+            : h('div', { className: 'dssync-maplist' }, unmapped.map(function (item) {
+              var suggested = item.workspaceKey === null ? undefined : candidates.find(function (candidate) { return candidate.workspaceKey === item.workspaceKey })
+              return h(WorkspaceMappingRow, {
+                key: String(item.workspaceKey) + ':' + item.sessions,
+                model: model,
+                workspaceKey: item.workspaceKey,
+                label: item.label,
+                sessions: item.sessions,
+                suggestedPath: suggested ? suggested.path : undefined,
+                options: candidates,
+                boundPaths: (workspaces.bindings || []).map(function (binding) { return binding.localPath }),
+              })
+            })),
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else {
@@ -1118,7 +1267,7 @@ window.__ModuleLoader__.load({
             h('button', { className: 'dssync-pill', type: 'button', onClick: function () { setDismissed(); setHidden(true) } }, '稍后'),
             h('span', { className: 'spacer' }),
             h('button', { className: 'dssync-pill primary', type: 'button', disabled: busy !== '', onClick: next },
-              busy === 'finish' ? '同步中…' : step === 3 ? '开始同步' : '下一步')),
+              busy === 'finish' ? '同步中…' : step === 4 ? '开始同步' : '下一步')),
         ),
         h(Toast, { model: model }))
     }
@@ -1186,6 +1335,18 @@ window.__ModuleLoader__.load({
       var state = useModel(model)
       var setup = state.setup
       var status = state.status
+
+      function shortSessionId(sessionId) {
+        var value = String(sessionId || '')
+        if (value.indexOf('session-') === 0) value = value.slice('session-'.length)
+        return value.length > 8 ? value.slice(0, 8) : value
+      }
+
+      function sessionLabel(sessionId) {
+        var title = props.titleOf ? String(props.titleOf(sessionId) || '') : ''
+        var shortId = shortSessionId(sessionId)
+        return title === '' ? shortId : title + ' · ' + shortId
+      }
       var visibleState = useState(false)
       var visible = visibleState[0]
       var setVisible = visibleState[1]
@@ -1195,6 +1356,9 @@ window.__ModuleLoader__.load({
       var pinnedState = useState(false)
       var pinned = pinnedState[0]
       var setPinned = pinnedState[1]
+      var syncingState = useState(false)
+      var syncing = syncingState[0]
+      var setSyncing = syncingState[1]
       var blurTimer = useRef(null)
       var hideTimer = useRef(null)
       var touched = useRef(false)
@@ -1285,8 +1449,12 @@ window.__ModuleLoader__.load({
       var segments = sessions.map(function (session, index) {
         var bad = session.status === 'error'
         var active = session.status === 'pulling' || session.status === 'pushing' || (running && !bad && session.status !== 'pulled' && session.status !== 'up-to-date')
-        var pct = bad ? 100 : session.status === 'pulled' || session.status === 'up-to-date' ? 100 : active ? 55 : 0
-        return h('span', { className: 'dssync-seg' + (bad ? ' bad' : active ? ' run' : pct >= 100 ? ' done' : ''), key: session.sessionId + ':' + session.direction + ':' + index, title: (session.direction === 'push' ? '推送 ' : '拉取 ') + session.sessionId },
+        var terminal = session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed'
+          || session.status === 'local-active' || session.status === 'local-ahead'
+          || session.status === 'excluded' || session.status === 'tombstone' || session.status === 'skipped'
+        var attention = session.status === 'remote-ahead' || session.status === 'lease-held' || session.status === 'partial'
+        var pct = bad ? 100 : terminal ? 100 : active || attention ? 55 : 0
+        return h('span', { className: 'dssync-seg' + (bad ? ' bad' : active || attention ? ' run' : pct >= 100 ? ' done' : ''), key: session.sessionId + ':' + session.direction + ':' + index, title: (session.direction === 'push' ? '推送 ' : '拉取 ') + sessionLabel(session.sessionId) },
           h('i', { style: { width: pct + '%' } }))
       })
       if (segments.length === 0) {
@@ -1334,6 +1502,22 @@ window.__ModuleLoader__.load({
       function onHead() {
         if (!visible) { expand(true); return }
         setOpen(function (value) { return !value })
+      }
+
+      function triggerSync() {
+        if (syncing) return
+        setSyncing(true)
+        setOpen(true)
+        setVisible(true)
+        model.syncNow().then(function (result) {
+          if (result && result.ok === true) model.toast('同步已触发')
+          else if (result && result.code === 'already-running') model.toast('同步正在进行')
+          else model.toast((result && (result.message || result.code)) || '同步未执行', true)
+        }).catch(function (error) {
+          model.toast(errorText(error), true)
+        }).finally(function () {
+          setSyncing(false)
+        })
       }
 
       function onListToggle(event) {
@@ -1469,11 +1653,20 @@ window.__ModuleLoader__.load({
         var tag = isBlocked ? '分叉'
           : isResolved ? decisionTag
             : session.status === 'error' ? '失败'
-              : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
-                : session.status === 'pulling' || session.status === 'pushing' || running ? '同步中' : '等待'
+              : session.status === 'excluded' ? '已排除'
+                : session.status === 'tombstone' ? '已删除'
+                  : session.status === 'local-active' ? '已加载'
+                    : session.status === 'local-ahead' ? '本地领先'
+                      : session.status === 'remote-ahead' ? '远端领先'
+                        : session.status === 'lease-held' ? '租约占用'
+                          : session.status === 'skipped' ? '已跳过'
+                            : session.status === 'partial' ? '部分'
+                              : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
+                                : session.status === 'pulling' || session.status === 'pushing' || running ? '同步中' : '等待'
+        var attention = tag === '远端领先' || tag === '租约占用' || tag === '已加载' || tag === '本地领先'
         return h('div', { className: 'dssync-rowline', key: session.sessionId + ':' + session.direction + ':' + index },
-          h('span', { className: 'dssync-st ' + (isBlocked || session.status === 'error' ? 'bad' : isResolved ? 'run' : tag === '已完成' ? 'ok' : tag === '同步中' ? 'run' : '') }),
-          h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + session.sessionId),
+          h('span', { className: 'dssync-st ' + (isBlocked || session.status === 'error' ? 'bad' : isResolved ? 'run' : tag === '已完成' ? 'ok' : tag === '同步中' || attention ? 'run' : '') }),
+          h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + sessionLabel(session.sessionId)),
           h('span', { className: 'tag' }, tag),
           isBlocked ? h('span', { className: 'dssync-warn', title: '本地与远端历史已分叉，已阻止继续写入' }, '已阻止') : null,
           isBlocked ? blockedActions(session.sessionId, blockedEntry) : null,
@@ -1490,7 +1683,7 @@ window.__ModuleLoader__.load({
       }).map(function (id) {
         return h('div', { className: 'dssync-rowline', key: id + ':pending' },
           h('span', { className: 'dssync-st run' }),
-          h('span', { className: 'name' }, '↓ ' + id),
+          h('span', { className: 'name' }, '↓ ' + sessionLabel(id)),
           h('span', { className: 'dssync-warn' }, 'cwd 外'),
           cwdActions(id))
       })
@@ -1499,7 +1692,7 @@ window.__ModuleLoader__.load({
       }).map(function (entry) {
         return h('div', { className: 'dssync-rowline', key: entry.sessionId + ':blocked' },
           h('span', { className: 'dssync-st bad' }),
-          h('span', { className: 'name' }, '↓ ' + entry.sessionId),
+          h('span', { className: 'name' }, '↓ ' + sessionLabel(entry.sessionId)),
           h('span', { className: 'dssync-warn', title: entry.message || '本地与远端历史已分叉' }, '已阻止'),
           blockedActions(entry.sessionId, entry))
       })
@@ -1509,7 +1702,7 @@ window.__ModuleLoader__.load({
         var label = entry.action === 'ignore' ? '已忽略' : '已强行写入'
         return h('div', { className: 'dssync-rowline', key: entry.sessionId + ':decision' },
           h('span', { className: 'dssync-st run' }),
-          h('span', { className: 'name' }, '↓ ' + entry.sessionId),
+          h('span', { className: 'name' }, '↓ ' + sessionLabel(entry.sessionId)),
           h('span', { className: 'dssync-warn', title: entry.message }, label),
           decisionActions(entry.sessionId, entry))
       })
@@ -1547,11 +1740,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dssync-foot' },
             h('span', null, running ? '正在同步…' : failed ? '已暂停' : blocked.length > 0 ? '有分叉待处理' : cwdPending.length > 0 ? '有 cwd 待处理' : decisions.length > 0 ? '有已忽略会话' : '全部完成'),
             h('span', { className: 'spacer' }),
-            h('button', { className: 'dssync-mini', type: 'button', onClick: function () {
-              model.syncNow().then(function (result) {
-                if (!result || result.ok !== true) model.toast((result && (result.message || result.code)) || '同步未执行', true)
-              }).catch(function (error) { model.toast(errorText(error), true) })
-            } }, '立即同步'),
+            h('button', { className: 'dssync-mini', type: 'button', disabled: syncing || running, 'aria-busy': syncing, onClick: triggerSync }, syncing || running ? '同步中…' : '立即同步'),
             h('button', { className: 'dssync-mini', type: 'button', onClick: props.openSettings }, '设置'))))
 
       var bubble = h('div', { className: 'dssync-bubble' + openClass + collapsedClass + badClass, 'aria-live': 'polite' },
@@ -1612,6 +1801,17 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       var model = createModel()
+      /** 会话标题来自客户端 session list；取不到时气泡退回短 ID。 */
+      function sessionTitleOf(sessionId) {
+        try {
+          if (!ctx.sessions || !ctx.sessions.list || typeof ctx.sessions.list.getSnapshot !== 'function') return ''
+          var summary = ctx.sessions.list.getSnapshot().byId[String(sessionId)]
+          if (summary === undefined || summary === null) return ''
+          return String(summary.displayTitle || summary.title || '')
+        } catch (error) {
+          return ''
+        }
+      }
       var style = document.createElement('style')
       style.dataset.plugin = 'dsh-session-cloudsync'
       style.textContent = CSS
@@ -1737,7 +1937,7 @@ window.__ModuleLoader__.load({
         }, Onboarding)
         yield ctx.slots.register({
           name: 'shell.overlay', id: 'dsh-session-cloudsync-bubble', order: 30,
-          inject: function () { return { model: model, openSettings: openSettings } },
+          inject: function () { return { model: model, openSettings: openSettings, titleOf: sessionTitleOf } },
         }, Bubble)
         yield ctx.slots.register({
           name: 'shell.overlay', id: 'dsh-session-cloudsync-replace', order: 40,
@@ -1746,6 +1946,6 @@ window.__ModuleLoader__.load({
       })
     }
 
-    return { inject: ['slots'], apply: apply }
+    return { inject: ['slots', 'sessions'], apply: apply }
   },
 })

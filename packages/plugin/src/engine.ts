@@ -30,7 +30,7 @@ import {
   type SealedFrame,
   type SealedFrameRef,
 } from '../../shared/src/sealed-frame.ts'
-import { pathAllowed, planSessionClosure } from './closure.ts'
+import { planSessionClosure } from './closure.ts'
 
 /** 服务端会话头/快照里本引擎需要的字段。 */
 export interface SnapshotLike {
@@ -102,8 +102,8 @@ export interface EngineConfig {
   readonly salt?: string
   /** 是否同步子代理会话，默认 true。 */
   readonly includeSubagents?: boolean
-  /** 允许同步的工作区路径；空数组表示不采集任何会话。 */
-  readonly workspaceAllowlist?: readonly string[]
+  /** 本地排除的根会话 id；子代理跟随根。 */
+  readonly excludedSessionIds?: readonly string[]
   /** 单批事件上限，默认 50。 */
   readonly batchEvents?: number
   /** 单批规范 JSON 字节上限，默认 256 KiB。 */
@@ -273,6 +273,22 @@ export interface PendingApply {
   readonly at: number
 }
 
+/** 未映射的远端会话；持久化后即使游标越过也能继续提示和回填。 */
+export interface UnmappedSessionState {
+  /** 远端会话 id。 */
+  readonly sessionId: string
+  /** 远端 manifest 的 workspaceKey。 */
+  readonly workspaceKey: string
+  /** 该会话在服务端 cursor 里的 revision；回填从这里之前重放。 */
+  readonly revision: number
+  /** 会话创建时间（若有）。 */
+  readonly createdAt?: number
+  /** 会话格式代际（若有）。 */
+  readonly formatVersion?: number
+  /** 第一次记录的时间。 */
+  readonly at: number
+}
+
 /** 拉取游标。 */
 export interface PullState {
   /** 已处理到的服务端 revision；0 表示从头扫描。 */
@@ -285,12 +301,14 @@ export interface PullState {
   readonly blocked?: readonly BlockedSessionState[]
   /** 用户已经选择忽略或强行写入的会话；抑制重复阻塞。 */
   readonly blockedDecisions?: readonly BlockedDecision[]
+  /** 等待映射的远端会话；映射完成后用于回填。 */
+  readonly unmapped?: readonly UnmappedSessionState[]
 }
 
 /** 单个会话的拉取结果。 */
 export interface PullSessionReport {
   readonly sessionId: string
-  readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'local-ahead' | 'tombstone' | 'unmapped' | 'error'
+  readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'local-ahead' | 'tombstone' | 'unmapped' | 'excluded' | 'error'
   readonly applied?: number
   readonly error?: string
   readonly kind?: SyncErrorKind
@@ -301,6 +319,8 @@ export interface PullSessionReport {
   /** 会话生命周期，用于把阻塞决定绑定到具体一代会话。 */
   readonly createdAt?: number
   readonly formatVersion?: number
+  /** 该会话在 cursor 里的 revision；仅未映射会话回填使用。 */
+  readonly revision?: number
 }
 
 /** 一次拉取的总结果。 */
@@ -805,7 +825,7 @@ async function syncSession<Session>(
   base: string,
   sessionKey: Buffer,
   snapshot: SnapshotLike,
-  workspaceKey: string | undefined,
+  isRoot: boolean,
 ): Promise<SessionSyncReport> {
   const header = snapshot.header
   const sessionId = String(header.id)
@@ -824,11 +844,21 @@ async function syncSession<Session>(
   }
 
   const meta = headerMetaOf(handle.header, handle.inheritedEventCount)
+  const cwd = handle.header.cwd ?? ''
   const localLast = events.length === 0 ? -1 : events[events.length - 1]!.seq
   const tailOpen = deps.isTailOpen?.(events) ?? false
-  const cwdNonPortable = cwdNonPortableOf(events, handle.header.cwd ?? '')
+  const cwdNonPortable = cwdNonPortableOf(events, cwd)
   let safeThroughSeq = safeThroughSeqOf(events, tailOpen)
   const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
+
+  // 已经有远端 manifest 的会话沿用远端 key：映射到本地路径后，旧会话不会
+  // 因为路径的推送身份变化而被判成 diverged；新会话才使用本地解析的 key。
+  const workspaceKey = isRoot
+    ? (remote?.workspaceKey ?? deps.workspaceKeyOf(sessionId, cwd))
+    : undefined
+  if (isRoot && workspaceKey === undefined) {
+    return { sessionId, status: 'skipped', error: 'workspaceKey 未解析（unmapped）', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
+  }
 
   if (remote !== undefined && remote.deletedAt !== undefined) {
     return { sessionId, status: 'skipped', error: '远端已有墓碑', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
@@ -909,10 +939,6 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   if (config.serverUrl.trim() === '' || config.token.trim() === '' || config.passphrase === '') {
     return { configured: false, reason: 'serverUrl / token / passphrase 未配置全', sessions: [] }
   }
-  const allowlist = config.workspaceAllowlist ?? []
-  if (allowlist.length === 0) {
-    return { configured: false, reason: 'workspaceAllowlist 未配置', sessions: [] }
-  }
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [] }
   const salt = resolveSalt(config, base)
@@ -921,34 +947,20 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   const snapshots = await deps.persistence.list()
   const plan = planSessionClosure(snapshots, {
     includeSubagents: config.includeSubagents !== false,
-    workspaceAllowlist: allowlist,
+    excludedSessionIds: config.excludedSessionIds ?? [],
   })
   const sessions: SessionSyncReport[] = []
-  const rootKeys = new Map<string, string | undefined>()
 
   for (const skipped of plan.skipped) {
     sessions.push({ sessionId: String(skipped.snapshot.header.id), status: 'skipped', error: skipped.reason })
   }
 
   for (const entry of plan.planned) {
-    if (entry.depth === 0) {
-      rootKeys.set(entry.rootId, deps.workspaceKeyOf(entry.rootId, String(entry.snapshot.header.cwd ?? '')))
-    }
-  }
-
-  for (const entry of plan.planned) {
     const sessionId = String(entry.snapshot.header.id)
     notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', progress: 0 })
     try {
-      const rootKey = rootKeys.get(entry.rootId)
-      const workspaceKey = entry.depth === 0 ? rootKey : undefined
-      if (rootKey === undefined) {
-        sessions.push({ sessionId, status: 'skipped', error: 'workspaceKey 未解析（unmapped）' })
-        notifyProgress(deps, { sessionId, direction: 'push', phase: 'error', progress: 0, error: 'workspaceKey 未解析（unmapped）' })
-        continue
-      }
       const sessionKey = sessionKeyOf(master, sessionId)
-      const report = await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot, workspaceKey)
+      const report = await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot, entry.depth === 0)
       sessions.push(report)
       notifyProgress(deps, {
         sessionId, direction: 'push',
@@ -977,35 +989,63 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
 
 /** 连接测试结果。 */
 export interface SyncTestResult {
-  /** 服务端可达且 token 被接受。 */
+  /** 服务端可达且 `/v1/health` 响应正常。 */
   readonly ok: boolean
   /** 失败分类。 */
   readonly kind?: SyncErrorKind
   /** 可读说明。 */
   readonly message?: string
+  /** 成功时服务端报告的版本。 */
+  readonly version?: string
+  /** 成功时服务端报告的协议版本。 */
+  readonly protocol?: number
 }
 
 /**
- * 测试服务端地址与 token；不校验口令，也不读写会话。
- * @param config - 同步配置。
+ * 测试服务端地址是否可达；只请求公开的 `/v1/health`。
+ *
+ * 不读取已保存的配置，也不携带设备 token：首启向导第 1 步只关心“地址通不通”，
+ * 凭据是否有效由后续同步阶段的认证错误来暴露。
+ *
+ * @param serverUrl - 待测试的服务端地址（来自当前输入，而不是配置文件）。
  * @param fetchImpl - fetch 实现（测试可替换）。
+ * @param requestTimeoutMs - 超时；缺省用请求默认值。
  * @returns 测试结果；失败不抛异常。
  */
 export async function testConnection(
-  config: EngineConfig,
+  serverUrl: string,
   fetchImpl: typeof fetch = fetch,
+  requestTimeoutMs?: number,
 ): Promise<SyncTestResult> {
-  if (config.serverUrl.trim() === '') return { ok: false, kind: 'config', message: 'serverUrl 未配置' }
-  if (config.token.trim() === '') return { ok: false, kind: 'config', message: 'token 未配置' }
-  const base = normalizeBase(config.serverUrl)
-  if (base === '') return { ok: false, kind: 'config', message: 'serverUrl 非法' }
-  const timedFetch = withRequestTimeout(fetchImpl, config.requestTimeoutMs)
+  const base = normalizeBase(serverUrl)
+  if (base === '') return { ok: false, kind: 'config', message: 'serverUrl 未配置' }
+  let target: URL
   try {
-    const { status, body } = await requestJson(timedFetch, base, '/v1/cursor?since=0&limit=1', config.token)
-    if (status === 200) return { ok: true }
-    const error = errorOf(body)
-    const classified = classifySyncError(new SyncHttpError(error.message, status, error.code))
-    return { ok: false, kind: classified.kind, message: classified.message }
+    target = new URL(base)
+  } catch {
+    return { ok: false, kind: 'config', message: 'serverUrl 非法' }
+  }
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+    return { ok: false, kind: 'config', message: 'serverUrl 必须是 http(s) 地址' }
+  }
+  const timedFetch = withRequestTimeout(fetchImpl, requestTimeoutMs)
+  try {
+    const response = await timedFetch(`${base}/v1/health`, { headers: { accept: 'application/json' } })
+    if (response.status === 200) {
+      const body = await response.json().catch(() => undefined) as Record<string, unknown> | undefined
+      if (body === undefined || body['ok'] !== true) {
+        return { ok: false, kind: 'server', message: '服务端 /v1/health 响应不合法' }
+      }
+      return {
+        ok: true,
+        ...typeof body['version'] === 'string' ? { version: body['version'] } : {},
+        ...typeof body['protocol'] === 'number' ? { protocol: body['protocol'] } : {},
+      }
+    }
+    if (response.status === 404) {
+      return { ok: false, kind: 'not-found', message: '服务端没有 /v1/health，确认地址指向同步服务端' }
+    }
+    return { ok: false, kind: 'server', message: `服务端返回 HTTP ${response.status}` }
   } catch (error: unknown) {
     const classified = classifySyncError(error)
     return { ok: false, kind: classified.kind, message: classified.message }
@@ -1192,6 +1232,40 @@ async function resolveWorkspaceKey(
 }
 
 /**
+ * 沿父链找到会话所属的根会话 id。
+ * @param loaded - 当前会话。
+ * @param fetchImpl - fetch。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param master - 主密钥。
+ * @param lookup - 本轮已读会话索引。
+ * @returns 根会话 id；无法解析父链时返回当前会话 id。
+ */
+async function resolveRootSessionId(
+  loaded: LoadedRemote,
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  master: Buffer,
+  lookup: (sessionId: string) => LoadedRemote | undefined,
+): Promise<string> {
+  let current = loaded
+  const seen = new Set<string>()
+  while (current.meta?.origin === 'subagent') {
+    const parentId = current.meta.parentSession
+    if (parentId === undefined || seen.has(parentId)) return current.remote.sessionId
+    seen.add(parentId)
+    const cached = lookup(parentId)
+    try {
+      current = cached ?? await loadRemoteHeader(fetchImpl, base, token, master, parentId)
+    } catch {
+      return current.remote.sessionId
+    }
+  }
+  return current.remote.sessionId
+}
+
+/**
  * 拉取一个会话。
  * @param deps - 拉取依赖。
  * @param fetchImpl - fetch 实现。
@@ -1224,11 +1298,12 @@ async function pullSession<Session>(
   if (!Number.isSafeInteger(safe) || safe < -1 || safe > remote.lastSeq) throw new Error('manifest 的 safeThroughSeq 非法')
 
   const live = deps.sessions.get(sessionId)
-  if (live !== undefined) return { sessionId, status: 'local-active' }
-
   const local = await deps.persistence.stat(sessionId)
   if (local !== undefined) {
-    const handle = await deps.persistence.open(sessionId, 'write')
+    // 活跃会话只能读，不能写：DSH 的 session store 已持有写句柄。先读本地
+    // lastSeq，确认远端没有新事件时直接 up-to-date；确实落后时返回
+    // local-active，让游标停在它之前，等会话关闭后再 apply。
+    const handle = await deps.persistence.open(sessionId, live === undefined ? 'write' : 'read')
     try {
       const read = await handle.read()
       const localMeta = headerMetaOf(handle.header, handle.inheritedEventCount)
@@ -1238,9 +1313,10 @@ async function pullSession<Session>(
       const localCwdNonPortable = cwdNonPortableOf(read.events, workspacePath)
       if (localLast > safe) return { sessionId, status: 'local-ahead', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
       if (localLast === safe) {
-        if (!localCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
+        if (live === undefined && !localCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
         return { sessionId, status: 'up-to-date', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
       }
+      if (live !== undefined) return { sessionId, status: 'local-active', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
       const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, localLast, safe, sessionKey)
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
       await deps.beforeApply?.(sessionId, safe)
@@ -1259,6 +1335,9 @@ async function pullSession<Session>(
       await handle.close()
     }
   }
+
+  // 没有本地 artifact 却是活跃会话：同样不能 create/写，等它关闭。
+  if (live !== undefined) return { sessionId, status: 'local-active' }
 
   const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, -1, safe, sessionKey)
   const header: CreateHeaderLike = {
@@ -1410,10 +1489,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       revision: state.revision,
     }
   }
-  const allowlist = config.workspaceAllowlist ?? []
-  if (allowlist.length === 0) {
-    return { configured: false, reason: 'workspaceAllowlist 未配置', sessions: [], revision: state.revision }
-  }
+  const excluded = new Set(config.excludedSessionIds ?? [])
   if (deps.workspacePathOf === undefined) {
     return { configured: false, reason: 'workspace 绑定未初始化', sessions: [], revision: state.revision }
   }
@@ -1425,10 +1501,13 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
 
   const reports: PullSessionReport[] = []
   let revision = state.revision
+  // local-active / local-ahead 是“暂时不能 apply”，不是成功；游标必须停在
+  // 它之前，等会话关闭或本地追平后重试。否则游标越过，push 会一直 remote-ahead
+  // 并触发 UI 的安全边界拦截，形成死锁。
+  let deferredRevision: number | undefined
   const resolvePath = (workspaceKey: string | undefined): string | undefined => {
     if (workspaceKey === undefined) return undefined
-    const path = deps.workspacePathOf(workspaceKey)
-    return path !== undefined && pathAllowed(path, allowlist) ? path : undefined
+    return deps.workspacePathOf(workspaceKey)
   }
   // 拉取期间只收集待挂载会话，等整轮 apply 完再挂到工作区；这样前端不会在
   // 子代理/根会话只到一半时刷新列表。pending 在 append+flush 后即清除，
@@ -1456,10 +1535,15 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   if (state.pending !== undefined) {
     try {
       const loaded = await loadRemoteHeader(fetchImpl, base, config.token, master, state.pending.sessionId)
+      const rootId = await resolveRootSessionId(loaded, fetchImpl, base, config.token, master, () => undefined)
+      if (excluded.has(rootId)) {
+        reports.push({ sessionId: state.pending.sessionId, status: 'excluded' })
+        return { configured: true, sessions: reports, revision: state.revision }
+      }
       const workspaceKey = await resolveWorkspaceKey(loaded, fetchImpl, base, config.token, master, () => undefined)
       const workspacePath = resolvePath(workspaceKey)
       if (workspacePath === undefined) {
-        reports.push({ sessionId: state.pending.sessionId, status: 'unmapped', ...workspaceKey === undefined ? {} : { workspaceKey } })
+        reports.push({ sessionId: state.pending.sessionId, status: 'unmapped', revision: state.revision, ...workspaceKey === undefined ? {} : { workspaceKey } })
         return { configured: true, sessions: reports, revision: state.revision }
       }
       reports.push(await pullSession(applyDeps, fetchImpl, base, master, state.pending.sessionId, workspacePath, loaded))
@@ -1474,7 +1558,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
 
   for (let page = 0; page < 20; page += 1) {
     const cursor = await readCursor(fetchImpl, base, config.token, revision)
-    const prepared: Array<{ readonly sessionId: string; readonly loaded: LoadedRemote }> = []
+    const prepared: Array<{ readonly sessionId: string; readonly loaded: LoadedRemote; readonly revision: number }> = []
     for (const change of cursor.sessions) {
       if (change.deletedAt !== null) {
         reports.push({ sessionId: change.sessionId, status: 'tombstone' })
@@ -1483,6 +1567,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       try {
         prepared.push({
           sessionId: change.sessionId,
+          revision: change.revision,
           loaded: await loadRemoteHeader(fetchImpl, base, config.token, master, change.sessionId),
         })
       } catch (error: unknown) {
@@ -1508,6 +1593,19 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', progress: 0 })
       applyStarted = undefined
       try {
+        const rootId = await resolveRootSessionId(
+          item.loaded,
+          fetchImpl,
+          base,
+          config.token,
+          master,
+          (sessionId) => preparedById.get(sessionId),
+        )
+        if (excluded.has(rootId)) {
+          reports.push({ sessionId: item.sessionId, status: 'excluded' })
+          notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'done', progress: 1 })
+          continue
+        }
         const workspaceKey = await resolveWorkspaceKey(
           item.loaded,
           fetchImpl,
@@ -1521,6 +1619,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
           reports.push({
             sessionId: item.sessionId,
             status: 'unmapped',
+            revision: item.revision,
             ...workspaceKey === undefined ? {} : { workspaceKey },
             ...item.loaded.meta === undefined ? {} : {
               createdAt: item.loaded.meta.createdAt,
@@ -1535,6 +1634,11 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         }
         const report = await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, workspacePath, item.loaded)
         reports.push(report)
+        if (report.status === 'local-active' || report.status === 'local-ahead') {
+          deferredRevision = deferredRevision === undefined
+            ? item.revision
+            : Math.min(deferredRevision, item.revision)
+        }
         notifyProgress(deps, {
           sessionId: item.sessionId, direction: 'pull',
           phase: report.status === 'error' ? 'error' : 'done',
@@ -1595,10 +1699,15 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
     }
   }
 
+  const nextRevision = reports.some((report) => report.status === 'error')
+    ? state.revision
+    : deferredRevision === undefined
+      ? revision
+      : Math.min(revision, Math.max(0, deferredRevision - 1))
   return {
     configured: true,
     sessions: reports,
-    revision: reports.some((report) => report.status === 'error') ? state.revision : revision,
+    revision: nextRevision,
   }
 }
 

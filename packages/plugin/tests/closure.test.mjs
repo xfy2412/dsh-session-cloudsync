@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   buildSessionTree,
-  pathAllowed,
   pathKeyOf,
   planSessionClosure,
 } from '../src/closure.ts'
@@ -27,7 +26,6 @@ test('闭包：根 + 子代理后代按深度从深到浅，根最后', () => {
 
   const plan = planSessionClosure([root, child, grandchild], {
     includeSubagents: true,
-    workspaceAllowlist: ['D:/work'],
   })
 
   assert.deepEqual(plan.skipped, [])
@@ -50,7 +48,6 @@ test('闭包：fork 是独立根，只有 origin=subagent 才算后代', () => {
 
   const plan = planSessionClosure([source, fork, forkChild], {
     includeSubagents: true,
-    workspaceAllowlist: ['D:/work'],
   })
   assert.deepEqual(plan.planned.map((entry) => entry.snapshot.header.id), ['source', 'fork-child', 'fork'])
 })
@@ -68,23 +65,22 @@ test('闭包：缺父会话或父链成环的子代理被跳过', () => {
 
   const plan = planSessionClosure([orphan, a, b], {
     includeSubagents: true,
-    workspaceAllowlist: ['D:/work'],
   })
   assert.equal(plan.planned.length, 0)
   assert.equal(plan.skipped.length, 3)
 })
 
-test('闭包：根不在白名单时整棵子树都不推', () => {
+test('闭包：根被本地排除时整棵子树都不推', () => {
   const root = snap('root', { cwd: 'D:/work' })
   const child = snap('child', { cwd: 'D:/work', origin: 'subagent', parentSession: 'root' })
   const plan = planSessionClosure([root, child], {
     includeSubagents: true,
-    workspaceAllowlist: ['D:/other'],
+    excludedSessionIds: ['root'],
   })
   assert.equal(plan.planned.length, 0)
   assert.deepEqual(plan.skipped.map((entry) => [entry.snapshot.header.id, entry.reason]), [
-    ['root', '工作区不在同步白名单'],
-    ['child', '根会话不在同步白名单'],
+    ['root', '根会话未选中'],
+    ['child', '根会话未选中'],
   ])
 })
 
@@ -93,19 +89,14 @@ test('闭包：关闭子代理时只推根，后代标为跳过', () => {
   const child = snap('child', { cwd: 'D:/work', origin: 'subagent', parentSession: 'root' })
   const plan = planSessionClosure([root, child], {
     includeSubagents: false,
-    workspaceAllowlist: ['D:/work'],
   })
   assert.deepEqual(plan.planned.map((entry) => entry.snapshot.header.id), ['root'])
   assert.deepEqual(plan.skipped.map((entry) => entry.snapshot.header.id), ['child'])
 })
 
-test('路径：空 cwd/空白名单不命中，Windows 大小写与斜杠归一', () => {
-  assert.equal(pathAllowed(undefined, ['D:/work']), false)
-  assert.equal(pathAllowed('   ', ['D:/work']), false)
-  assert.equal(pathAllowed('D:/work', []), false)
-  assert.equal(pathAllowed('D:/work', ['D:/work/']), true)
+test('路径：Windows 大小写与斜杠归一', () => {
   assert.equal(pathKeyOf('D:\\Work\\'), pathKeyOf('D:/Work'))
   if (process.platform === 'win32') {
-    assert.equal(pathAllowed('d:/WORK', ['D:/work']), true)
+    assert.equal(pathKeyOf('d:/WORK'), pathKeyOf('D:/work'))
   }
 })

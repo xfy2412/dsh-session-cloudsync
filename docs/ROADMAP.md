@@ -14,10 +14,10 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 | **M2** | 自部署服务端 MVP：设备 token、blob、manifest、租约、append、墓碑、cursor、配额、管理台、首次初始化 | ✅ 已完成；`/v1` 规范字段已改为批次（`batches` / `batchCount`），旧 `frames` 字段保留兼容 |
 | **M3** | 插件 MVP：枚举会话、事件批次哈希、推送/拉取、免重启 ingest、手动触发/状态、断网降级、安全边界（`tailOpen`/`safeThroughSeq`）与 apply journal | ✅ 推送/拉取/安全边界/双 home E2E/durable journal/错误退避已通过；手动入口与状态通道由 M4 A3/A4 补齐 |
 | **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | 🚧 A1–A5、B1–B5、C1–C4/C6、E1 已完成；C5 GUI 回归、D5 UI 文案演练与 E3 文档收口顺延到 Vault V0–V2 之后 |
-| **Vault V0–V2** | 密钥域/记录链 → 服务端 append/cursor + 最小设备台账 → `workspaceKey` + 一次性绑定 + 未映射阻断 | ✅ V0–V2 已完成（131 tests）；V3/V4 设计稿；见 [VAULT.md](VAULT.md) |
+| **Vault V0–V2.1** | 密钥域/记录链 → 服务端 append/cursor + 最小设备台账 → `workspaceKey` + 一次性绑定 + 未映射阻断 → 根会话级同步选择 + label 映射 | ✅ V0–V2.1 已完成（133 tests）；V3/V4 设计稿；见 [VAULT.md](VAULT.md) |
 | **M5** | 公共多租户公益服 | ❌ 不在当前范围；独立 package/仓库，只共享插件对接协议 |
 
-> **当前优先级**：Vault V0–V2 已完成；下一步 V3/V4 或 M4 C5/D5/E3。M5 公益服不塞进自部署包。
+> **当前优先级**：Vault V0–V2.1 已完成；下一步 V3/V4 或 M4 C5/D5/E3。M5 公益服不塞进自部署包。
 
 ## 当前阶段的验收
 
@@ -27,7 +27,7 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 ## 文档地图
 
 - [DESIGN.md](DESIGN.md)：范围、数据分层、传输单位、并发、加密、兼容边界。
-- [VAULT.md](VAULT.md)：L2/L3 加密附加数据层、多工作区映射、设备台账与插件版本匹配（V0/V1 已实现，V2+ 设计稿）。
+- [VAULT.md](VAULT.md)：L2/L3 加密附加数据层、多工作区映射、设备台账与插件版本匹配（V0–V2.1 已实现，V3+ 设计稿）。
 - [CWD.md](CWD.md)：header canonical、事件 raw、接收端 cwd 修正。
 - [DECISIONS.md](DECISIONS.md)：cwd/Canonical 反复讨论后的最终决策记录。
 - [PROMPT-GUIDANCE.md](PROMPT-GUIDANCE.md)：agent 提示词规划：尽量不把会话 cwd 切到工作区外。

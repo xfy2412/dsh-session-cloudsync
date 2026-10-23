@@ -8,7 +8,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { BlockedDecision, BlockedSessionState, PendingApply } from './engine.ts'
+import type { BlockedDecision, BlockedSessionState, PendingApply, UnmappedSessionState } from './engine.ts'
 
 /** 状态文件格式版本。 */
 export const STATE_VERSION = 1
@@ -21,6 +21,7 @@ export interface PullJournal {
   readonly cwdPending?: readonly string[]
   readonly blocked?: readonly BlockedSessionState[]
   readonly blockedDecisions?: readonly BlockedDecision[]
+  readonly unmapped?: readonly UnmappedSessionState[]
 }
 
 /**
@@ -44,10 +45,12 @@ export function readPullJournal(file: string): PullJournal {
     : undefined
   const blocked = blockedFrom(record['blocked'])
   const blockedDecisions = decisionsFrom(record['blockedDecisions'])
+  const unmapped = unmappedFrom(record['unmapped'])
   const extra = {
     ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
     ...blocked === undefined ? {} : { blocked },
     ...blockedDecisions === undefined ? {} : { blockedDecisions },
+    ...unmapped === undefined ? {} : { unmapped },
   }
   const pending = record['pending']
   if (pending === undefined) {
@@ -128,6 +131,35 @@ function decisionsFrom(value: unknown): readonly BlockedDecision[] | undefined {
     })
   }
   return decisions.length === 0 ? undefined : decisions
+}
+
+/** 解析未映射会话；损坏记录静默丢弃。 */
+function unmappedFrom(value: unknown): readonly UnmappedSessionState[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const entries = new Map<string, UnmappedSessionState>()
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+    const entry = item as Record<string, unknown>
+    const sessionId = entry['sessionId']
+    const workspaceKey = entry['workspaceKey']
+    const revision = entry['revision']
+    const at = entry['at']
+    if (typeof sessionId !== 'string' || sessionId === ''
+      || typeof workspaceKey !== 'string' || workspaceKey === ''
+      || !Number.isSafeInteger(revision) || (revision as number) < 0
+      || !Number.isSafeInteger(at)) continue
+    const createdAt = entry['createdAt']
+    const formatVersion = entry['formatVersion']
+    entries.set(sessionId, {
+      sessionId,
+      workspaceKey,
+      revision: revision as number,
+      at: at as number,
+      ...Number.isSafeInteger(createdAt) ? { createdAt: createdAt as number } : {},
+      ...Number.isSafeInteger(formatVersion) ? { formatVersion: formatVersion as number } : {},
+    })
+  }
+  return entries.size === 0 ? undefined : [...entries.values()]
 }
 
 /**

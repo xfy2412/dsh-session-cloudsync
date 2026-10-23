@@ -20,8 +20,8 @@ export interface SyncControl {
   setup(): Promise<SetupInfo>
   /** 同步列表：工作区、会话计数与当前选中项。 */
   workspaces(): Promise<SyncWorkspaceList>
-  /** 测试服务端地址与 token。 */
-  test(): Promise<SyncTestResult>
+  /** 测试给定服务端地址是否可达；不读取配置、不携带 token。 */
+  test(serverUrl: string): Promise<SyncTestResult>
   /** 手动触发一轮同步；已在运行时返回 `already-running`。 */
   syncNow(): Promise<SyncRunResult>
   /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
@@ -107,9 +107,14 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       path: '/api/session-cloudsync/test',
       methods: ['POST'],
       requestBody: 'buffered',
-      fetch: async () => {
+      fetch: async (request: Request) => {
         try {
-          return json({ ok: true, value: await control.test() })
+          const body = await request.json().catch(() => ({})) as { readonly serverUrl?: unknown }
+          const serverUrl = typeof body.serverUrl === 'string' ? body.serverUrl.trim() : ''
+          if (serverUrl === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 serverUrl' } }, 400)
+          }
+          return json({ ok: true, value: await control.test(serverUrl) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({

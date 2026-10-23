@@ -18,6 +18,7 @@ import {
   type SyncLogger,
   type SyncProgress,
   type SyncReport,
+  type UnmappedSessionState,
 } from './engine.ts'
 import type { BlockedSessionView, SessionSyncView, SyncErrorView, SyncStatus } from './status.ts'
 
@@ -92,6 +93,7 @@ export class SyncController {
   private readonly cwdPending = new Set<string>()
   private readonly blocked = new Map<string, BlockedSessionState>()
   private readonly blockedDecisions = new Map<string, BlockedDecision>()
+  private readonly unmapped = new Map<string, UnmappedSessionState>()
 
   /**
    * @param options - 引擎、持久化与时钟注入点。
@@ -106,6 +108,7 @@ export class SyncController {
     for (const entry of options.initial?.blocked ?? []) {
       if (!this.blockedDecisions.has(entry.sessionId)) this.blocked.set(entry.sessionId, entry)
     }
+    for (const entry of options.initial?.unmapped ?? []) this.unmapped.set(entry.sessionId, entry)
   }
 
   /** 当前客户端可读快照。 */
@@ -244,6 +247,22 @@ export class SyncController {
     this.persistNow()
   }
 
+  /** 当前仍在等待工作区映射的远端会话。 */
+  unmappedSessions(): readonly UnmappedSessionState[] {
+    return [...this.unmapped.values()]
+  }
+
+  /**
+   * 记录一次映射回填的拉取结果；只更新未映射表，不推进主游标。
+   * @param report - 回填拉取结果。
+   */
+  recordBackfill(report: PullReport): void {
+    if (!report.configured) return
+    let changed = false
+    for (const session of report.sessions) changed = this.trackUnmapped(session) || changed
+    if (changed) this.persistNow()
+  }
+
   /**
    * 执行一轮推送 + 拉取。
    * @param options - `manual: true` 表示用户手动触发，跳过当前退避。
@@ -310,6 +329,7 @@ export class SyncController {
       ...this.cwdPending.size === 0 ? {} : { cwdPending: [...this.cwdPending] },
       ...this.blocked.size === 0 ? {} : { blocked: [...this.blocked.values()] },
       ...this.blockedDecisions.size === 0 ? {} : { blockedDecisions: [...this.blockedDecisions.values()] },
+      ...this.unmapped.size === 0 ? {} : { unmapped: [...this.unmapped.values()] },
     }
   }
 
@@ -336,6 +356,33 @@ export class SyncController {
     this.lastError = { kind: first.kind, message: first.message, at: finished }
     this.options.logger?.warn(`dsh-session-cloudsync: 将在 ${Math.round(delay / 1000)}s 后重试（retry=${this.retryCount}）`)
     return { ok: false, message: first.message, status: this.snapshot() }
+  }
+
+  /** 把一次拉取里的未映射状态并入持久集合；返回集合是否变化。 */
+  private trackUnmapped(session: PullSessionReport): boolean {
+    if (session.status === 'unmapped' && session.workspaceKey !== undefined) {
+      const previous = this.unmapped.get(session.sessionId)
+      const createdAt = session.createdAt ?? previous?.createdAt
+      const formatVersion = session.formatVersion ?? previous?.formatVersion
+      const revision = session.revision ?? previous?.revision ?? 0
+      if (previous !== undefined
+        && previous.workspaceKey === session.workspaceKey
+        && previous.revision === revision
+        && previous.createdAt === createdAt
+        && previous.formatVersion === formatVersion) return false
+      this.unmapped.set(session.sessionId, {
+        sessionId: session.sessionId,
+        workspaceKey: session.workspaceKey,
+        revision,
+        at: previous?.at ?? this.now(),
+        ...createdAt === undefined ? {} : { createdAt },
+        ...formatVersion === undefined ? {} : { formatVersion },
+      })
+      return true
+    }
+    // 错误可能发生在解析 workspaceKey 之前；保留旧记录，等下一次成功拉取/回填再清。
+    if (session.status !== 'error') return this.unmapped.delete(session.sessionId)
+    return false
   }
 
   private collectPush(
@@ -380,7 +427,9 @@ export class SyncController {
       this.options.logger?.info(`dsh-session-cloudsync: 拉取 ${applied.length} 个会话，失败 ${failed.length}`)
     }
     for (const session of report.sessions) views.push(pullView(session))
+    let unmappedChanged = false
     for (const session of report.sessions) {
+      unmappedChanged = this.trackUnmapped(session) || unmappedChanged
       if (session.cwdNonPortable === true) {
         this.cwdPending.add(session.sessionId)
       } else if (session.status !== 'error') {
@@ -397,6 +446,7 @@ export class SyncController {
         if (hadBlocked || hadDecision) this.persistNow()
       }
     }
+    if (unmappedChanged) this.persistNow()
     for (const session of failed) {
       const kind = session.kind ?? 'unknown'
       errors.push({ kind, message: session.error ?? '未知错误' })

@@ -2,7 +2,7 @@
 
 > 状态：M3 核心链路已完成（推送/拉取/安全边界/断网降级/双 home 验收）；M4 进行中。本文件是 M4 的唯一清单，ROADMAP 只保留状态摘要。
 >
-> 进度（2026-10-20）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已删除旧别名，只保留 `batches` / `batchCount`；当前 131 tests。下一步 D5/C5 的端到端演练与 E3 文档收口。
+> 进度（2026-10-20）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已删除旧别名，只保留 `batches` / `batchCount`；当前 133 tests。下一步 D5/C5 的端到端演练与 E3 文档收口。
 >
 > 2026-10-22 调整：先做 [VAULT.md](VAULT.md) V0 → V1 → V2（`workspaceKey` 多工作区落点），
 > 再做 C5/D5/E3；本文件 A–E 不删除，只调整顺序。
@@ -36,10 +36,10 @@
 | ID | 内容 | 依赖 |
 |---|---|---|
 | B1 | `token` / `passphrase` 迁到 DSH `ctx.credentials`；支持环境变量/配置作为 bootstrap fallback | A3 |
-| B2 | 非敏感配置：serverUrl、workspaceAllowlist、autoSync、interval、batch 上限 | A3 |
+| B2 | 非敏感配置：serverUrl、excludedSessionIds、autoSync、interval、batch 上限 | A3 |
 | B3 | 设置页：Plugins 页的 `plugins.bundle.config` / `plugins.row.config` + `SettingsForm`；`settings.plugins.tab` 只用于 Built-in inventory，不是第三方插件配置位 | A4、B1、B2 |
 | B4 | Host↔Client 控制通道（测试连接、立即同步、读取状态） | A3 |
-| B5 | 首启引导：连接 → 凭据 → 工作区白名单 → 测试/首次同步；未配置时显示 | B3、B4 |
+| B5 | 首启引导：连接 → 凭据 → 根会话选择 → 映射 → 测试/首次同步；未配置时显示 | B3、B4 |
 
 > 进度：**B1/B2/B4 的 host 侧已完成**。
 >
@@ -47,9 +47,9 @@
 > - B2：非敏感字段已标 `.volatile()`，DSH 设置页可直接生成表单并热更新；`token`/`passphrase` 不放进普通表单。默认单次 HTTP 读取超时 10s（`requestTimeoutMs`），避免网络挂死无限等待。
 > - 工作区落点由 V2 的 `workspaceKey` 一次性绑定决定，M4 的单一 `workspacePath` 已删除。
 > - 启动对账（候选列表/确认/忽略）与 raw 前缀校验见 [RECONCILE.md](RECONCILE.md)；实现前不能把当前“自动拉取所有远端会话”当作最终 UX。
-> - 宿主每轮 status/setup/sync 都重新读取 `.volatile()` 引用的 `.get()`，所以设置页保存后不必重启插件即可生效；首启/设置页的测试连接也先保存当前输入再测。
-> - B4：`GET /status`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 验证服务端可达与 token，不校验口令。
-> - **B3/B5 已完成**：`client/index.js` 通过 `plugins.bundle.config` 渲染自定义设置页（表单来自 `ctx.configForms.get('session-cloudsync')`），`shell.overlay` 提供首启向导与顶部气泡；非敏感字段走 settings，token/passphrase 走 `remote.credentials`；首启完成后立即触发一轮同步。设置页「测试连接」会先落盘当前字段再测；首启步骤切换带方向动画，并且一旦以未配置姿态打开，后续保存不会把向导抽掉。
+> - 宿主每轮 status/setup/sync 都重新读取 `.volatile()` 引用的 `.get()`，所以设置页保存后不必重启插件即可生效。测试连接不走配置热更新：按钮直接把当前输入的 `serverUrl` 交给宿主探测。
+> - B4：`GET /status`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 只请求公开的 `/v1/health`，验证地址可达、确认是本插件服务端；不读配置、不带 token、不校验口令。
+> - **B3/B5 已完成**：`client/index.js` 通过 `plugins.bundle.config` 渲染自定义设置页（表单来自 `ctx.configForms.get('session-cloudsync')`），`shell.overlay` 提供首启向导与顶部气泡；非敏感字段走 settings，token/passphrase 走 `remote.credentials`；首启完成后立即触发一轮同步。首启/设置页「测试连接」都直接测当前输入，不落盘、不需要 token；首启步骤切换带方向动画，并且一旦以未配置姿态打开，后续保存不会把向导抽掉。
 
 **官方前端接口（已确认，来自本地 DSH 源码/类型）：**
 
@@ -64,7 +64,7 @@
 
 ### 前端形态（已定）
 
-- **首启**：客户端启动请求 `GET /api/session-cloudsync/setup`；未配置时用 `shell.overlay` 显示全屏向导（连接 → 凭据 → 工作区白名单 → 测试/首次同步），可“稍后”；之后在 Plugins 页常驻配置。向导打开/关闭有缩放淡入淡出，步骤切换按方向滑入；动效约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
+- **首启**：客户端启动请求 `GET /api/session-cloudsync/setup`；未配置时用 `shell.overlay` 显示全屏向导（连接 → 凭据 → 根会话选择 → 映射 → 测试/首次同步），可“稍后”；之后在 Plugins 页常驻配置。向导打开/关闭有缩放淡入淡出，步骤切换按方向滑入；动效约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
 - **同步预览**：不用 `conversation.session.header.*` 槽位，改为 **`shell.overlay` 的顶部居中气泡**：
   - 收起态是顶部居中的唯一云图标；点击后同一个云图标带着卡片展开，再点缩回图标；组件常驻 overlay 层，切页面不重建；
   - 一条完整进度条，无间隔切成 N 等份，每份对应一个会话；
@@ -74,7 +74,7 @@
   - 用户主动打开或操作过气泡后，失焦 5 秒再自动收回；焦点/指针回到气泡会取消，焦点在气泡内时不收回；手动点图标可立即收起；
   - 顶部居中、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
   - 窄屏切底部 sheet；`aria-live="polite"`。
-- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区标题、根会话数、子代理数、是否选中；「全选」取全部 `path`。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
+- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区候选、根会话列表（含子代理计数）、本地排除的根会话 id、一次性绑定与未映射工作区；选择粒度是根会话，子代理跟随根，不做工作区白名单。`test` 接收 `{ serverUrl }`，直接探测 `/v1/health`，不依赖已保存配置。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
 - **刷新**：同步中每 1s 轮询 status，空闲停止。
 - **动效**：状态变化才动；微交互 120–180ms、面板 220–320ms、气泡进出 320–420ms；只动 `transform` / `opacity` / `grid-template-rows`，进度用 `linear`；必须支持 `prefers-reduced-motion`。详细约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
 
@@ -108,7 +108,7 @@
 | ID | 内容 |
 |---|---|
 | E1 | `frames → batches` 协议/字段/文档重命名：已删除旧别名，只保留 `batches`/`batchCount`、`/batches` 路由 | 已完成 |
-| E2 | 采集白名单（按工作区路径）；**空配置 = 暂不同步任何会话**；首启/设置页的同步列表提供「全选」；子代理跟随根会话闭包 | A5 |
+| E2 | 根会话选择；默认全选，本地排除根及其子代理；首启/设置页的同步列表提供「全选/清空会话」；子代理跟随根会话闭包 | A5 |
 | E3 | 更新 ROADMAP/PROTOCOL/SYNC-SAFETY/tests 文档 |
 
 ## 3. 已定与实施备注
@@ -121,7 +121,7 @@
 - 非敏感配置走 settings，token/passphrase 走 credentials。
 - **凭据已定**：固定引用 `DSH_SESSION_CLOUDSYNC_TOKEN` / `DSH_SESSION_CLOUDSYNC_PASSPHRASE`；`ctx.credentials` 优先，YAML `token`/`passphrase` 仅作 bootstrap fallback；每轮同步前解析，不要求重启。非敏感字段标 `.volatile()`，由设置页热更新。
 - **子代理闭包默认开启**（`includeSubagents: true`）：同步根会话及其全部 `origin === 'subagent'` 后代；fork 作为独立根。
-- **工作区白名单空 = 暂不同步**：`workspaceAllowlist` 为空时插件只提供设置/状态 API，不推送、不拉取；首启/设置页的同步列表提供「全选」，选中后把路径写入白名单。
+- **会话选择默认全选**：`excludedSessionIds` 只记录取消勾选的根；子代理跟随根。首启/设置页的同步列表提供「全选/清空会话」。
 
 **实施备注：**
 

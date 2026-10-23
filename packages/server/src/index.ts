@@ -102,7 +102,7 @@ async function main(parsed: Parsed): Promise<void> {
       }
       if (action === 'reset') {
         clearAdminPassword(db)
-        console.log('已清除管理密码。重启 serve 后会在控制台打印新的初始化密钥。')
+        console.log('已清除管理密码。重启 server 后会在控制台打印新的初始化密钥。')
         return
       }
       usage()

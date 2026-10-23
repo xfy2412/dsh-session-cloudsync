@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
-import { syncVault } from '../src/vault-sync.ts'
+import { syncVault, readWorkspaceProfileLabels } from '../src/vault-sync.ts'
 import { vaultRecordHashOf } from '../../shared/src/vault.ts'
 
 const CLIENT_ID = '0123456789abcdef'
@@ -40,11 +40,22 @@ function fakeServer() {
       lease = null
       return Response.json({ ok: true, value: { released: true } })
     }
-    if (path === '/v1/blobs') {
+    if (path === '/v1/blobs' && method === 'POST') {
       const bytes = Buffer.from(init.body)
       const sha256 = (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex')
       blobs.set(sha256, bytes)
       return Response.json({ ok: true, value: { sha256, bytes: bytes.length, dedup: false } }, { status: 201 })
+    }
+    if (path.startsWith('/v1/blobs/') && method === 'GET') {
+      const sha256 = path.slice('/v1/blobs/'.length)
+      const bytes = blobs.get(sha256)
+      if (bytes === undefined) return Response.json({ ok: false, error: { code: 'not-found', message: sha256 } }, { status: 404 })
+      return new Response(bytes, { status: 200, headers: { 'content-type': 'application/octet-stream' } })
+    }
+    if (path === '/v1/vault/cursor' && method === 'GET') {
+      const since = Number(url.searchParams.get('since') ?? 0)
+      const matching = records.filter((record) => record.revision > since)
+      return Response.json({ ok: true, value: { revision: revision, records: matching, hasMore: false } })
     }
     if (path === '/v1/vault/append' && method === 'POST') {
       if (lease === null) return Response.json({ ok: false, error: { code: 'lease-held', message: 'no lease' } }, { status: 409 })
@@ -105,6 +116,24 @@ test('Vault 首次写入设备台账和 workspace/profile，第二次不重复',
     const second = await syncVault(config(temp, workspaces), undefined, server.fetchImpl)
     assert.equal(second.appended, 0)
     assert.equal(server.records.length, 3)
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('读取远端 workspace/profile label', async () => {
+  const temp = createTempHome('plugin-vault-labels')
+  try {
+    const server = fakeServer()
+    const workspaces = [
+      { path: 'D:/work/a', title: 'alpha' },
+      { path: 'D:/work/b', title: 'beta' },
+    ]
+    const cfg = config(temp, workspaces)
+    await syncVault(cfg, undefined, server.fetchImpl)
+    const result = await readWorkspaceProfileLabels(cfg, server.fetchImpl)
+    assert.deepEqual(Object.values(result.labels).sort(), ['alpha', 'beta'])
+    assert.equal(result.revision, server.records.length)
   } finally {
     temp.dispose()
   }

@@ -51,12 +51,13 @@ interface SessionSummary {
 
 这样长任务也能持续备份，但远端始终拿不到“半截可 resume”的会话。开放尾的 adopt/ignore 需要显式操作，不自动决定。
 
-## 2.1 同步范围：工作区白名单与子代理闭包
+## 2.1 同步范围：根会话选择与子代理闭包
 
-- `workspaceAllowlist` 是**工作区路径**列表。**空列表 = 暂不同步任何会话**；插件仍加载并注册设置/状态 API，`status.configured=false`，原因是 `workspaceAllowlist 未配置`。
-- 首启/设置页的同步列表由 `GET /api/session-cloudsync/workspaces` 提供：每个工作区带 `title`、根会话数、子代理数、是否选中；「全选」就是把全部 `path` 写进白名单。
-- 推送按根会话的 `cwd` 判定白名单；子代理后代跟随根，不单独判定。只有 `origin === 'subagent'` 算后代；fork 虽然也有 `parentSession`，但它是独立根。
+- 同步范围按**根会话**选择，不再有工作区白名单。默认全部根会话参与；本地 `excludedSessionIds` 记录取消勾选的根。
+- 首启/设置页的同步列表由 `GET /api/session-cloudsync/workspaces` 提供：每个根会话带 `sessionId`、工作区路径、创建时间、事件数、子代理数与被排除状态；「全选/清空会话」直接更新这份本地排除表。
+- 子代理后代跟随根，不单独勾选。只有 `origin === 'subagent'` 算后代；fork 虽然也有 `parentSession`，但它是独立根。
 - 推送顺序是**后代深到浅、根最后**；拉取按远端封好的 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入 `skipped`，不会静默丢进同步链。
+- 被排除的根及其整棵子代理在推送/拉取两侧都跳过；选择只在本设备生效，不会删除远端历史。
 - 拉取按远端 `workspaceKey` 查本机绑定；未找到绑定时标记 `unmapped`，不创建本地会话，也不猜落点。
 
 ## 3. 拉取原子性

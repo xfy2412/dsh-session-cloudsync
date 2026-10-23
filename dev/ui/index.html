@@ -223,43 +223,39 @@
     background: rgba(255, 255, 255, .018); color: var(--faint); font-size: 10.5px;
   }
   .map-stat b { color: var(--text); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .map-list { display: flex; flex-direction: column; gap: 8px; }
-  .map-row {
-    display: flex; align-items: center; gap: 14px;
-    padding: 11px 12px; border: 1px solid var(--border); border-radius: 11px;
-    background: rgba(255, 255, 255, .014);
-    animation: map-in .28s cubic-bezier(.16, 1, .3, 1) both;
+  .map-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 11px; }
+  .map-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .map-table th {
+    padding: 9px 12px; text-align: left; color: var(--faint);
+    font-size: 10.5px; font-weight: 600; letter-spacing: .01em;
+    background: rgba(255, 255, 255, .025); border-bottom: 1px solid var(--border);
   }
-  .map-row.bound { border-color: rgba(34, 197, 94, .2); background: rgba(34, 197, 94, .035); }
-  .map-row.unmapped { border-color: rgba(245, 158, 11, .2); }
-  .map-main { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 3px; }
-  .map-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .map-title b { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .map-key { color: var(--faint); font: 10.5px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .map-table td { vertical-align: top; padding: 11px 12px; border-bottom: 1px solid rgba(255, 255, 255, .055); }
+  .map-table tr:last-child td { border-bottom: 0; }
+  .map-table col.local { width: 40%; }
+  .map-table col.rel { width: 104px; }
+  .map-cell.rel { text-align: center; }
+  .map-local-title, .map-remote-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .map-local-title b, .map-remote-title b { font-size: 12.5px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .map-path { margin-top: 2px; color: var(--faint); font: 10.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+  .map-key { margin-top: 2px; color: var(--faint); font: 10.5px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
   .map-key span { font-family: inherit; color: var(--faint); }
-  .map-meta { color: var(--faint); font-size: 10.5px; }
-  .map-tag {
-    flex: 0 0 auto; padding: 2px 7px; border-radius: 999px;
-    font-size: 10px; font-weight: 600; letter-spacing: .01em; white-space: nowrap;
+  .map-meta { margin-top: 3px; color: var(--faint); font-size: 10.5px; }
+  .map-rel {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 600; white-space: nowrap;
   }
-  .map-tag.bound { color: #9ce8bc; background: var(--success-soft); border: 1px solid rgba(34, 197, 94, .24); }
-  .map-tag.suggest { color: #f4cd82; background: var(--warn-soft); border: 1px solid rgba(245, 158, 11, .26); }
-  .map-tag.pending { color: var(--muted); background: rgba(255, 255, 255, .04); border: 1px solid var(--border); }
-  .map-side { flex: 0 1 330px; min-width: 230px; display: flex; flex-direction: column; gap: 5px; align-items: stretch; }
-  .map-controls { display: flex; align-items: center; gap: 7px; }
-  .map-select { min-width: 0; flex: 1 1 auto; min-height: 32px; }
-  .map-controls .btn { flex: 0 0 auto; }
-  .map-hint { color: var(--faint); font-size: 10.5px; text-align: right; }
-  .map-bound {
-    display: flex; align-items: center; gap: 7px; min-width: 0;
-    padding: 7px 9px; border: 1px solid rgba(34, 197, 94, .2); border-radius: 8px;
-    background: rgba(34, 197, 94, .045);
-  }
-  .map-bound .map-path { flex: 1 1 auto; color: #a9d9bd; font: 10.5px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .map-lock { display: inline-flex; align-items: center; gap: 3px; color: var(--faint); font-size: 10px; white-space: nowrap; }
-  .map-lock svg { width: 11px; height: 11px; }
-  .map-warning { color: var(--warn); font-size: 10.5px; }
-  .map-auto { padding: 10px 0 0; border-top: 1px solid var(--border); }
+  .map-rel.bound { color: #9ce8bc; background: var(--success-soft); border: 1px solid rgba(34, 197, 94, .22); }
+  .map-rel.native { color: #b9ccff; background: var(--accent-soft); border: 1px solid rgba(91, 136, 255, .24); }
+  .map-rel.local { color: var(--muted); background: rgba(255, 255, 255, .04); border: 1px solid var(--border); }
+  .map-rel.pending { color: #f4cd82; background: var(--warn-soft); border: 1px solid rgba(245, 158, 11, .24); }
+  .map-rel svg { width: 11px; height: 11px; }
+  .map-pick { display: flex; flex-direction: column; gap: 6px; }
+  .map-pick-row { display: flex; align-items: center; gap: 6px; }
+  .map-pick .map-select { flex: 1 1 auto; min-width: 0; min-height: 30px; }
+  .map-empty-cell { display: flex; flex-direction: column; gap: 2px; color: var(--faint); font-size: 11px; line-height: 1.5; }
+  .map-empty-cell b { color: var(--muted); font-size: 11.5px; font-weight: 500; }
+  .map-hint { color: var(--faint); font-size: 10.5px; text-align: left; }
   .map-empty, .map-error {
     padding: 20px 14px; border: 1px dashed var(--border-strong); border-radius: 10px;
     text-align: center; color: var(--faint); font-size: 12px;
@@ -618,8 +614,8 @@
     .mock-chat { padding: 20px 16px; }
     .bubble-wrap { top: auto; bottom: 16px; right: 12px; left: 12px; width: auto; }
     .bubble { width: 100%; }
-    .map-row { align-items: stretch; flex-direction: column; gap: 9px; }
-    .map-side { flex: 1 1 auto; min-width: 0; }
+    .map-table th, .map-table td { padding: 8px; }
+    .map-table col.rel { width: 82px; }
     .map-hint { text-align: left; }
     .session-scope-head { align-items: stretch; flex-direction: column; gap: 7px; }
     .scope-actions { justify-content: space-between; }
@@ -724,7 +720,6 @@
     remoteWorkspaces: REMOTE_WORKSPACES.map((workspace) => ({ ...workspace })),
     bindings: { 'ws-dsh-cloudsync-0001': 'D:/git-repo/dsh-session-cloudsync' },
     mappingChoice: {},
-    autoBindSamePath: false,
     // 默认全选；只记录被排除的根会话。
     sessionExcluded: new Set(['01J9Z7Q8N6W3C4B5A2M0K1P9R3']),
     onboardStep: 0,
@@ -876,51 +871,108 @@
     });
   }
 
-  function mappingCounts() {
-    const total = state.remoteWorkspaces.length;
-    const bound = state.remoteWorkspaces.filter((workspace) => state.bindings[workspace.key] !== undefined).length;
-    return { total, bound, pending: total - bound };
+  function pairForLocal(local) {
+    const boundKey = Object.keys(state.bindings).find((key) => state.bindings[key] === local.path);
+    if (boundKey !== undefined) {
+      const remote = state.remoteWorkspaces.find((workspace) => workspace.key === boundKey);
+      return {
+        kind: 'bound',
+        remote: remote ?? { key: boundKey, label: boundKey.slice(0, 12) + '…', sessions: 0, roots: 0, subs: 0, missing: true },
+      };
+    }
+    const native = state.remoteWorkspaces.find((workspace) => workspace.key === local.key);
+    if (native !== undefined) return { kind: 'native', remote: native };
+    return { kind: 'local', remote: null };
   }
 
-  function suggestionFor(remote) {
-    return allWorkspaces().find((workspace) => workspace.key === remote.key);
+  function mappingCounts() {
+    const locals = allWorkspaces();
+    let bound = 0;
+    let native = 0;
+    let localOnly = 0;
+    const paired = new Set();
+    for (const local of locals) {
+      const pair = pairForLocal(local);
+      if (pair.kind === 'bound') { bound += 1; paired.add(pair.remote.key); }
+      else if (pair.kind === 'native') { native += 1; paired.add(pair.remote.key); }
+      else localOnly += 1;
+    }
+    const pending = state.remoteWorkspaces.filter((remote) => !paired.has(remote.key)).length;
+    return { total: state.remoteWorkspaces.length, locals: locals.length, bound, native, localOnly, pending };
+  }
+
+  function localBlockHtml(local) {
+    return `<div class="map-local-title"><b>${esc(local.title)}</b></div>
+      <div class="map-path" title="${esc(local.path)}">${esc(local.path)}</div>
+      <div class="map-key" title="${esc(local.key)}">${esc(local.key.slice(0, 12))}…</div>`;
+  }
+
+  function remoteBlockHtml(remote, note) {
+    const missing = remote.missing === true;
+    return `<div class="map-remote-title"><b>${esc(remote.label)}</b></div>
+      <div class="map-key" title="${esc(remote.key)}">${esc(remote.key.slice(0, 12))}…</div>
+      <div class="map-meta">${missing ? '远端记录暂时不可见' : `${remote.sessions} 个会话 · ${remote.roots} 个根 · ${remote.subs} 个子代理`}</div>
+      ${note ? `<div class="map-hint">${note}</div>` : ''}`;
   }
 
   function mappingRowsHtml() {
-    if (state.remoteWorkspaces.length === 0) {
-      return '<div class="map-empty"><b>还没有远端工作区</b>完成一次推送后，这里会出现带 label 的远端工作区。</div>';
+    const locals = allWorkspaces();
+    const candidates = locals.filter((local) => pairForLocal(local).kind === 'local');
+    const paired = new Set();
+    const rows = [];
+    for (const local of locals) {
+      const pair = pairForLocal(local);
+      if (pair.kind !== 'local') paired.add(pair.remote.key);
+      const relation = pair.kind === 'bound'
+        ? `<span class="map-rel bound">${icons.lock}已绑定</span>`
+        : pair.kind === 'native'
+          ? `<span class="map-rel native">${icons.check}本机身份</span>`
+          : '<span class="map-rel local">仅本机</span>';
+      let right;
+      if (pair.kind === 'bound') {
+        right = remoteBlockHtml(pair.remote, '该 key 已绑定到左侧路径；不可改绑。');
+      } else if (pair.kind === 'native') {
+        right = remoteBlockHtml(pair.remote, 'key 与本机路径一致，已自动对应，无需映射。');
+      } else {
+        right = '<div class="map-empty-cell"><b>尚未对应远端</b><span>该工作区第一次推送根会话后，会自动创建远端 workspaceKey。</span></div>';
+      }
+      rows.push(`<tr class="map-pair ${pair.kind}">
+        <td>${localBlockHtml(local)}</td>
+        <td class="map-cell rel">${relation}</td>
+        <td>${right}</td>
+      </tr>`);
     }
-    const candidates = allWorkspaces();
-    return `<div class="map-list">${state.remoteWorkspaces.map((remote, index) => {
-      const boundPath = state.bindings[remote.key];
-      const suggestion = suggestionFor(remote);
-      const choice = state.mappingChoice[remote.key] ?? suggestion?.path ?? '';
-      const validChoice = candidates.some((workspace) => workspace.path === choice) ? choice : '';
-      const tag = boundPath !== undefined
-        ? '<span class="map-tag bound">已绑定</span>'
-        : suggestion !== undefined
-          ? '<span class="map-tag suggest">同路径建议</span>'
-          : '<span class="map-tag pending">待映射</span>';
-      const side = boundPath !== undefined
-        ? `<div class="map-bound"><span class="map-path" title="${esc(boundPath)}">${esc(boundPath)}</span><span class="map-lock">${icons.lock}不可改绑</span></div>
-           <span class="map-hint">该 key 已占用的本机落点</span>`
-        : `<div class="map-controls">
-             <select class="select map-select" data-map-select="${esc(remote.key)}" aria-label="为 ${esc(remote.label)} 选择本地工作区">
-               <option value="">选择本地工作区…</option>
-               ${candidates.map((workspace) => `<option value="${esc(workspace.path)}" ${validChoice === workspace.path ? 'selected' : ''}>${esc(workspace.title)} — ${esc(workspace.path)}</option>`).join('')}
-             </select>
-             <button class="btn small primary" data-bind-key="${esc(remote.key)}" ${validChoice === '' ? 'disabled' : ''}>绑定</button>
-           </div>
-           <span class="map-hint">${suggestion !== undefined ? '已按同路径预选，确认后生效' : '选择别名工作区后确认'}</span>`;
-      return `<div class="map-row ${boundPath !== undefined ? 'bound' : 'unmapped'}" style="animation-delay:${index * 40}ms">
-        <div class="map-main">
-          <div class="map-title"><b>${esc(remote.label)}</b>${tag}</div>
-          <div class="map-key" title="${esc(remote.key)}">${esc(remote.key.slice(0, 12))}… <span>· ${remote.sessions} 个会话 · ${remote.roots} 个根</span></div>
-          <div class="map-meta">${remote.subs} 个子代理 · 远端 label 来自 workspace/profile</div>
-        </div>
-        <div class="map-side">${side}</div>
-      </div>`;
-    }).join('')}</div>`;
+
+    for (const remote of state.remoteWorkspaces.filter((workspace) => !paired.has(workspace.key))) {
+      const choice = state.mappingChoice[remote.key] ?? '';
+      const validChoice = candidates.some((local) => local.path === choice) ? choice : '';
+      const picker = candidates.length === 0
+        ? '<div class="map-empty-cell"><b>没有可用的本机工作区</b><span>先在 DSH 里添加工作区，再回来绑定。</span></div>'
+        : `<div class="map-pick">
+            <div class="map-pick-row">
+              <select class="select map-select" data-map-select="${esc(remote.key)}" aria-label="为 ${esc(remote.label)} 选择本机工作区">
+                <option value="">选择本机工作区…</option>
+                ${candidates.map((local) => `<option value="${esc(local.path)}" ${validChoice === local.path ? 'selected' : ''}>${esc(local.title)} — ${esc(local.path)}</option>`).join('')}
+              </select>
+              <button class="btn small primary" data-bind-key="${esc(remote.key)}" ${validChoice === '' ? 'disabled' : ''}>绑定</button>
+            </div>
+            <div class="map-hint">绑定不可改绑；未映射会话不会写入本机。</div>
+          </div>`;
+      rows.push(`<tr class="map-pair pending">
+        <td>${picker}</td>
+        <td class="map-cell rel"><span class="map-rel pending">待映射</span></td>
+        <td>${remoteBlockHtml(remote, '左侧选择一个本机工作区后确认。')}</td>
+      </tr>`);
+    }
+
+    if (rows.length === 0) {
+      return '<div class="map-empty"><b>还没有工作区</b>本机没有已注册的工作区，远端也没有 workspaceKey。</div>';
+    }
+    return `<div class="map-table-wrap"><table class="map-table">
+      <colgroup><col class="local"><col class="rel"><col></colgroup>
+      <thead><tr><th>本机工作区</th><th>关系</th><th>远端 workspaceKey</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table></div>`;
   }
 
   function mappingPanelHtml(compact = false) {
@@ -939,15 +991,14 @@
     const counts = mappingCounts();
     return `<div class="map-embed">
       <div class="map-stats">
+        <span class="map-stat"><b>${counts.locals}</b> 本机工作区</span>
         <span class="map-stat"><b>${counts.total}</b> 远端工作区</span>
         <span class="map-stat"><b>${counts.bound}</b> 已绑定</span>
+        <span class="map-stat"><b>${counts.native}</b> 本机身份</span>
+        <span class="map-stat"><b>${counts.localOnly}</b> 仅本机</span>
         <span class="map-stat"><b>${counts.pending}</b> 待映射</span>
       </div>
       ${mappingRowsHtml()}
-      <div class="behavior-row map-auto">
-        <div class="behavior-main"><b>同路径自动绑定</b><span>${state.autoBindSamePath ? '匹配即绑定；已绑定的 key 仍不可改绑' : '默认关闭；只预选，需确认后才建立绑定'}</span></div>
-        <div class="right">${switchHtml(state.autoBindSamePath, 'autoBindSamePath', '同路径自动绑定')}</div>
-      </div>
       <p class="map-onboard-note">${compact
         ? '这一步可以跳过；未映射的远端会话不会写入本机，之后可在设置页补绑定。'
         : '绑定是每设备本地的，一次确认后不能改绑；未映射会话不会 apply，也不影响其他工作区同步。'}</p>
@@ -956,8 +1007,8 @@
 
   function mappingSettingsHtml() {
     return `<section class="card">
-      <div class="card-head"><h2>远端工作区</h2><span class="hint">按 workspaceKey 解析本机落点</span><span class="right"><button class="btn small" data-map-refresh>刷新</button></span></div>
-      <p class="hint" style="margin:0 0 10px">远端 label 已从 <code>workspace/profile</code> 解密；映射只影响会话落到哪台本机，不改远端历史。</p>
+      <div class="card-head"><h2>工作区映射</h2><span class="hint">左侧本机 · 右侧远端</span><span class="right"><button class="btn small" data-map-refresh>刷新</button></span></div>
+      <p class="hint" style="margin:0 0 10px">本机 key 与远端 key 一致时自动对应；不同路径的远端工作区才需要绑定。远端 label 来自 <code>workspace/profile</code>。</p>
       ${mappingPanelHtml(false)}
     </section>`;
   }
@@ -986,26 +1037,6 @@
     document.querySelectorAll('[data-map-refresh]').forEach((button) => {
       button.addEventListener('click', () => {
         toast('已刷新远端工作区（原型）');
-      });
-    });
-    document.querySelectorAll('[data-toggle="autoBindSamePath"]').forEach((input) => {
-      input.addEventListener('change', () => {
-        state.autoBindSamePath = input.checked;
-        if (input.checked) {
-          let count = 0;
-          for (const remote of state.remoteWorkspaces) {
-            const suggestion = suggestionFor(remote);
-            if (state.bindings[remote.key] === undefined && suggestion !== undefined) {
-              state.bindings[remote.key] = suggestion.path;
-              state.mappingChoice[remote.key] = suggestion.path;
-              count += 1;
-            }
-          }
-          toast(count === 0 ? '没有新的同路径匹配' : `已自动绑定 ${count} 个同路径工作区（原型）`);
-        } else {
-          toast('已关闭自动绑定；已有绑定保持不变');
-        }
-        render();
       });
     });
   }
@@ -1179,20 +1210,7 @@
         <p class="hint" style="margin:0 0 10px">只同步勾选的根会话及其子代理；取消勾选不会删除远端历史。</p>
         ${summaryHtml()}
         ${sessionScopeHtml()}`;
-      if (step === 3) return `
-        <div class="map-embed">
-          <div class="map-stats">
-            <span class="map-stat"><b>${mappingCounts().total}</b> 远端工作区</span>
-            <span class="map-stat"><b>${mappingCounts().bound}</b> 已绑定</span>
-            <span class="map-stat"><b>${mappingCounts().pending}</b> 待映射</span>
-          </div>
-          ${mappingRowsHtml()}
-          <div class="behavior-row map-auto">
-            <div class="behavior-main"><b>同路径自动绑定</b><span>${state.autoBindSamePath ? '匹配即绑定；已绑定的 key 仍不可改绑' : '默认关闭；只预选，需确认后才建立绑定'}</span></div>
-            <div class="right">${switchHtml(state.autoBindSamePath, 'autoBindSamePath', '同路径自动绑定')}</div>
-          </div>
-          <p class="map-onboard-note">这一步可以跳过；未映射的远端会话不会写入本机，之后可在设置页补绑定。</p>
-        </div>`;
+      if (step === 3) return mappingPanelHtml(true);
       return `
         <div class="done-mark">${icons.check}</div>
         <div class="done-copy"><h3>准备就绪</h3><p>连接、凭据、同步范围和工作区映射都已处理。点击开始后，会在后台完成第一次同步。</p></div>
