@@ -109,6 +109,7 @@ window.__ModuleLoader__.load({
       '.dssync-toast.on{opacity:1;transform:translate(-50%,0)}',
       '.dssync-toast.bad{color:#ffb1b1;border-color:rgba(239,68,68,.32)}',
       '.dssync-warn{color:var(--dsw-alias-state-warn-primary,#f0b64a);font-size:10.5px;line-height:1;border:1px solid rgba(240,182,74,.35);border-radius:999px;padding:3px 6px;white-space:nowrap}',
+      '.dssync-events{color:var(--dssync-faint);font-size:10px;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums}',
       /* onboarding */
       '.dssync-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:28px;background:rgba(8,8,10,.58);backdrop-filter:blur(7px);animation:dssync-overlay-in .24s ease both}',
       '.dssync-wizard{width:min(680px,100%);max-height:calc(100vh - 56px);overflow:auto;scrollbar-gutter:stable;border:1px solid var(--dssync-line-strong);border-radius:18px;background:var(--dsw-alias-bg-layer-1,#1d1d1f);box-shadow:0 28px 80px rgba(0,0,0,.5);padding:26px 28px 22px;animation:dssync-wizard-in .32s cubic-bezier(.16,1,.3,1) both}',
@@ -460,14 +461,21 @@ window.__ModuleLoader__.load({
       if (status === null) return 'warn'
       if (status.running) return 'syncing'
       if (status.lastError !== null) return 'bad'
-      if (Array.isArray(status.blocked) && status.blocked.length > 0) return 'bad'
-      if (Array.isArray(status.leases) && status.leases.some(function (lease) {
-        return lease && (lease.state === 'foreign' || lease.state === 'lost')
+      var sessions = Array.isArray(status.sessions) ? status.sessions : []
+      if (sessions.some(function (session) { return session.phase === 'failed' || session.phase === 'blocked' })) return 'bad'
+      if (sessions.some(function (session) {
+        return session.phase === 'deferred' || session.cwdPending === true
+          || (session.lease && (session.lease.state === 'foreign' || session.lease.state === 'lost'))
       })) return 'warn'
-      if (Array.isArray(status.cwdPending) && status.cwdPending.length > 0) return 'warn'
-      if (Array.isArray(status.blockedDecisions) && status.blockedDecisions.length > 0) return 'warn'
+      if (sessions.some(function (session) { return session.decision })) return 'warn'
       if (status.configured) return 'ok'
       return 'warn'
+    }
+
+    /** 取一个会话的聚合视图。 */
+    function findSession(status, sessionId) {
+      if (status === null || !Array.isArray(status.sessions)) return null
+      return status.sessions.find(function (session) { return session && session.sessionId === sessionId }) || null
     }
 
     /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策 / 已分叉 / 租约。 */
@@ -476,46 +484,19 @@ window.__ModuleLoader__.load({
         pending: false, tail: false, lag: false, cwd: false, blocked: false,
         blockedReason: '', unmapped: false, live: false, leaseState: null, leaseError: '',
       }
+      var session = findSession(status, sessionId)
       var pending = status.pending !== null && status.pending !== undefined && status.pending.sessionId === sessionId
-      var tail = false
-      var lag = false
-      var cwd = Array.isArray(status.cwdPending) && status.cwdPending.indexOf(sessionId) !== -1
-      var unmapped = Array.isArray(status.sessions) && status.sessions.some(function (view) {
-        return view.sessionId === sessionId && view.direction === 'pull' && view.status === 'unmapped'
-      })
-      var blocked = null
-      if (Array.isArray(status.blocked)) {
-        blocked = status.blocked.find(function (entry) { return entry && entry.sessionId === sessionId }) || null
-      }
-      var lease = null
-      if (Array.isArray(status.leases)) {
-        lease = status.leases.find(function (entry) { return entry && entry.sessionId === sessionId }) || null
-      }
-      if (Array.isArray(status.sessions)) {
-        tail = status.sessions.some(function (view) {
-          return view.sessionId === sessionId && view.direction === 'push' && view.tailOpen === true
-        })
-        // push 先于 pull 执行：本轮 push 看到 remote-ahead 后，同轮 pull 可能
-        // 已经把远端事件补齐。此时不应继续按“落后”拦截，否则会多挂一分钟。
-        var pulledThisRun = status.sessions.some(function (view) {
-          return view.sessionId === sessionId && view.direction === 'pull'
-            && view.status === 'pulled' && (view.applied || 0) > 0
-        })
-        lag = !pulledThisRun && status.sessions.some(function (view) {
-          return view.sessionId === sessionId && view.direction === 'push' && view.status === 'remote-ahead'
-        })
-      }
-      var live = lease !== null || (Array.isArray(status.sessions) && status.sessions.some(function (view) {
-        return view.sessionId === sessionId && view.direction === 'pull' && view.status === 'local-active'
-      }))
       return {
-        pending: pending, tail: tail, lag: lag, cwd: cwd,
-        blocked: blocked !== null,
-        blockedReason: blocked && blocked.message ? blocked.message : '',
-        unmapped: unmapped,
-        live: live,
-        leaseState: lease ? lease.state : null,
-        leaseError: lease && lease.error ? String(lease.error) : '',
+        pending: pending,
+        tail: session ? session.tailOpen === true : false,
+        lag: session ? session.remoteAhead === true : false,
+        cwd: session ? session.cwdPending === true : false,
+        blocked: session ? session.blocked !== undefined && session.blocked !== null : false,
+        blockedReason: session && session.blocked && session.blocked.message ? session.blocked.message : '',
+        unmapped: session ? session.unmapped !== undefined : false,
+        live: session ? session.live === true : false,
+        leaseState: session && session.lease ? session.lease.state : null,
+        leaseError: session && session.lease && session.lease.error ? String(session.lease.error) : '',
       }
     }
 
@@ -1368,7 +1349,8 @@ window.__ModuleLoader__.load({
       function sessionLabel(sessionId) {
         var title = props.titleOf ? String(props.titleOf(sessionId) || '') : ''
         var shortId = shortSessionId(sessionId)
-        return title === '' ? shortId : title + ' · ' + shortId
+        if (title === '') return '未命名会话 · ' + shortId
+        return title + ' · ' + shortId
       }
       var visibleState = useState(false)
       var visible = visibleState[0]
@@ -1446,39 +1428,37 @@ window.__ModuleLoader__.load({
 
       if (setup === null || !setup.configured) return h(Toast, { model: model })
 
-      var rawSessions = status === null
-        ? []
-        : (status.running && Array.isArray(status.live) && status.live.length > 0 ? status.live : status.sessions)
-      var sessions = Array.isArray(rawSessions) ? rawSessions.slice() : []
-      var cwdPending = status && Array.isArray(status.cwdPending) ? status.cwdPending : []
-      var blocked = status && Array.isArray(status.blocked) ? status.blocked : []
-      var decisions = status && Array.isArray(status.blockedDecisions) ? status.blockedDecisions : []
-      var blockedIds = blocked.map(function (entry) { return entry.sessionId })
-      var decisionIds = decisions.map(function (entry) { return entry.sessionId })
+      var sessions = status && Array.isArray(status.sessions) ? status.sessions.slice() : []
       var total = sessions.length
-      var done = sessions.filter(function (session) {
-        return session.status !== 'error' && session.status !== 'pulling' && session.status !== 'pushing'
-      }).length
-      var failed = sessions.some(function (session) { return session.status === 'error' })
+      var done = sessions.filter(function (session) { return session.phase === 'done' }).length
+      var skipped = sessions.filter(function (session) { return session.phase === 'skipped' }).length
+      var deferred = sessions.filter(function (session) { return session.phase === 'deferred' }).length
+      var blockedCount = sessions.filter(function (session) { return session.phase === 'blocked' }).length
+      var failed = sessions.some(function (session) { return session.phase === 'failed' })
       var running = status && status.running
-      var title = failed ? '同步失败' : running ? '正在同步' : cwdPending.length > 0 || blocked.length > 0 ? '需要处理' : '同步完成'
+      var title = failed ? '同步失败'
+        : blockedCount > 0 ? '需要处理'
+          : running ? '正在同步'
+            : deferred > 0 ? '部分待处理' : '同步完成'
       var subtitle = failed ? '有会话未完成，已暂停'
         : running ? (total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
-          : blocked.length > 0 ? blocked.length + ' 个会话历史分叉，已阻止继续写入'
-            : cwdPending.length > 0 ? cwdPending.length + ' 个会话 cwd 在工作区外，等待处理'
-              : decisions.length > 0 ? decisions.length + ' 个会话已忽略或强行写入'
-                : total === 0 ? '还没有同步记录' : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
+          : blockedCount > 0 ? blockedCount + ' 个会话历史分叉，已阻止继续写入'
+            : deferred > 0 ? deferred + ' 个会话等待拉取/关闭/cwd 处理'
+              : total === 0 ? '还没有同步记录'
+                : (done + skipped) + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
       var dot = statusDot(status)
-      var segments = sessions.map(function (session, index) {
-        var bad = session.status === 'error'
-        var active = session.status === 'pulling' || session.status === 'pushing' || (running && !bad && session.status !== 'pulled' && session.status !== 'up-to-date')
-        var terminal = session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed'
-          || session.status === 'local-active' || session.status === 'local-ahead'
-          || session.status === 'excluded' || session.status === 'tombstone' || session.status === 'skipped'
-        var attention = session.status === 'remote-ahead' || session.status === 'lease-held' || session.status === 'partial'
-        var pct = bad ? 100 : terminal ? 100 : active || attention ? 55 : 0
-        return h('span', { className: 'dssync-seg' + (bad ? ' bad' : active || attention ? ' run' : pct >= 100 ? ' done' : ''), key: session.sessionId + ':' + session.direction + ':' + index, title: (session.direction === 'push' ? '推送 ' : '拉取 ') + sessionLabel(session.sessionId) },
-          h('i', { style: { width: pct + '%' } }))
+      var segments = sessions.map(function (session) {
+        var bad = session.phase === 'failed' || session.phase === 'blocked'
+        var active = session.phase === 'running'
+        var attention = session.phase === 'deferred'
+        var terminal = session.phase === 'done' || session.phase === 'skipped'
+        var ratio = session.totalEvents > 0 ? session.doneEvents / session.totalEvents : (terminal ? 1 : 0)
+        var pct = bad ? 100 : terminal ? 100 : attention ? 55 : active ? Math.max(10, Math.min(95, Math.round(ratio * 100))) : 0
+        return h('span', {
+          className: 'dssync-seg' + (bad ? ' bad' : active || attention ? ' run' : pct >= 100 ? ' done' : ''),
+          key: session.sessionId,
+          title: sessionLabel(session.sessionId),
+        }, h('i', { style: { width: pct + '%' } }))
       })
       if (segments.length === 0) {
         segments = [h('span', { className: 'dssync-seg' + (running ? ' run' : ''), key: 'empty' }, h('i', { style: { width: running ? '35%' : '0%' } }))]
@@ -1559,7 +1539,7 @@ window.__ModuleLoader__.load({
       var collapsed = !visible
       var openClass = open && !collapsed ? ' open' : ''
       var collapsedClass = collapsed ? ' collapsed' : ''
-      var badClass = failed ? ' bad' : ''
+      var badClass = failed || blockedCount > 0 ? ' bad' : ''
       function cwdActions(id) {
         return [
           h('button', {
@@ -1655,30 +1635,10 @@ window.__ModuleLoader__.load({
         ]
       }
 
-      var rows = sessions.map(function (session, index) {
-        var blockedEntry = null
-        for (var blockedIndex = 0; blockedIndex < blocked.length; blockedIndex += 1) {
-          if (blocked[blockedIndex] && blocked[blockedIndex].sessionId === session.sessionId) {
-            blockedEntry = blocked[blockedIndex]
-            break
-          }
-        }
-        var decisionEntry = null
-        for (var decisionIndex = 0; decisionIndex < decisions.length; decisionIndex += 1) {
-          if (decisions[decisionIndex] && decisions[decisionIndex].sessionId === session.sessionId) {
-            decisionEntry = decisions[decisionIndex]
-            break
-          }
-        }
-        var leaseEntry = null
-        if (status && Array.isArray(status.leases)) {
-          for (var leaseIndex = 0; leaseIndex < status.leases.length; leaseIndex += 1) {
-            if (status.leases[leaseIndex] && status.leases[leaseIndex].sessionId === session.sessionId) {
-              leaseEntry = status.leases[leaseIndex]
-              break
-            }
-          }
-        }
+      var rows = sessions.map(function (session) {
+        var blockedEntry = session.blocked || null
+        var decisionEntry = session.decision || null
+        var leaseEntry = session.lease || null
         var leaseTag = leaseEntry === null ? ''
           : leaseEntry.state === 'foreign' ? '他机编辑'
             : leaseEntry.state === 'lost' ? '租约丢失' : ''
@@ -1687,21 +1647,30 @@ window.__ModuleLoader__.load({
         var decisionTag = isResolved ? (decisionEntry.action === 'ignore' ? '已忽略' : '已强行写入') : ''
         var tag = isBlocked ? '分叉'
           : isResolved ? decisionTag
-            : session.status === 'error' ? '失败'
-              : session.status === 'excluded' ? '已排除'
-                : session.status === 'tombstone' ? '已删除'
-                  : session.status === 'local-active' ? '已加载'
-                    : session.status === 'local-ahead' ? '本地领先'
-                      : session.status === 'remote-ahead' ? '远端领先'
-                        : session.status === 'lease-held' ? '租约占用'
-                          : session.status === 'skipped' ? '已跳过'
-                            : session.status === 'partial' ? '部分'
-                              : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
-                                : session.status === 'pulling' || session.status === 'pushing' || running ? '同步中' : '等待'
-        var attention = tag === '远端领先' || tag === '租约占用' || tag === '已加载' || tag === '本地领先' || leaseTag !== ''
-        return h('div', { className: 'dssync-rowline', key: session.sessionId + ':' + session.direction + ':' + index },
-          h('span', { className: 'dssync-st ' + (isBlocked || session.status === 'error' || leaseEntry && leaseEntry.state === 'lost' ? 'bad' : isResolved ? 'run' : tag === '已完成' ? 'ok' : tag === '同步中' || attention ? 'run' : '') }),
-          h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + sessionLabel(session.sessionId)),
+            : session.phase === 'failed' ? '失败'
+              : session.phase === 'blocked' ? '分叉'
+                : session.phase === 'skipped' ? '已跳过'
+                  : session.phase === 'done' ? '已完成'
+                    : session.phase === 'running' ? '同步中'
+                      : session.phase === 'deferred'
+                        ? (session.live ? '已加载'
+                          : session.remoteAhead ? '远端领先'
+                            : session.unmapped ? '待映射'
+                              : session.cwdPending ? 'cwd 外' : '等待')
+                        : '等待'
+        var counts = []
+        if (session.pending && session.pending.upload > 0) counts.push('↑ ' + session.pending.upload)
+        else if (session.push && session.push.totalEvents > 0) counts.push('↑ ' + session.push.doneEvents + '/' + session.push.totalEvents)
+        if (session.pending && session.pending.download > 0) counts.push('↓ ' + session.pending.download)
+        else if (session.pull && session.pull.totalEvents > 0) counts.push('↓ ' + session.pull.doneEvents + '/' + session.pull.totalEvents)
+        var attention = tag === '远端领先' || tag === '已加载' || tag === '待映射' || tag === 'cwd 外' || leaseTag !== ''
+        var stateClass = isBlocked || session.phase === 'failed' || leaseEntry !== null && leaseEntry.state === 'lost' ? 'bad'
+          : session.phase === 'done' || session.phase === 'skipped' ? 'ok'
+            : session.phase === 'running' || attention || isResolved ? 'run' : ''
+        return h('div', { className: 'dssync-rowline', key: session.sessionId },
+          h('span', { className: 'dssync-st ' + stateClass }),
+          h('span', { className: 'name' }, sessionLabel(session.sessionId)),
+          counts.length > 0 ? h('span', { className: 'dssync-events' }, counts.join(' · ')) : null,
           h('span', { className: 'tag' }, tag),
           leaseTag === '' ? null : h('span', {
             className: 'dssync-warn',
@@ -1711,39 +1680,10 @@ window.__ModuleLoader__.load({
           isBlocked ? blockedActions(session.sessionId, blockedEntry) : null,
           isResolved ? h('span', { className: 'dssync-warn', title: decisionEntry.message }, decisionTag) : null,
           isResolved ? decisionActions(session.sessionId, decisionEntry) : null,
-          !isBlocked && !isResolved && session.cwdNonPortable ? h('span', {
+          !isBlocked && !isResolved && session.cwdPending ? h('span', {
             className: 'dssync-warn', title: '最后 cwd 在工作区外，跨设备可能无法正确恢复',
           }, 'cwd 外') : null,
-          !isBlocked && !isResolved && session.cwdNonPortable ? cwdActions(session.sessionId) : null)
-      })
-      var seenSessions = new Set(sessions.map(function (session) { return session.sessionId }))
-      var pendingRows = cwdPending.filter(function (id) {
-        return !seenSessions.has(id) && blockedIds.indexOf(id) === -1 && decisionIds.indexOf(id) === -1
-      }).map(function (id) {
-        return h('div', { className: 'dssync-rowline', key: id + ':pending' },
-          h('span', { className: 'dssync-st run' }),
-          h('span', { className: 'name' }, '↓ ' + sessionLabel(id)),
-          h('span', { className: 'dssync-warn' }, 'cwd 外'),
-          cwdActions(id))
-      })
-      var blockedRows = blocked.filter(function (entry) {
-        return !seenSessions.has(entry.sessionId)
-      }).map(function (entry) {
-        return h('div', { className: 'dssync-rowline', key: entry.sessionId + ':blocked' },
-          h('span', { className: 'dssync-st bad' }),
-          h('span', { className: 'name' }, '↓ ' + sessionLabel(entry.sessionId)),
-          h('span', { className: 'dssync-warn', title: entry.message || '本地与远端历史已分叉' }, '已阻止'),
-          blockedActions(entry.sessionId, entry))
-      })
-      var decisionRows = decisions.filter(function (entry) {
-        return !seenSessions.has(entry.sessionId)
-      }).map(function (entry) {
-        var label = entry.action === 'ignore' ? '已忽略' : '已强行写入'
-        return h('div', { className: 'dssync-rowline', key: entry.sessionId + ':decision' },
-          h('span', { className: 'dssync-st run' }),
-          h('span', { className: 'name' }, '↓ ' + sessionLabel(entry.sessionId)),
-          h('span', { className: 'dssync-warn', title: entry.message }, label),
-          decisionActions(entry.sessionId, entry))
+          !isBlocked && !isResolved && session.cwdPending ? cwdActions(session.sessionId) : null)
       })
 
       var head = h('div', {
@@ -1764,7 +1704,7 @@ window.__ModuleLoader__.load({
       h('div', { className: 'dssync-label' },
         h('b', null, title),
         h('span', null, subtitle)),
-      h('span', { className: 'dssync-count' }, done + '/' + total),
+      h('span', { className: 'dssync-count' }, (done + skipped) + '/' + total),
       h('button', {
         className: 'dssync-chev', type: 'button', 'aria-label': open ? '收起同步会话列表' : '展开同步会话列表',
         'aria-expanded': open, onClick: onListToggle,
@@ -1772,12 +1712,12 @@ window.__ModuleLoader__.load({
 
       var panel = h('div', { className: 'dssync-collapse' },
         h('div', { className: 'dssync-collapse-in' },
-          h('div', { className: 'dssync-panel' }, rows.length > 0 || pendingRows.length > 0 || blockedRows.length > 0 || decisionRows.length > 0
-            ? rows.concat(pendingRows, blockedRows, decisionRows)
+          h('div', { className: 'dssync-panel' }, rows.length > 0
+            ? rows
             : h('div', { className: 'dssync-note' }, '暂无会话记录')),
           status && status.lastError ? h('div', { className: 'dssync-error' }, status.lastError.message + (status.retryCount > 0 ? ' · 已重试 ' + status.retryCount + ' 次' : '')) : null,
           h('div', { className: 'dssync-foot' },
-            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blocked.length > 0 ? '有分叉待处理' : cwdPending.length > 0 ? '有 cwd 待处理' : decisions.length > 0 ? '有已忽略会话' : '全部完成'),
+            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blockedCount > 0 ? '有分叉待处理' : deferred > 0 ? '有会话待处理' : '全部完成'),
             h('span', { className: 'spacer' }),
             h('button', { className: 'dssync-mini', type: 'button', disabled: syncing || running, 'aria-busy': syncing, onClick: triggerSync }, syncing || running ? '同步中…' : '立即同步'),
             h('button', { className: 'dssync-mini', type: 'button', onClick: props.openSettings }, '设置'))))
@@ -1850,7 +1790,7 @@ window.__ModuleLoader__.load({
           if (!ctx.sessions || !ctx.sessions.list || typeof ctx.sessions.list.getSnapshot !== 'function') return ''
           var summary = ctx.sessions.list.getSnapshot().byId[String(sessionId)]
           if (summary === undefined || summary === null) return ''
-          return String(summary.displayTitle || summary.title || '')
+          return String(summary.title || '')
         } catch (error) {
           return ''
         }

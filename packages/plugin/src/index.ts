@@ -490,6 +490,12 @@ export function apply(ctx: Context, config: Config): void {
     configuration,
     intervalMs,
     leases: () => leaseKeeper.snapshot(),
+    scheduler: () => ({
+      autoSync,
+      intervalMs,
+      nextRunAt: null,
+      backoffUntil: null,
+    }),
     initial: {
       revision: initialJournal.revision,
       ...initialJournal.pending === undefined ? {} : { pending: initialJournal.pending },
@@ -638,13 +644,13 @@ export function apply(ctx: Context, config: Config): void {
       return
     }
     let bound = false
-    for (const session of controller.snapshot().sessions) {
-      if (session.direction !== 'pull' || session.status !== 'unmapped' || session.workspaceKey === undefined) continue
-      if (bindings.bindings[session.workspaceKey] !== undefined) continue
-      const candidate = registered.find((workspace) => workspaceKeyForCwd('', workspace.path) === session.workspaceKey)
+    for (const session of controller.unmappedSessions()) {
+      const workspaceKey = session.workspaceKey
+      if (bindings.bindings[workspaceKey] !== undefined) continue
+      const candidate = registered.find((workspace) => workspaceKeyForCwd('', workspace.path) === workspaceKey)
       if (candidate === undefined) continue
       try {
-        await bindWorkspaceFile(bindingsDir, session.workspaceKey, candidate.path, candidate.title)
+        await bindWorkspaceFile(bindingsDir, workspaceKey, candidate.path, candidate.title)
         bound = true
       } catch (error: unknown) {
         logger.warn(`dsh-session-cloudsync: 自动绑定 ${candidate.path} 失败：${error instanceof Error ? error.message : String(error)}`)
@@ -656,12 +662,18 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  const runSync = async (manual = false): Promise<Awaited<ReturnType<SyncController['run']>>> => {
+  const runSync = async (
+    manual = false,
+    trigger?: 'startup' | 'auto' | 'manual',
+  ): Promise<Awaited<ReturnType<SyncController['run']>>> => {
     refreshConfig()
     await refreshSecrets()
     void leaseKeeper.tick()
     await refreshBindings()
-    const result = manual ? await controller.run({ manual: true }) : await controller.run()
+    const result = await controller.run({
+      manual,
+      ...trigger === undefined ? {} : { trigger },
+    })
     await autoBindMatchingWorkspaces()
     await backfillMappedWorkspaces()
     void runVault().catch((error: unknown) => {
@@ -793,7 +805,7 @@ export function apply(ctx: Context, config: Config): void {
     setup,
     workspaces,
     test: async (serverUrl: string) => testConnection(serverUrl, fetch, engineConfig.requestTimeoutMs),
-    syncNow: () => runSync(true),
+    syncNow: () => runSync(true, 'manual'),
     cwdDecision: async (sessionId: string, action: 'fix' | 'skip') => {
       if (action === 'skip') {
         const snapshot = await ctx.sessionPersistence.stat(sessionId as SessionId)
@@ -861,7 +873,7 @@ export function apply(ctx: Context, config: Config): void {
       logger.info(`dsh-session-cloudsync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
     } else {
       await refreshBindings()
-      void runSync().catch((error: unknown) => {
+      void runSync(false, 'startup').catch((error: unknown) => {
         logger.warn(`dsh-session-cloudsync: 启动同步失败：${error instanceof Error ? error.message : String(error)}`)
       })
     }

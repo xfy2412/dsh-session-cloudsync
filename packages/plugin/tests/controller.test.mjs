@@ -45,7 +45,8 @@ function createController(overrides = {}) {
   }
 }
 
-test('控制器：实时阶段只进入 live，轮次结束后清空', async () => {  let fixture
+test('控制器：实时阶段进入 live，轮次结束后收敛', async () => {
+  let fixture
   fixture = createController({
     push: async () => {
       fixture.controller.updateProgress({ sessionId: 's1', direction: 'push', phase: 'start', progress: 0 })
@@ -54,11 +55,12 @@ test('控制器：实时阶段只进入 live，轮次结束后清空', async () 
   })
 
   const running = fixture.controller.run()
-  assert.deepEqual(fixture.controller.snapshot().live, [
-    { sessionId: 's1', direction: 'push', status: 'pushing' },
-  ])
+  const during = fixture.controller.snapshot().sessions
+  assert.equal(during.length, 1)
+  assert.equal(during[0].sessionId, 's1')
+  assert.equal(during[0].phase, 'running')
+  assert.equal(during[0].push.status, 'pushing')
   await running
-  assert.deepEqual(fixture.controller.snapshot().live, [])
   assert.deepEqual(fixture.controller.snapshot().sessions, [])
 })
 
@@ -87,12 +89,24 @@ test('控制器：成功一轮更新状态、revision 与逐会话视图', async
   assert.equal(result.status.revision, 7)
   assert.equal(result.status.pending, null)
 
-  assert.deepEqual(result.status.sessions, [
-    { sessionId: 's1', direction: 'push', status: 'pushed', batches: 2, bytes: 128, tailOpen: true },
-    { sessionId: 's2', direction: 'push', status: 'skipped', error: '子代理会话默认不同步' },
-    { sessionId: 's3', direction: 'pull', status: 'pulled', applied: 4 },
-    { sessionId: 's4', direction: 'pull', status: 'up-to-date' },
-  ])
+  assert.equal(result.status.schemaVersion, 2)
+  assert.equal(result.status.run.state, 'finished')
+  assert.equal(result.status.run.trigger, 'auto')
+  assert.equal(result.status.scheduler.intervalMs, 60_000)
+
+  const sessions = result.status.sessions
+  assert.deepEqual(sessions.map((session) => session.sessionId), ['s1', 's2', 's3', 's4'])
+  const byId = Object.fromEntries(sessions.map((session) => [session.sessionId, session]))
+  assert.equal(byId.s1.phase, 'done')
+  assert.equal(byId.s1.push.status, 'pushed')
+  assert.equal(byId.s1.tailOpen, true)
+  assert.equal(byId.s2.phase, 'skipped')
+  assert.equal(byId.s2.push.error, '子代理会话默认不同步')
+  assert.equal(byId.s3.phase, 'done')
+  assert.equal(byId.s3.pull.applied, 4)
+  assert.equal(byId.s3.pull.totalEvents, 4)
+  assert.equal(byId.s4.phase, 'done')
+  assert.equal(byId.s4.pull.status, 'up-to-date')
   assert.deepEqual(fixture.persists.at(-1), { revision: 7 })
 })
 
@@ -100,23 +114,23 @@ test('控制器：cwd 警告保留到用户处理，clear 后消失', async () =
   let report = pullReport([{ sessionId: 's-cwd', status: 'pulled', cwdNonPortable: true }], 1)
   const fixture = createController({ pull: async () => report })
   await fixture.controller.run()
-  assert.deepEqual(fixture.controller.snapshot().cwdPending, ['s-cwd'])
-  assert.equal(fixture.controller.snapshot().sessions[0].cwdNonPortable, true)
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-cwd').cwdPending, true)
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-cwd').pull.cwdNonPortable, true)
   assert.deepEqual(fixture.persists.at(-1), { revision: 1, cwdPending: ['s-cwd'] })
 
   // 下一轮没有这条会话时仍保留，避免提示在 revision 推进后丢失。
   report = pullReport([], 2)
   await fixture.controller.run()
-  assert.deepEqual(fixture.controller.snapshot().cwdPending, ['s-cwd'])
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-cwd').cwdPending, true)
 
   fixture.controller.clearCwdPending('s-cwd')
-  assert.deepEqual(fixture.controller.snapshot().cwdPending, [])
+  assert.equal(fixture.controller.snapshot().sessions.some((session) => session.sessionId === 's-cwd'), false)
   assert.deepEqual(fixture.persists.at(-1), { revision: 2 })
 })
 
 test('控制器：从状态文件恢复 cwd 待处理项', () => {
   const fixture = createController({ initial: { revision: 4, cwdPending: ['s-restored'] } })
-  assert.deepEqual(fixture.controller.snapshot().cwdPending, ['s-restored'])
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-restored').cwdPending, true)
 })
 
 test('控制器：分叉会话进入 blocked、持久化，并在后续成功同步后清除', async () => {
@@ -126,13 +140,13 @@ test('控制器：分叉会话进入 blocked、持久化，并在后续成功同
   const fixture = createController({ pull: async () => report })
   const first = await fixture.controller.run()
   assert.equal(first.ok, false)
-  assert.deepEqual(fixture.controller.snapshot().blocked.map((entry) => entry.sessionId), ['s-diverged'])
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-diverged').phase, 'blocked')
   assert.equal(fixture.controller.isBlocked('s-diverged', 10, 4), true)
   assert.deepEqual(fixture.persists.at(-1).blocked.map((entry) => entry.sessionId), ['s-diverged'])
 
   fixture.controller.resolveBlocked('s-diverged', 'force', 10, 4)
   assert.equal(fixture.controller.isBlocked('s-diverged', 10, 4), false)
-  assert.deepEqual(fixture.controller.snapshot().blocked, [])
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-diverged').blocked, undefined)
   assert.deepEqual(fixture.persists.at(-1).blockedDecisions, [
     { sessionId: 's-diverged', action: 'force', message: '共享前缀批次 3 不一致（diverged）', at: 1_000, createdAt: 10, formatVersion: 4 },
   ])
@@ -145,7 +159,7 @@ test('控制器：分叉会话进入 blocked、持久化，并在后续成功同
   report = pullReport([{ sessionId: 's-diverged', status: 'up-to-date' }], 2)
   const second = await fixture.controller.run({ manual: true })
   assert.equal(second.ok, true)
-  assert.deepEqual(fixture.controller.snapshot().blocked, [])
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-diverged').blocked, undefined)
   assert.equal(fixture.controller.isBlocked('s-diverged', 10, 4), false)
   assert.equal(fixture.persists.at(-1).blockedDecisions, undefined)
 })
@@ -163,7 +177,7 @@ test('控制器：blocked 决定按生命周期匹配，不误伤同 id 的新�
   await fixture.controller.run()
   assert.equal(fixture.controller.isBlocked('s-life', 10, 4), true)
   assert.equal(fixture.controller.isBlocked('s-life', 11, 4), false)
-  assert.deepEqual(fixture.controller.snapshot().blocked[0], {
+  assert.deepEqual(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-life').blocked, {
     sessionId: 's-life',
     kind: 'diverged',
     message: 'diverged',
@@ -174,7 +188,7 @@ test('控制器：blocked 决定按生命周期匹配，不误伤同 id 的新�
 
   fixture.controller.resolveBlocked('s-life', 'force', 10, 4)
   assert.equal(fixture.controller.isBlocked('s-life', 10, 4), false)
-  assert.deepEqual(fixture.controller.snapshot().blocked, [])
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-life').blocked, undefined)
 })
 
 test('控制器：忽略后可以从状态恢复为阻塞', async () => {
@@ -191,12 +205,12 @@ test('控制器：忽略后可以从状态恢复为阻塞', async () => {
   await fixture.controller.run()
   fixture.controller.resolveBlocked('s-restore', 'ignore', 20, 4)
   assert.equal(fixture.controller.isBlocked('s-restore', 20, 4), false)
-  assert.equal(fixture.controller.snapshot().blockedDecisions[0].action, 'ignore')
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-restore').decision.action, 'ignore')
 
   fixture.controller.restoreBlocked('s-restore', 20, 4)
   assert.equal(fixture.controller.isBlocked('s-restore', 20, 4), true)
-  assert.deepEqual(fixture.controller.snapshot().blockedDecisions, [])
-  assert.equal(fixture.controller.snapshot().blocked[0].message, 'diverged')
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-restore').decision, undefined)
+  assert.equal(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-restore').blocked.message, 'diverged')
 })
 
 test('控制器：从状态文件恢复 blocked 项', () => {
@@ -207,9 +221,49 @@ test('控制器：从状态文件恢复 blocked 项', () => {
     },
   })
   assert.equal(fixture.controller.isBlocked('s-blocked', 10, 4), true)
-  assert.deepEqual(fixture.controller.snapshot().blocked, [
-    { sessionId: 's-blocked', kind: 'diverged', message: 'old divergence', at: 10, createdAt: 10, formatVersion: 4 },
-  ])
+  assert.deepEqual(fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-blocked').blocked, {
+    sessionId: 's-blocked', kind: 'diverged', message: 'old divergence', at: 10, createdAt: 10, formatVersion: 4,
+  })
+})
+
+test('控制器：会话聚合：push+pull 一行，pull 追平后清除 remote-ahead', async () => {
+  const fixture = createController({
+    push: async () => pushReport([{
+      sessionId: 's1', status: 'remote-ahead', pendingEvents: 5, totalEvents: 0,
+    }]),
+    pull: async () => pullReport([{
+      sessionId: 's1', status: 'pulled', applied: 5, totalEvents: 5,
+    }], 1),
+  })
+  const before = fixture.controller.snapshot()
+  const result = await fixture.controller.run()
+  const sessions = result.status.sessions
+  assert.equal(sessions.length, 1)
+  assert.equal(sessions[0].sessionId, 's1')
+  assert.equal(sessions[0].remoteAhead, false)
+  assert.equal(sessions[0].phase, 'done')
+  assert.equal(sessions[0].push.status, 'remote-ahead')
+  assert.equal(sessions[0].push.pendingEvents, 5)
+  assert.equal(sessions[0].pull.applied, 5)
+  assert.equal(sessions[0].pending.download, 0)
+  assert.ok(result.status.statusVersion > before.statusVersion)
+})
+
+test('控制器：local-active 聚合为 deferred 并保留待下载事件数', async () => {
+  const fixture = createController({
+    push: async () => pushReport([{
+      sessionId: 's1', status: 'remote-ahead', pendingEvents: 5, totalEvents: 0,
+    }]),
+    pull: async () => pullReport([{
+      sessionId: 's1', status: 'local-active', totalEvents: 5, pendingEvents: 5,
+    }], 0),
+  })
+  const result = await fixture.controller.run()
+  const session = result.status.sessions[0]
+  assert.equal(session.phase, 'deferred')
+  assert.equal(session.live, true)
+  assert.equal(session.remoteAhead, true)
+  assert.equal(session.pending.download, 5)
 })
 
 test('控制器：推送错误进入退避，自动轮次跳过，手动轮次立即重试', async () => {
@@ -368,11 +422,11 @@ test('控制器：未配置时不调用引擎，快照带原因', async () => {
   assert.deepEqual(fixture.calls, { push: 0, pull: 0 })
 })
 
-test('控制器：快照携带 live 会话的设备独占租约', () => {
+test('控制器：快照把 live 会话的设备独占租约并入会话视图', () => {
   const fixture = createController({
     leases: () => [{ sessionId: 's1', state: 'foreign', error: 'held by other' }],
   })
-  assert.deepEqual(fixture.controller.snapshot().leases, [
-    { sessionId: 's1', state: 'foreign', error: 'held by other' },
-  ])
+  const session = fixture.controller.snapshot().sessions.find((entry) => entry.sessionId === 's1')
+  assert.equal(session.live, true)
+  assert.deepEqual(session.lease, { sessionId: 's1', state: 'foreign', error: 'held by other' })
 })

@@ -8,14 +8,34 @@
  */
 import type { PendingApply, SyncErrorKind } from './engine.ts'
 
-/** 一个会话在最近一次同步中的结果；推送与拉取分开记录。 */
-export interface SessionSyncView {
+/** 一个方向的稳定阶段。 */
+export type SyncDirectionPhase =
+  | 'planned'
+  | 'transferring'
+  | 'committing'
+  | 'applying'
+  | 'done'
+  | 'up-to-date'
+  | 'deferred'
+  | 'skipped'
+  | 'failed'
+
+/** 一个会话在最近一轮同步中的一个方向。 */
+export interface SyncDirectionStatus {
   /** 会话 id。 */
   readonly sessionId: string
   /** 这个结果来自推送还是拉取。 */
   readonly direction: 'push' | 'pull'
-  /** 推送或拉取引擎给出的原始状态。 */
+  /** 稳定阶段。 */
+  readonly phase: SyncDirectionPhase
+  /** 引擎原始状态，保留给诊断和精确标签。 */
   readonly status: string
+  /** 本方向计划处理的事件数。 */
+  readonly totalEvents: number
+  /** 本方向已完成的事件数。 */
+  readonly doneEvents: number
+  /** 尚未完成/等待其他方向的事件数（例如 push 看到 remote-ahead）。 */
+  readonly pendingEvents?: number
   /** 推送的批次数。 */
   readonly batches?: number
   /** 拉取应用的事件数。 */
@@ -32,6 +52,78 @@ export interface SessionSyncView {
   readonly kind?: SyncErrorKind
   /** 失败说明。 */
   readonly error?: string
+}
+
+/** 一个会话的聚合阶段。 */
+export type SyncSessionPhase =
+  | 'planned'
+  | 'running'
+  | 'done'
+  | 'deferred'
+  | 'blocked'
+  | 'failed'
+  | 'skipped'
+
+/** 一个会话在所有方向上的聚合状态。 */
+export interface SyncSessionStatus {
+  /** 会话 id。 */
+  readonly sessionId: string
+  /** 聚合阶段。 */
+  readonly phase: SyncSessionPhase
+  /** 推送方向。 */
+  readonly push?: SyncDirectionStatus
+  /** 拉取方向。 */
+  readonly pull?: SyncDirectionStatus
+  /** 尚未完成的事件数。 */
+  readonly pending: { readonly upload: number; readonly download: number }
+  /** 两个方向计划处理的事件总数。 */
+  readonly totalEvents: number
+  /** 两个方向已完成的事件总数。 */
+  readonly doneEvents: number
+  /** 会话是否在本进程 live。 */
+  readonly live: boolean
+  /** 本地尾巴是否开放。 */
+  readonly tailOpen: boolean
+  /** 推送是否看到远端领先。 */
+  readonly remoteAhead: boolean
+  /** 是否等待 cwd 决策。 */
+  readonly cwdPending: boolean
+  /** 未映射的远端工作区。 */
+  readonly unmapped?: { readonly workspaceKey: string; readonly label?: string }
+  /** 分叉阻塞。 */
+  readonly blocked?: BlockedSessionView
+  /** 用户对分叉的决定。 */
+  readonly decision?: BlockedDecisionView
+  /** 设备独占租约。 */
+  readonly lease?: SessionLeaseView
+  /** 最后更新时间。 */
+  readonly updatedAt: number
+}
+
+/** 当前一轮同步的元数据。 */
+export interface SyncRunView {
+  /** 递增的 run id。 */
+  readonly id: number
+  /** 触发来源。 */
+  readonly trigger: 'startup' | 'auto' | 'manual'
+  /** 当前状态。 */
+  readonly state: 'idle' | 'running' | 'finished'
+  /** 开始时间。 */
+  readonly startedAt: number | null
+  /** 结束时间。 */
+  readonly finishedAt: number | null
+}
+
+/** 调度器的客户端视图。 */
+export interface SyncSchedulerView {
+  /** 是否开启自动同步。 */
+  readonly autoSync: boolean
+  /** 自动同步间隔。 */
+  readonly intervalMs: number
+  /** 下一次自动同步时间。 */
+  readonly nextRunAt: number | null
+  /** 退避截止时间。 */
+  readonly backoffUntil: number | null
 }
 
 /** 最近一次错误。 */
@@ -86,12 +178,20 @@ export interface SessionLeaseView {
 
 /** 客户端轮询的完整同步状态。 */
 export interface SyncStatus {
+  /** 状态 schema 版本；当前为 2。 */
+  readonly schemaVersion: 2
+  /** 单调整数；客户端只接受更大的值。 */
+  readonly statusVersion: number
   /** serverUrl / token / passphrase 是否齐全。 */
   readonly configured: boolean
   /** 未配置时的原因；已配置为 null。 */
   readonly reason: string | null
   /** 当前是否有一轮同步在执行。 */
   readonly running: boolean
+  /** 当前/最近一轮的元数据。 */
+  readonly run: SyncRunView
+  /** 调度器视图。 */
+  readonly scheduler: SyncSchedulerView
   /** 最近一轮开始时间；从未执行过为 null。 */
   readonly lastAttempt: number | null
   /** 最近一轮无错误完成的时间；从未成功为 null。 */
@@ -106,18 +206,8 @@ export interface SyncStatus {
   readonly pending: PendingApply | null
   /** 已处理到的服务端 revision。 */
   readonly revision: number
-  /** 最近一轮的逐会话结果；尚未执行过为空数组。 */
-  readonly sessions: readonly SessionSyncView[]
-  /** 活跃会话的设备独占租约。 */
-  readonly leases: readonly SessionLeaseView[]
-  /** 等待用户决定 cwd 修正/跳过的会话 id。 */
-  readonly cwdPending: readonly string[]
-  /** 已分叉、必须人工处理的会话；这些会话不能继续写入。 */
-  readonly blocked: readonly BlockedSessionView[]
-  /** 用户已选择忽略/强行写入的会话；可以恢复为阻塞。 */
-  readonly blockedDecisions: readonly BlockedDecisionView[]
-  /** 当前一轮的实时逐会话阶段；空闲时为空数组。 */
-  readonly live: readonly SessionSyncView[]
+  /** 逐个会话的聚合视图；每个 sessionId 只出现一次。 */
+  readonly sessions: readonly SyncSessionStatus[]
 }
 
 /** 设置页/首启向导读取的非敏感配置。 */

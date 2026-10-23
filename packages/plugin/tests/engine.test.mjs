@@ -137,6 +137,8 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         workspaceKeyOf: () => workspaceKey,
       })
       assert.equal(pushed.sessions[0].status, 'pushed')
+      assert.equal(pushed.sessions[0].totalEvents, 6)
+      assert.equal(pushed.sessions[0].doneEvents, 6)
       const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.body.value.manifest.workspaceKey, workspaceKey)
 
@@ -161,6 +163,8 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
       }, { revision: 0 })
       assert.equal(active.sessions[0].status, 'local-active')
+      assert.equal(active.sessions[0].totalEvents, 6)
+      assert.equal(active.sessions[0].pendingEvents, 6)
       assert.equal(active.revision, 0)
 
       // 未映射报告带 cursor revision；游标越过之后不会再次交付。
@@ -188,6 +192,9 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
       })
       assert.equal(mapped.sessions[0].status, 'pulled')
+      assert.equal(mapped.sessions[0].applied, 6)
+      assert.equal(mapped.sessions[0].totalEvents, 6)
+      assert.equal(mapped.sessions[0].pendingEvents, 0)
       assert.equal(mappedStore.sessions.get(sessionId).header.cwd, 'D:/mapped')
 
       // 已加载但已经是最新：只读判断后返回 up-to-date，不能因为 live 就兜底

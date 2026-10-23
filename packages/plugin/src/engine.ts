@@ -161,6 +161,10 @@ export interface SyncProgress {
   readonly error?: string
   /** 本次推送的批次数量（完成时）。 */
   readonly batches?: number
+  /** 本方向计划处理的事件数。 */
+  readonly totalEvents?: number
+  /** 本方向已完成的事件数。 */
+  readonly doneEvents?: number
 }
 
 /** 引擎依赖。 */
@@ -193,6 +197,12 @@ export interface SessionSyncReport {
   readonly status: 'pushed' | 'up-to-date' | 'remote-ahead' | 'lease-held' | 'skipped' | 'error'
   readonly batches?: number
   readonly bytes?: number
+  /** 本次计划上传的事件数。 */
+  readonly totalEvents?: number
+  /** 本次已完成上传的事件数。 */
+  readonly doneEvents?: number
+  /** 等待拉取的事件数（例如 push 看到 remote-ahead）。 */
+  readonly pendingEvents?: number
   readonly error?: string
   readonly kind?: SyncErrorKind
   /** 本地尾巴是否还有未闭合的 turn；只在读到事件后可知。 */
@@ -315,6 +325,10 @@ export interface PullSessionReport {
   readonly sessionId: string
   readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'local-ahead' | 'tombstone' | 'unmapped' | 'excluded' | 'error'
   readonly applied?: number
+  /** 本次计划处理/已经安全可见的事件数。 */
+  readonly totalEvents?: number
+  /** 仍未处理的事件数（开放尾等待安全边界、local-active 等）。 */
+  readonly pendingEvents?: number
   readonly error?: string
   readonly kind?: SyncErrorKind
   /** 远端 manifest 的 workspaceKey（若有）。 */
@@ -875,7 +889,17 @@ async function syncSession<Session>(
     const head = remote.frames[0]
     if (head === undefined || head.chainHash !== headerChainHash(meta)) throw new Error('远端会话头与本地不一致（diverged）')
     await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, events)
-    if (localLast < remote.lastSeq) return { sessionId, status: 'remote-ahead', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
+    if (localLast < remote.lastSeq) {
+      return {
+        sessionId,
+        status: 'remote-ahead',
+        totalEvents: 0,
+        doneEvents: 0,
+        pendingEvents: remote.lastSeq - localLast,
+        tailOpen,
+        ...cwdNonPortable ? { cwdNonPortable } : {},
+      }
+    }
     if (remote.safeThroughSeq !== undefined) safeThroughSeq = Math.max(safeThroughSeq, remote.safeThroughSeq)
   }
 
@@ -883,12 +907,14 @@ async function syncSession<Session>(
   let baseIndex: number
   let baseChainHash: string | null
   let pushedBatches = 0
+  let totalEvents = 0
 
   if (remote === undefined) {
     const headerEntry = sealHeader(meta, sessionId, sessionKey)
     sealedEntries.push(headerEntry)
     const batches = planEventBatches(events, -1, batchOptions(deps.config))
     batches.forEach((batch, offset) => {
+      totalEvents += batch.events.length
       sealedEntries.push(sealEventBatch(batch.events, sessionId, offset + 1, sessionKey))
     })
     pushedBatches = batches.length
@@ -896,8 +922,11 @@ async function syncSession<Session>(
     baseChainHash = null
   } else {
     const batches = planEventBatches(events, remote.lastSeq, batchOptions(deps.config))
-    if (batches.length === 0) return { sessionId, status: 'up-to-date', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
+    if (batches.length === 0) {
+      return { sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
+    }
     batches.forEach((batch, offset) => {
+      totalEvents += batch.events.length
       sealedEntries.push(sealEventBatch(batch.events, sessionId, remote.frames.length + offset, sessionKey))
     })
     pushedBatches = batches.length
@@ -908,7 +937,16 @@ async function syncSession<Session>(
   for (const entry of sealedEntries) await uploadBlob(fetchImpl, base, deps.config.token, entry)
 
   const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
-  if (!leased) return { sessionId, status: 'lease-held', tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
+  if (!leased) {
+    return {
+      sessionId,
+      status: 'lease-held',
+      totalEvents,
+      doneEvents: 0,
+      tailOpen,
+      ...cwdNonPortable ? { cwdNonPortable } : {},
+    }
+  }
   try {
     await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
       baseIndex,
@@ -934,6 +972,8 @@ async function syncSession<Session>(
     status: 'pushed',
     batches: pushedBatches,
     bytes: sealedEntries.reduce((total, entry) => total + entry.ref.bytes, 0),
+    totalEvents,
+    doneEvents: totalEvents,
     tailOpen,
     ...cwdNonPortable ? { cwdNonPortable } : {},
   }
@@ -1296,7 +1336,7 @@ async function pullSession<Session>(
 ): Promise<PullSessionReport> {
   const loaded = preloaded ?? await loadRemoteHeader(fetchImpl, base, deps.config.token, master, sessionId)
   const remote = loaded.remote
-  if (remote.deletedAt !== undefined) return { sessionId, status: 'tombstone' }
+  if (remote.deletedAt !== undefined) return { sessionId, status: 'tombstone', totalEvents: 0 }
   const meta = loaded.meta
   if (meta === undefined) throw new Error('缺少会话头')
 
@@ -1321,12 +1361,23 @@ async function pullSession<Session>(
       const localLast = read.events.length === 0 ? -1 : read.events[read.events.length - 1]!.seq
       await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events)
       const localCwdNonPortable = cwdNonPortableOf(read.events, workspacePath)
-      if (localLast > safe) return { sessionId, status: 'local-ahead', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
+      if (localLast > safe) {
+        return { sessionId, status: 'local-ahead', totalEvents: 0, ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
+      }
       if (localLast === safe) {
         if (live === undefined && !localCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
-        return { sessionId, status: 'up-to-date', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
+        return { sessionId, status: 'up-to-date', totalEvents: 0, ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
       }
-      if (live !== undefined) return { sessionId, status: 'local-active', ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
+      if (live !== undefined) {
+        const pendingEvents = safe - localLast
+        return {
+          sessionId,
+          status: 'local-active',
+          totalEvents: pendingEvents,
+          pendingEvents,
+          ...localCwdNonPortable ? { cwdNonPortable: true } : {},
+        }
+      }
       const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, localLast, safe, sessionKey)
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
       await deps.beforeApply?.(sessionId, safe)
@@ -1339,6 +1390,8 @@ async function pullSession<Session>(
         sessionId,
         status: safe < remote.lastSeq ? 'partial' : 'pulled',
         applied: events.length,
+        totalEvents: events.length,
+        pendingEvents: safe < remote.lastSeq ? remote.lastSeq - safe : 0,
         ...nextCwdNonPortable ? { cwdNonPortable: true } : {},
       }
     } finally {
@@ -1347,7 +1400,9 @@ async function pullSession<Session>(
   }
 
   // 没有本地 artifact 却是活跃会话：同样不能 create/写，等它关闭。
-  if (live !== undefined) return { sessionId, status: 'local-active' }
+  if (live !== undefined) {
+    return { sessionId, status: 'local-active', totalEvents: safe + 1, pendingEvents: safe + 1 }
+  }
 
   const events = await downloadSafeEvents(fetchImpl, base, deps.config.token, sessionId, remote.frames, -1, safe, sessionKey)
   const header: CreateHeaderLike = {
@@ -1377,6 +1432,8 @@ async function pullSession<Session>(
     sessionId,
     status: safe < remote.lastSeq ? 'partial' : 'pulled',
     applied: events.length,
+    totalEvents: events.length,
+    pendingEvents: safe < remote.lastSeq ? remote.lastSeq - safe : 0,
     ...cwdNonPortable ? { cwdNonPortable: true } : {},
   }
 }

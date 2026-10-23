@@ -172,8 +172,8 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 
 客户端需要知道哪些会话处于 `applying` / `openTail` / safe 落后 / `diverged`。M4 已落地：
 
-- **宿主 API**：`GET /api/session-cloudsync/status` 提供运行中/上次结果/退避/pending/逐会话 `tailOpen`，以及本轮实时 `live` 视图（`pushing` / `pulling`）；`POST /api/session-cloudsync/sync` 手动触发；客户端轮询即可驱动首版气泡；
-- **设备独占租约**：`/status.leases` 投影每个 live 会话的租约状态；本机 live 期间 20s 续租，服务端 TTL 60s；其他设备 append 得到 `lease-held`；`foreign`/`lost` 时 composer 停止写入，live 行仍允许打开/切换；cold 会话不持有租约；
+- **宿主 API**：`GET /api/session-cloudsync/status`（schema v2）提供运行中/上次结果/退避/pending，以及每个会话一行的聚合视图：`phase`、`push`/`pull` 方向、`pending.upload/download`、`tailOpen`、`remoteAhead`、`lease`；`POST /api/session-cloudsync/sync` 手动触发；客户端轮询即可驱动首版气泡；
+- **设备独占租约**：`/status.sessions[].lease` 投影每个 live 会话的租约状态；本机 live 期间 20s 续租，服务端 TTL 60s；其他设备 append 得到 `lease-held`；`foreign`/`lost` 时 composer 停止写入，live 行仍允许打开/切换；cold 会话不持有租约；
 - **apply 中**：`pending.sessionId` 命中时 composer 与列表行都拦；
 - **开放尾**：冷会话 `tailOpen: true` 时拦列表打开与 composer；live 会话允许打开，只拦输入；
 - **safe 落后**：冷会话 `remote-ahead` 按 safe 落后处理，拦列表打开与输入；live 会话允许打开，只拦输入。`lag` 必须来自当前聚合状态，不能只用上一轮 push 的 `remote-ahead`；同轮 pull 已补齐时应清掉；
@@ -212,7 +212,7 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 
 ## 7. M4 客户端检查清单
 
-- [x] 等价 `syncState` 状态通道（`/status` 的 `pending` / `live` / `tailOpen` / `remote-ahead`）落地；
+- [x] 等价 `syncState` 状态通道（`/status` v2 的 `sessions[].phase` / `pending` / `tailOpen` / `remoteAhead`）落地；
 - [x] `ctx.conversation.blocks.set` 对 `applying` / `openTail` / safe 落后三种状态生效；
 - [x] 捕获阶段拦截 `[data-row-key]`，覆盖 click / pointerdown / keydown（**仅侧栏会话行**）；
 - [x] 空闲行 `sidebar.session.row.leading` 的同步标记（`id: 'session-cloudsync-mark'`）；

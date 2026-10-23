@@ -20,7 +20,19 @@ import {
   type SyncReport,
   type UnmappedSessionState,
 } from './engine.ts'
-import type { BlockedSessionView, SessionLeaseView, SessionSyncView, SyncErrorView, SyncStatus } from './status.ts'
+import type {
+  BlockedDecisionView,
+  BlockedSessionView,
+  SessionLeaseView,
+  SyncDirectionPhase,
+  SyncDirectionStatus,
+  SyncErrorView,
+  SyncRunView,
+  SyncSchedulerView,
+  SyncSessionPhase,
+  SyncSessionStatus,
+  SyncStatus,
+} from './status.ts'
 
 /** 默认不自动重试、只等待配置或人工处理的错误。 */
 export const DEFAULT_NON_RETRYABLE: ReadonlySet<SyncErrorKind> = new Set([
@@ -50,6 +62,8 @@ export interface SyncControllerOptions {
   readonly initial?: PullState
   /** 当前 live 会话的设备独占租约；缺省为空。 */
   readonly leases?: () => readonly SessionLeaseView[]
+  /** 调度器视图；缺省使用 intervalMs 与 nextRetryAt。 */
+  readonly scheduler?: () => SyncSchedulerView
   /** 覆盖默认的不可重试集合（测试用）。 */
   readonly nonRetryable?: ReadonlySet<SyncErrorKind>
   /** 日志。 */
@@ -90,8 +104,16 @@ export class SyncController {
   private lastError: SyncErrorView | undefined
   private retryCount = 0
   private nextRetryAt = 0
-  private sessions: readonly SessionSyncView[] = []
-  private live: readonly SessionSyncView[] = []
+  private sessions: readonly SyncDirectionStatus[] = []
+  private live: readonly SyncDirectionStatus[] = []
+  private statusVersion = 0
+  private runView: SyncRunView = {
+    id: 0,
+    trigger: 'startup',
+    state: 'idle',
+    startedAt: null,
+    finishedAt: null,
+  }
   private readonly cwdPending = new Set<string>()
   private readonly blocked = new Map<string, BlockedSessionState>()
   private readonly blockedDecisions = new Map<string, BlockedDecision>()
@@ -117,9 +139,18 @@ export class SyncController {
   snapshot(): SyncStatus {
     const configuration = this.options.configuration()
     return {
+      schemaVersion: 2,
+      statusVersion: this.statusVersion,
       configured: configuration.configured,
       reason: configuration.reason ?? null,
       running: this.running,
+      run: this.runView,
+      scheduler: this.options.scheduler?.() ?? {
+        autoSync: this.options.intervalMs > 0,
+        intervalMs: this.options.intervalMs,
+        nextRunAt: null,
+        backoffUntil: this.nextRetryAt === 0 ? null : this.nextRetryAt,
+      },
       lastAttempt: this.lastAttempt === 0 ? null : this.lastAttempt,
       lastSuccess: this.lastSuccess === 0 ? null : this.lastSuccess,
       lastError: this.lastError ?? null,
@@ -127,18 +158,81 @@ export class SyncController {
       nextRetryAt: this.nextRetryAt === 0 ? null : this.nextRetryAt,
       pending: this.pending ?? null,
       revision: this.revision,
-      sessions: this.sessions,
-      leases: this.options.leases?.() ?? [],
-      cwdPending: [...this.cwdPending],
-      blocked: [...this.blocked.values()] as readonly BlockedSessionView[],
-      blockedDecisions: [...this.blockedDecisions.values()],
-      live: this.live,
+      sessions: this.sessionViews(),
     }
+  }
+
+  /** 每个 sessionId 只出现一次的聚合视图。 */
+  private sessionViews(): readonly SyncSessionStatus[] {
+    const now = this.now()
+    const map = new Map<string, MutableSessionStatus>()
+    const ensure = (sessionId: string): MutableSessionStatus => {
+      let value = map.get(sessionId)
+      if (value === undefined) {
+        value = {
+          sessionId,
+          live: false,
+          tailOpen: false,
+          remoteAhead: false,
+          cwdPending: false,
+          updatedAt: now,
+        }
+        map.set(sessionId, value)
+      }
+      return value
+    }
+
+    const source = this.running && this.live.length > 0 ? this.live : this.sessions
+    for (const view of source) {
+      const entry = ensure(view.sessionId)
+      if (view.direction === 'push') entry.push = view
+      else entry.pull = view
+      if (view.tailOpen === true) entry.tailOpen = true
+      if (view.direction === 'push' && view.status === 'remote-ahead') entry.remoteAhead = true
+      if (view.direction === 'pull' && view.status === 'local-active') entry.live = true
+      // push 先于 pull：pull 已经追平远端时，清除同轮 push 的 remote-ahead。
+      if (view.direction === 'pull' && (view.status === 'pulled' || view.status === 'up-to-date')) entry.remoteAhead = false
+      entry.updatedAt = now
+    }
+    for (const [sessionId, entry] of this.unmapped) {
+      const value = ensure(sessionId)
+      value.unmapped = { workspaceKey: entry.workspaceKey }
+      value.updatedAt = now
+    }
+    for (const sessionId of this.cwdPending) {
+      const value = ensure(sessionId)
+      value.cwdPending = true
+      value.updatedAt = now
+    }
+    for (const [sessionId, entry] of this.blocked) {
+      const value = ensure(sessionId)
+      value.blocked = entry as BlockedSessionView
+      value.updatedAt = now
+    }
+    for (const [sessionId, entry] of this.blockedDecisions) {
+      const value = ensure(sessionId)
+      value.decision = entry as BlockedDecisionView
+      value.updatedAt = now
+    }
+    for (const lease of this.options.leases?.() ?? []) {
+      const value = ensure(lease.sessionId)
+      value.lease = lease
+      value.live = true
+      value.updatedAt = now
+    }
+
+    return [...map.values()]
+      .map((entry) => finishSessionView(entry, now))
+      .sort((left, right) => left.sessionId.localeCompare(right.sessionId))
+  }
+
+  private bump(): void {
+    this.statusVersion += 1
   }
 
   /** 用户已处理某个 cwd 决策后清除警告。 */
   clearCwdPending(sessionId: string): void {
-    this.cwdPending.delete(sessionId)
+    if (this.cwdPending.delete(sessionId)) this.bump()
     this.persistNow()
   }
 
@@ -152,7 +246,10 @@ export class SyncController {
   clearBlocked(sessionId: string): void {
     const hadBlocked = this.blocked.delete(sessionId)
     const hadDecision = this.blockedDecisions.delete(sessionId)
-    if (hadBlocked || hadDecision) this.persistNow()
+    if (hadBlocked || hadDecision) {
+      this.bump()
+      this.persistNow()
+    }
   }
 
   /** 用户对分叉会话选择忽略或强行写入；两者都解除 Host 写入拦截。 */
@@ -166,6 +263,7 @@ export class SyncController {
     const message = blocked?.message ?? this.blockedDecisions.get(sessionId)?.message ?? '历史已分叉'
     this.blocked.delete(sessionId)
     this.blockedDecisions.set(sessionId, { sessionId, action, message, at: this.now(), createdAt, formatVersion })
+    this.bump()
     this.persistNow()
   }
 
@@ -182,6 +280,7 @@ export class SyncController {
       message: decision.message,
       at: this.now(),
     })
+    this.bump()
     this.persistNow()
   }
 
@@ -201,6 +300,7 @@ export class SyncController {
     if (existing !== undefined && existing.message === message
       && sameLifecycle(existing, createdAt, formatVersion)) return
     this.blocked.set(sessionId, { sessionId, kind, message, at: this.now(), createdAt, formatVersion })
+    this.bump()
     this.persistNow()
   }
 
@@ -214,16 +314,20 @@ export class SyncController {
       : progress.phase === 'done'
         ? progress.direction === 'push' ? 'pushed' : 'pulled'
         : progress.direction === 'push' ? 'pushing' : 'pulling'
-    const view: SessionSyncView = {
+    const view: SyncDirectionStatus = {
       sessionId: progress.sessionId,
       direction: progress.direction,
+      phase: directionPhaseOf(progress.direction, status),
       status,
+      totalEvents: progress.totalEvents ?? 0,
+      doneEvents: progress.doneEvents ?? 0,
       ...progress.error === undefined ? {} : { error: progress.error },
       ...progress.batches === undefined ? {} : { batches: progress.batches },
     }
     const next = this.live.filter((item) => !(item.sessionId === view.sessionId && item.direction === view.direction))
     next.push(view)
     this.live = next
+    this.bump()
   }
 
   /**
@@ -237,6 +341,7 @@ export class SyncController {
       throw new Error(`上一个拉取（${this.pending.sessionId}）尚未完成，拒绝覆盖 pending`)
     }
     this.pending = { sessionId, targetSeq, at: this.now() }
+    this.bump()
     this.persistNow()
   }
 
@@ -247,6 +352,7 @@ export class SyncController {
   endApply(sessionId: string): void {
     if (this.pending?.sessionId !== sessionId) return
     this.pending = undefined
+    this.bump()
     this.persistNow()
   }
 
@@ -263,7 +369,10 @@ export class SyncController {
     if (!report.configured) return
     let changed = false
     for (const session of report.sessions) changed = this.trackUnmapped(session) || changed
-    if (changed) this.persistNow()
+    if (changed) {
+      this.bump()
+      this.persistNow()
+    }
   }
 
   /**
@@ -271,7 +380,10 @@ export class SyncController {
    * @param options - `manual: true` 表示用户手动触发，跳过当前退避。
    * @returns 本轮结果与结束后的状态快照。
    */
-  async run(options: { readonly manual?: boolean } = {}): Promise<SyncRunResult> {
+  async run(options: {
+    readonly manual?: boolean
+    readonly trigger?: 'startup' | 'auto' | 'manual'
+  } = {}): Promise<SyncRunResult> {
     const now = this.now()
     if (this.running) return this.skipped('already-running', '同步正在进行')
     if (options.manual === true) {
@@ -290,8 +402,16 @@ export class SyncController {
     this.running = true
     this.live = []
     this.lastAttempt = now
+    this.runView = {
+      id: this.runView.id + 1,
+      trigger: options.trigger ?? (options.manual === true ? 'manual' : 'auto'),
+      state: 'running',
+      startedAt: now,
+      finishedAt: null,
+    }
+    this.bump()
     const errors: Array<{ kind: SyncErrorKind; message: string }> = []
-    const views: SessionSyncView[] = []
+    const views: SyncDirectionStatus[] = []
     try {
       this.collectPush(await this.options.push(), views, errors)
       const pull = await this.options.pull(this.pullState())
@@ -310,6 +430,12 @@ export class SyncController {
     this.sessions = views
     this.live = []
     const finished = this.now()
+    this.runView = {
+      ...this.runView,
+      state: 'finished',
+      finishedAt: finished,
+    }
+    this.bump()
     if (errors.length > 0) {
       return this.fail(errors, finished)
     }
@@ -358,6 +484,7 @@ export class SyncController {
     const first = errors[0]!
     this.lastError = { kind: first.kind, message: first.message, at: finished }
     this.options.logger?.warn(`dsh-session-cloudsync: 将在 ${Math.round(delay / 1000)}s 后重试（retry=${this.retryCount}）`)
+    this.bump()
     return { ok: false, message: first.message, status: this.snapshot() }
   }
 
@@ -390,7 +517,7 @@ export class SyncController {
 
   private collectPush(
     report: SyncReport,
-    views: SessionSyncView[],
+    views: SyncDirectionStatus[],
     errors: Array<{ kind: SyncErrorKind; message: string }>,
   ): void {
     if (!report.configured) {
@@ -420,7 +547,7 @@ export class SyncController {
 
   private collectPull(
     report: PullReport,
-    views: SessionSyncView[],
+    views: SyncDirectionStatus[],
     errors: Array<{ kind: SyncErrorKind; message: string }>,
   ): void {
     if (!report.configured) return
@@ -472,11 +599,17 @@ function sameLifecycle(
  * @param session - 推送结果。
  * @returns 客户端视图。
  */
-function pushView(session: SessionSyncReport): SessionSyncView {
+function pushView(session: SessionSyncReport): SyncDirectionStatus {
+  const totalEvents = session.totalEvents ?? 0
+  const doneEvents = session.doneEvents ?? (session.status === 'pushed' ? totalEvents : 0)
   return {
     sessionId: session.sessionId,
     direction: 'push',
+    phase: directionPhaseOf('push', session.status),
     status: session.status,
+    totalEvents,
+    doneEvents,
+    ...session.pendingEvents === undefined ? {} : { pendingEvents: session.pendingEvents },
     ...session.batches === undefined ? {} : { batches: session.batches },
     ...session.bytes === undefined ? {} : { bytes: session.bytes },
     ...session.tailOpen === undefined ? {} : { tailOpen: session.tailOpen },
@@ -491,15 +624,104 @@ function pushView(session: SessionSyncReport): SessionSyncView {
  * @param session - 拉取结果。
  * @returns 客户端视图。
  */
-function pullView(session: PullSessionReport): SessionSyncView {
+function pullView(session: PullSessionReport): SyncDirectionStatus {
+  const doneEvents = session.applied ?? 0
+  const totalEvents = session.totalEvents ?? doneEvents
   return {
     sessionId: session.sessionId,
     direction: 'pull',
+    phase: directionPhaseOf('pull', session.status),
     status: session.status,
+    totalEvents,
+    doneEvents,
+    ...session.pendingEvents === undefined ? {} : { pendingEvents: session.pendingEvents },
     ...session.applied === undefined ? {} : { applied: session.applied },
     ...session.cwdNonPortable === undefined ? {} : { cwdNonPortable: session.cwdNonPortable },
     ...session.workspaceKey === undefined ? {} : { workspaceKey: session.workspaceKey },
     ...session.kind === undefined ? {} : { kind: session.kind },
     ...session.error === undefined ? {} : { error: session.error },
+  }
+}
+
+/** 引擎原始状态到方向的稳定阶段。 */
+function directionPhaseOf(direction: 'push' | 'pull', status: string): SyncDirectionPhase {
+  if (status === 'error') return 'failed'
+  if (status === 'up-to-date') return 'up-to-date'
+  if (status === 'pushed' || status === 'pulled') return 'done'
+  if (status === 'skipped' || status === 'excluded' || status === 'tombstone') return 'skipped'
+  if (status === 'remote-ahead' || status === 'lease-held' || status === 'partial'
+    || status === 'local-active' || status === 'local-ahead' || status === 'unmapped') return 'deferred'
+  if (direction === 'push' ? status === 'pushing' : status === 'pulling') return 'transferring'
+  return 'planned'
+}
+
+/** 聚合视图的可变中间态。 */
+interface MutableSessionStatus {
+  readonly sessionId: string
+  push?: SyncDirectionStatus
+  pull?: SyncDirectionStatus
+  live: boolean
+  tailOpen: boolean
+  remoteAhead: boolean
+  cwdPending: boolean
+  unmapped?: { readonly workspaceKey: string; readonly label?: string }
+  blocked?: BlockedSessionView
+  decision?: BlockedDecisionView
+  lease?: SessionLeaseView
+  updatedAt: number
+}
+
+/** 收束聚合视图并计算阶段/计数。 */
+function finishSessionView(entry: MutableSessionStatus, now: number): SyncSessionStatus {
+  const upload = entry.push === undefined
+    ? 0
+    : entry.push.status === 'remote-ahead'
+      ? 0
+      : Math.max(0, entry.push.totalEvents - entry.push.doneEvents)
+  const download = entry.pull === undefined
+    ? (entry.push?.pendingEvents ?? 0)
+    : Math.max(0, entry.pull.totalEvents - entry.pull.doneEvents)
+  const totalEvents = (entry.push?.totalEvents ?? 0) + (entry.pull?.totalEvents ?? 0)
+  const doneEvents = (entry.push?.doneEvents ?? 0) + (entry.pull?.doneEvents ?? 0)
+  const directions = [entry.push, entry.pull].filter((value): value is SyncDirectionStatus => value !== undefined)
+  const failed = directions.some((direction) => direction.phase === 'failed')
+  const running = directions.some((direction) => direction.phase === 'transferring'
+    || direction.phase === 'committing' || direction.phase === 'applying')
+  const deferred = entry.live || entry.remoteAhead || entry.cwdPending
+    || entry.unmapped !== undefined
+    || entry.pull?.phase === 'deferred'
+    || entry.push?.status === 'lease-held'
+    || (entry.push?.phase === 'deferred' && entry.remoteAhead)
+  const terminal = directions.length > 0 && directions.every((direction) =>
+    direction.phase === 'done' || direction.phase === 'up-to-date' || direction.phase === 'skipped'
+    || (direction.direction === 'push' && direction.status === 'remote-ahead' && !entry.remoteAhead))
+  const phase: SyncSessionPhase = entry.blocked !== undefined
+    ? 'blocked'
+    : failed
+      ? 'failed'
+      : running
+        ? 'running'
+        : deferred
+          ? 'deferred'
+          : terminal
+            ? (directions.every((direction) => direction.phase === 'skipped') ? 'skipped' : 'done')
+            : 'planned'
+  return {
+    sessionId: entry.sessionId,
+    phase,
+    ...entry.push === undefined ? {} : { push: entry.push },
+    ...entry.pull === undefined ? {} : { pull: entry.pull },
+    pending: { upload, download },
+    totalEvents,
+    doneEvents,
+    live: entry.live,
+    tailOpen: entry.tailOpen,
+    remoteAhead: entry.remoteAhead,
+    cwdPending: entry.cwdPending,
+    ...entry.unmapped === undefined ? {} : { unmapped: entry.unmapped },
+    ...entry.blocked === undefined ? {} : { blocked: entry.blocked },
+    ...entry.decision === undefined ? {} : { decision: entry.decision },
+    ...entry.lease === undefined ? {} : { lease: entry.lease },
+    updatedAt: now,
   }
 }
