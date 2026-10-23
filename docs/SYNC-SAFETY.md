@@ -1,6 +1,7 @@
 # 同步安全边界与客户端防误操作
 
 > 状态：设计已定；M3 的安全边界（`tailOpen` / `safeThroughSeq`）与拉取已经落地，M4 客户端防误操作已实现（composer block / 列表拦截 / leading 标记），剩真实 GUI 的 C5 回归。文中的源码结论来自 DSH `0.2.1-rc.2`。
+> 2026-10-23 按源码校正：`session/end-seed` 是 seed 边界（不是 turn/session 结束），只在 resume/fork 的构造路径补；拦截矩阵改为“冷会话硬拦、live 只拦输入”。本机 83 个会话的只读统计由维护者工作区记录（不随仓库分发）。
 
 ## 1. 为什么开放尾只能备份，不能直接给远端 resume
 
@@ -24,6 +25,8 @@ interruptedTurnClosers(events) // 空 = 闭合；非空 = 开放尾
 ```
 
 如果远端拿到开放尾并 resume，agent loop 会把 synthetic closers 真正 append 进本地日志；之后源设备再同步真实的后半段，就会撞上已写入的 `tool/result` / `turn/end` → 分叉。
+
+同一路径还会补 `session/end-seed`。**它不是“会话结束”标记，而是“种子结束”边界**：按 DSH 0.2.1-rc.2 源码，只有 `Session` 构造器和 `buildForkSeed` 会创建它；正常 turn 结束、手动中断、强杀都不写。resume 时 stored log 成为 seed，只有尾部不是 marker 时才补一个普通 `{}`；打开冷会话会走 `history.follow` → `promote` → `resume`，所以“打开”本身就可能写日志。已有 marker 的尾部不会重复补，但仍会因 resume 变成 live，堵住后续 pull。
 
 ## 2. `tailOpen` 与 `safeThroughSeq`
 
@@ -92,10 +95,10 @@ DSH 的 `append` 不是多事件事务：崩溃可能留下半个 turn；持久�
 
 | 场景 | 日志结果 |
 |---|---|
-| 用户手动中断 | 补 aborted 的 `tool/result`、`step/end`、`turn/end {kind:'aborted', reason:{kind:'user'}}`，最后写 `session/end-seed`；尾巴闭合，可安全同步/远端 resume |
+| 用户手动中断 | 补 aborted 的 `tool/result`、`step/end`、`turn/end {kind:'aborted', reason:{kind:'user'}}`；**不写 `session/end-seed`**。当前源码的直接中断路径没有 append 点；日志里若看到 end-seed，通常是之后 resume/冷打开补的 |
 | 进程强杀/断电 | 停在最后一个已提交事件；不会补 closers；正在流式的思考/输出丢失 |
-| 强杀后 resume | 才 append `interruptedTurnClosers`：缺失工具结果（`ToolOutcomeUnknownError` / `ToolNotStartedError`）、`step/end`、`turn/end {kind:'interrupted'}` |
-| 强杀后只读查看 | `readColdSessionLog` 只在内存补 closers，不写回 |
+| 强杀后 resume | 才 append `interruptedTurnClosers`：缺失工具结果（`ToolOutcomeUnknownError` / `ToolNotStartedError`）、`step/end`、`turn/end {kind:'interrupted'}`；随后构造器补 `session/end-seed` |
+| 强杀后只读查看 | `readColdSessionLog` 只在内存补 closers，不写回，也不写 end-seed |
 
 实测某会话手动中断尾部（2946 个事件）：
 
@@ -106,6 +109,8 @@ step/end       turn 27 / step 5
 turn/end       {kind:'aborted', reason:{kind:'user'}}
 session/end-seed
 ```
+
+按 0.2.1-rc.2 源码，手动中断路径本身没有 append `session/end-seed` 的点；这段日志末尾的 marker 只能来自构造器（之后的 resume/冷打开）或 fork。实测复现时要同时记录“中断后是否又打开/恢复了会话”，不能把 marker 归因给中断本身。当前本机 83 个会话的只读统计里，56 个结尾是 `turn/end`、2 个是非终态（其中一个就是扫描时正在运行的会话）、25 个结尾是 `session/end-seed`；这与“marker 只在 seed 构造时写”一致（统计证据见工作区文档，不进仓库）。
 
 ## 5. 客户端防误操作
 
@@ -123,8 +128,9 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 - 这比在输入框上盖 div 可靠：键盘、粘贴、快捷方式都绕不过去。
 
 **拦截状态**：`applying/pulling`、远端有开放尾且本地只 apply 到 `safeThroughSeq`、以及
-本地/远端都存在但尚未同步或 `diverged` 的会话。发消息才会触发 resume 和补 closers，
-所以这是防误 resume/分叉的关键一层。
+本地/远端都存在但尚未同步或 `diverged` 的会话。**冷打开和发消息都会触发 resume**：冷打开走
+`history.follow` → `promote` → `resume`，发消息走 `resolveAgent` → `resume`；两者都可能补
+closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉的两层，不能互相替代。
 
 `diverged`/未同步会话的输入拦截带风险说明；用户勾选“理解强行写入会产生分叉”后才解除
 本地写入。强行写入只允许本地继续，不自动推送、不自动合并。
@@ -146,13 +152,19 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 **方案**：
 
 1. **空闲会话**：注册 `sidebar.session.row.leading`，`id: 'sync-mark'`，画小锁/同步点；完整状态放 hover 卡片；
-2. **运行中的会话**（最需要防误 resume）：左侧图标拿不到，用捕获阶段拦截：
+2. **冷会话 + 危险状态**（最需要防误 resume）：左侧图标拿不到，用捕获阶段拦截：
    ```ts
    document.addEventListener('click', handler, true)
    // target.closest('[data-row-key^="session:"]')
-   // 命中 blocked 集合：preventDefault + stopImmediatePropagation
+   // 命中“冷 + dangerous”集合：preventDefault + stopImmediatePropagation
    ```
-   再补 `pointerdown`/`keydown`，防止拖拽和键盘打开；
+   再补 `pointerdown`/`keydown`，防止拖拽和键盘打开。
+   **已 live 的会话例外**：打开只是切换视图，不会 promote/resume；按 2026-10-23 决策，
+   live 会话允许打开/切换，只由 composer block 拦输入。
+   当前捕获只覆盖侧栏行；搜索结果（`SearchResultItem` 没有 `data-row-key`）以及
+   `ui-schedule` / `ui-message-feedback` / `ui-workflow-run` / `ui-subagent` 等直接调用
+   `uiWorkspace.openSession` 的入口不在覆盖范围，需要上游 open 准入 hook 或入口级扩展。
+   不能把“侧栏拦住了”当成“所有复活路径都拦住了”。
 3. **视觉蒙版**：临时在页面上给行注入过 `position:absolute; inset:0` 的覆盖层，精确覆盖 256×32 的行；可用，但需要自己维护行定位/滚动，作为增强而不是唯一防线；
 4. **最终兜底**：拉取完成前不 `attachSession`，让会话尽量不出现在工作区列表；已经可见/已选中的会话仍靠捕获拦截 + composer block。
 
@@ -161,10 +173,12 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 客户端需要知道哪些会话处于 `applying` / `openTail` / safe 落后 / `diverged`。M4 已落地：
 
 - **宿主 API**：`GET /api/session-cloudsync/status` 提供运行中/上次结果/退避/pending/逐会话 `tailOpen`，以及本轮实时 `live` 视图（`pushing` / `pulling`）；`POST /api/session-cloudsync/sync` 手动触发；客户端轮询即可驱动首版气泡；
+- **设备独占租约**：`/status.leases` 投影每个 live 会话的租约状态；本机 live 期间 20s 续租，服务端 TTL 60s；其他设备 append 得到 `lease-held`；`foreign`/`lost` 时 composer 停止写入，live 行仍允许打开/切换；cold 会话不持有租约；
 - **apply 中**：`pending.sessionId` 命中时 composer 与列表行都拦；
-- **开放尾**：最近一次推送视图 `tailOpen: true` 的会话拦截列表打开与 composer；
-- **safe 落后**：最近一次推送视图 `remote-ahead` 的会话按 safe 落后处理，拦列表打开与输入；
-- **diverged/未同步**：由 [RECONCILE.md](RECONCILE.md) 的状态机提供给前端；拦输入并展示风险确认；
+- **开放尾**：冷会话 `tailOpen: true` 时拦列表打开与 composer；live 会话允许打开，只拦输入；
+- **safe 落后**：冷会话 `remote-ahead` 按 safe 落后处理，拦列表打开与输入；live 会话允许打开，只拦输入。`lag` 必须来自当前聚合状态，不能只用上一轮 push 的 `remote-ahead`；同轮 pull 已补齐时应清掉；
+- **diverged/未同步**：由 [RECONCILE.md](RECONCILE.md) 的状态机提供给前端；冷会话拦打开，live 允许打开；两者都拦输入并展示风险确认；
+- **冷打开会写日志**：DSH 的 `history.follow` 对冷会话会 `promote` → `resume`，可能补 synthetic closers 和 `session/end-seed`；所以“拦打开”不是 UI 偏好，而是同步安全边界。已有 marker 的尾部不会重复补 marker，但仍会变 live、堵住 pull；
 - 不写临时同步事件，避免污染会话日志；逐会话 projection 仍可作为后续优化，但当前等价状态已由 `/status` 提供。
 
 ### 5.4 接受远端丢弃本地
@@ -187,8 +201,12 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 - 客户端 projection 在列表行里的可见性还没端到端验证；
 - **durable revision + pending journal 已实现**：拉取前落盘 `{sessionId,targetSeq}`，成功后清除；启动先补 pending。若崩溃到 reconcile 前用户 resume，仍可能写入 closers 造成冲突，这条竞态仍需 UI/守卫兜底；
 - **pending 只有一条**：一个会话失败后 `pullOnce` 立即停止，不再开始下一个会话，避免覆盖前一个未完成的恢复记录；代价是失败会话解决前，本轮后续会话暂不拉取。逐会话 journal 条目留到后续按需再拆；
-- `data-row-key` 是应用内部属性，不是公开 API；捕获拦截依赖它，升级时要回归；
-- 用户可能在 reconcile 完成前通过深链/其他入口打开会话；composer block 仍能阻止继续，但“打开”本身是否触发 agent resume 还没端到端验证；
+- `data-row-key` 是应用内部属性，不是公开 API；捕获拦截依赖它，升级时要回归；当前只覆盖侧栏会话行；
+- 搜索结果（`SearchResultItem` 没有 `data-row-key`）以及 `ui-schedule` / `ui-message-feedback` / `ui-workflow-run` / `ui-subagent` 等直接调用 `uiWorkspace.openSession` 的入口不在捕获范围；这些入口仍可能复活冷会话。composer block 只能阻止继续输入，不能撤回已经发生的 resume/end-seed 写入；需要上游 open 准入 hook 或入口级扩展；
+- 按 0.2.1-rc.2 源码确认：冷打开会 `history.follow` → `promote` → `agents.resume`，并可能补 closers/end-seed；因此“打开”本身已是写操作，不是只在发消息时写；
+- **live 会话没有公开的 close/dispose 方法**：`AgentHandle.dispose()` 存在，但 session-controller 只保留 `.agent`；`archiveSession({stopActivity:true})` 只取消 running turn，不会 dispose Agent。一个会话一旦在本进程里 live，pull 会一直 `local-active`，只能重启 DSH 后才可 apply；期间另一设备写入会让本地停在 `remote-ahead`。
+- **设备独占租约已实现**：仅对 live 会话持有；cold 不持有。租约在“会话变 live 后”的下一次扫描（最多 20s）拿到；没有 pre-open 租约，冷打开仍可能与另一台设备形成短暂窗口。进程正常退出会主动释放，异常退出靠 60s TTL；没有 close API 时交接仍只能重启。
+- 设备独占的代价：会话被“钉”在当前 DSH 进程；没有 close API 就没有干净交接，进程崩溃后要等 60s TTL。交接只能重启 DSH，或等上游提供 close/dispose idle session 的 API；在那之前不要把“另一台设备可写”当成默认能力。
 - 官方没有“禁用会话行”的插槽；可向上游提需求，M4 先用拦截方案；
 - 视觉蒙版需要 DOM 定位，跨滚动/折叠/重排要维护，先不做成默认。
 
@@ -196,9 +214,12 @@ ctx.conversation.blocks.set(sessionId, { reason: '正在同步，暂不可继续
 
 - [x] 等价 `syncState` 状态通道（`/status` 的 `pending` / `live` / `tailOpen` / `remote-ahead`）落地；
 - [x] `ctx.conversation.blocks.set` 对 `applying` / `openTail` / safe 落后三种状态生效；
-- [x] 捕获阶段拦截 `[data-row-key]`，覆盖 click / pointerdown / keydown；
+- [x] 捕获阶段拦截 `[data-row-key]`，覆盖 click / pointerdown / keydown（**仅侧栏会话行**）；
 - [x] 空闲行 `sidebar.session.row.leading` 的同步标记（`id: 'session-cloudsync-mark'`）；
 - [x] 运行中行的 hover 卡片状态说明（`sidebar.session.row.hover` 的 `session-cloudsync-hover`）；
+- [x] 冷/live 拦截矩阵落地：冷 `remote-ahead`（含尾部已是 end-seed 的会话）硬拦，live 放宽为只拦输入；
+- [x] 设备独占租约：live 会话 20s 续租、push 不误释放 presence lease、客户端 foreign/lost 拦输入；
+- [ ] pre-open 租约与搜索结果等非侧栏入口的覆盖（当前只有 live 后扫描，存在短暂窗口）；
 - [ ] `diverged`/未同步会话的输入拦截、风险说明与“强行写入分叉”确认；
 - [ ] `nonPortable` 会话的本地警告、确认后接收端追加修正与租约推送；
 - [ ] 可选视觉蒙版；

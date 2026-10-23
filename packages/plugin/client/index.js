@@ -461,15 +461,21 @@ window.__ModuleLoader__.load({
       if (status.running) return 'syncing'
       if (status.lastError !== null) return 'bad'
       if (Array.isArray(status.blocked) && status.blocked.length > 0) return 'bad'
+      if (Array.isArray(status.leases) && status.leases.some(function (lease) {
+        return lease && (lease.state === 'foreign' || lease.state === 'lost')
+      })) return 'warn'
       if (Array.isArray(status.cwdPending) && status.cwdPending.length > 0) return 'warn'
       if (Array.isArray(status.blockedDecisions) && status.blockedDecisions.length > 0) return 'warn'
       if (status.configured) return 'ok'
       return 'warn'
     }
 
-    /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策 / 已分叉。 */
+    /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策 / 已分叉 / 租约。 */
     function sessionState(status, sessionId) {
-      if (status === null) return { pending: false, tail: false, lag: false, cwd: false, blocked: false, blockedReason: '', unmapped: false }
+      if (status === null) return {
+        pending: false, tail: false, lag: false, cwd: false, blocked: false,
+        blockedReason: '', unmapped: false, live: false, leaseState: null, leaseError: '',
+      }
       var pending = status.pending !== null && status.pending !== undefined && status.pending.sessionId === sessionId
       var tail = false
       var lag = false
@@ -480,6 +486,10 @@ window.__ModuleLoader__.load({
       var blocked = null
       if (Array.isArray(status.blocked)) {
         blocked = status.blocked.find(function (entry) { return entry && entry.sessionId === sessionId }) || null
+      }
+      var lease = null
+      if (Array.isArray(status.leases)) {
+        lease = status.leases.find(function (entry) { return entry && entry.sessionId === sessionId }) || null
       }
       if (Array.isArray(status.sessions)) {
         tail = status.sessions.some(function (view) {
@@ -495,18 +505,31 @@ window.__ModuleLoader__.load({
           return view.sessionId === sessionId && view.direction === 'push' && view.status === 'remote-ahead'
         })
       }
+      var live = lease !== null || (Array.isArray(status.sessions) && status.sessions.some(function (view) {
+        return view.sessionId === sessionId && view.direction === 'pull' && view.status === 'local-active'
+      }))
       return {
         pending: pending, tail: tail, lag: lag, cwd: cwd,
         blocked: blocked !== null,
         blockedReason: blocked && blocked.message ? blocked.message : '',
         unmapped: unmapped,
+        live: live,
+        leaseState: lease ? lease.state : null,
+        leaseError: lease && lease.error ? String(lease.error) : '',
       }
     }
 
-    function sessionBlockReason(status, sessionId) {
+    /**
+     * 会话为什么不能继续操作；row=true 时用于列表行（live 会话允许打开/切换，
+     * 只由 composer 拦输入），否则用于输入框。
+     */
+    function sessionBlockReason(status, sessionId, row) {
       var state = sessionState(status, sessionId)
+      if (row === true && state.live) return null
       if (state.blocked) return '这个会话的本地与远端历史已分叉，已阻止继续写入；请先人工处理'
       if (state.unmapped) return '这个远端会话的工作区尚未映射到本机，请先在设置里建立一次性映射'
+      if (state.leaseState === 'foreign') return '另一台设备正在编辑这个会话；本机已暂停写入'
+      if (state.leaseState === 'lost') return '会话租约已丢失；本机已暂停写入，等待重新获取'
       if (state.pending) return '正在应用云端写入，暂不能继续这个会话'
       if (state.tail) return '这个会话有未闭合的同步尾巴，先完成当前轮次再打开'
       if (state.lag) return '这个会话的安全边界还落后于远端，暂不能继续'
@@ -1647,6 +1670,18 @@ window.__ModuleLoader__.load({
             break
           }
         }
+        var leaseEntry = null
+        if (status && Array.isArray(status.leases)) {
+          for (var leaseIndex = 0; leaseIndex < status.leases.length; leaseIndex += 1) {
+            if (status.leases[leaseIndex] && status.leases[leaseIndex].sessionId === session.sessionId) {
+              leaseEntry = status.leases[leaseIndex]
+              break
+            }
+          }
+        }
+        var leaseTag = leaseEntry === null ? ''
+          : leaseEntry.state === 'foreign' ? '他机编辑'
+            : leaseEntry.state === 'lost' ? '租约丢失' : ''
         var isBlocked = blockedEntry !== null
         var isResolved = decisionEntry !== null
         var decisionTag = isResolved ? (decisionEntry.action === 'ignore' ? '已忽略' : '已强行写入') : ''
@@ -1663,11 +1698,15 @@ window.__ModuleLoader__.load({
                             : session.status === 'partial' ? '部分'
                               : session.status === 'pulled' || session.status === 'up-to-date' || session.status === 'pushed' ? '已完成'
                                 : session.status === 'pulling' || session.status === 'pushing' || running ? '同步中' : '等待'
-        var attention = tag === '远端领先' || tag === '租约占用' || tag === '已加载' || tag === '本地领先'
+        var attention = tag === '远端领先' || tag === '租约占用' || tag === '已加载' || tag === '本地领先' || leaseTag !== ''
         return h('div', { className: 'dssync-rowline', key: session.sessionId + ':' + session.direction + ':' + index },
-          h('span', { className: 'dssync-st ' + (isBlocked || session.status === 'error' ? 'bad' : isResolved ? 'run' : tag === '已完成' ? 'ok' : tag === '同步中' || attention ? 'run' : '') }),
+          h('span', { className: 'dssync-st ' + (isBlocked || session.status === 'error' || leaseEntry && leaseEntry.state === 'lost' ? 'bad' : isResolved ? 'run' : tag === '已完成' ? 'ok' : tag === '同步中' || attention ? 'run' : '') }),
           h('span', { className: 'name' }, (session.direction === 'push' ? '↑ ' : '↓ ') + sessionLabel(session.sessionId)),
           h('span', { className: 'tag' }, tag),
+          leaseTag === '' ? null : h('span', {
+            className: 'dssync-warn',
+            title: leaseEntry && leaseEntry.error ? leaseEntry.error : (leaseEntry.ownerDeviceId ? '租约由 ' + leaseEntry.ownerDeviceId + ' 持有' : '设备独占租约'),
+          }, leaseTag),
           isBlocked ? h('span', { className: 'dssync-warn', title: '本地与远端历史已分叉，已阻止继续写入' }, '已阻止') : null,
           isBlocked ? blockedActions(session.sessionId, blockedEntry) : null,
           isResolved ? h('span', { className: 'dssync-warn', title: decisionEntry.message }, decisionTag) : null,
@@ -1780,10 +1819,14 @@ window.__ModuleLoader__.load({
       var sessionId = props.sessionId ? String(props.sessionId) : ''
       if (sessionId === '') return null
       var sync = sessionState(state.status, sessionId)
-      if (!sync.pending && !sync.tail && !sync.lag) return null
-      var label = sync.pending ? '正在应用云端写入' : sync.tail ? '有未闭合的同步尾巴' : '安全边界落后于远端'
+      if (!sync.pending && !sync.tail && !sync.lag && sync.leaseState !== 'foreign' && sync.leaseState !== 'lost') return null
+      var label = sync.pending ? '正在应用云端写入'
+        : sync.tail ? '有未闭合的同步尾巴'
+          : sync.leaseState === 'foreign' ? '另一台设备正在编辑'
+            : sync.leaseState === 'lost' ? '会话租约已丢失'
+              : '安全边界落后于远端'
       return h('span', {
-        className: 'dssync-rowmark' + (sync.tail || sync.lag ? ' tail' : ''),
+        className: 'dssync-rowmark' + (sync.tail || sync.lag || sync.leaseState === 'lost' ? ' tail' : ''),
         title: label, 'aria-label': label, role: 'img',
       }, sync.pending ? '…' : sync.tail ? '↻' : '!')
     }
@@ -1867,7 +1910,7 @@ window.__ModuleLoader__.load({
         var key = row.getAttribute('data-row-key') || ''
         var sessionId = key.slice('session:'.length)
         if (sessionId === '') return null
-        return sessionBlockReason(model.getSnapshot().status, sessionId)
+        return sessionBlockReason(model.getSnapshot().status, sessionId, true)
       }
 
       function interceptRow(event) {

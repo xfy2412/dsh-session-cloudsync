@@ -29,6 +29,7 @@ import {
   type SyncLogger,
 } from './engine.ts'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
+import { LeaseKeeper } from './lease-keeper.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
 import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
@@ -249,6 +250,24 @@ export function apply(ctx: Context, config: Config): void {
     if (salt === '') delete engineConfig.salt
     else engineConfig.salt = salt
   }
+  const leaseKeeper = new LeaseKeeper({
+    listLiveSessionIds: () => {
+      const service = ctx.sessions as unknown as { list?: () => readonly LiveSession[] }
+      if (typeof service.list !== 'function') return []
+      try {
+        return service.list().map((session) => String(session.id))
+      } catch (error: unknown) {
+        logger.warn(`dsh-session-cloudsync: 读取 live 会话失败：${error instanceof Error ? error.message : String(error)}`)
+        return []
+      }
+    },
+    configuration: () => {
+      refreshConfig()
+      if (serverUrl.trim() === '' || engineConfig.token.trim() === '') return undefined
+      return { serverUrl, token: engineConfig.token, clientId, requestTimeoutMs }
+    },
+    logger,
+  })
   let tokenSource: string | null = configToken.trim() === '' ? null : 'config'
   let passphraseSource: string | null = configPassphrase === '' ? null : 'config'
   let refreshingSecrets: Promise<void> | undefined
@@ -302,6 +321,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     config: engineConfig,
     logger,
+    leaseRelease: (sessionId: string) => leaseKeeper.releaseAfterWrite(sessionId),
     isTailOpen: (events: readonly { readonly seq: number }[]) =>
       interruptedTurnClosers(events as readonly SessionEvent[]).length > 0,
   }
@@ -469,6 +489,7 @@ export function apply(ctx: Context, config: Config): void {
     persist: persistState,
     configuration,
     intervalMs,
+    leases: () => leaseKeeper.snapshot(),
     initial: {
       revision: initialJournal.revision,
       ...initialJournal.pending === undefined ? {} : { pending: initialJournal.pending },
@@ -638,6 +659,7 @@ export function apply(ctx: Context, config: Config): void {
   const runSync = async (manual = false): Promise<Awaited<ReturnType<SyncController['run']>>> => {
     refreshConfig()
     await refreshSecrets()
+    void leaseKeeper.tick()
     await refreshBindings()
     const result = manual ? await controller.run({ manual: true }) : await controller.run()
     await autoBindMatchingWorkspaces()
@@ -850,4 +872,14 @@ export function apply(ctx: Context, config: Config): void {
       return () => { clearInterval(timer) }
     })
   }
+  ctx.effect(() => {
+    leaseKeeper.start()
+    const offSessionCreated = (ctx as unknown as {
+      on(name: string, listener: () => void): () => void
+    }).on('session/created', () => { void leaseKeeper.tick() })
+    return () => {
+      offSessionCreated()
+      return leaseKeeper.dispose()
+    }
+  }, 'dsh-session-cloudsync: presence leases')
 }

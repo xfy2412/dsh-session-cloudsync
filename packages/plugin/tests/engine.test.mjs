@@ -1040,3 +1040,53 @@ test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', asyn
     temp.dispose()
   }
 })
+
+test('租约：leaseRelease 回调存在时由回调决定释放，presence lease 不被误删', async () => {
+  const temp = createTempHome('plugin-lease-release')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'lease-release-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      const sessionId = 'session-lease-release'
+      const header = {
+        id: sessionId,
+        version: 4,
+        createdAt: 1201,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: 'D:/local',
+      }
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'lease pass',
+        batchEvents: 50,
+      }
+      const released = []
+      const pushed = await syncOnce({
+        persistence: fakeStore(header, events(0, 5)),
+        sessions,
+        config,
+        isTailOpen: () => false,
+        workspaceKeyOf: () => TEST_WORKSPACE_KEY,
+        leaseRelease: async (id) => { released.push(id) },
+      })
+      assert.equal(pushed.sessions[0].status, 'pushed')
+      assert.deepEqual(released, [sessionId])
+      // 回调没有 DELETE，presence lease 仍然占着；另一个 client 不能拿到。
+      const other = await call(base, `/v1/sessions/${sessionId}/lease`, {
+        method: 'POST',
+        token: device.token,
+        headers: { 'x-client-id': 'ffffffffffffffff' },
+      })
+      assert.equal(other.status, 409)
+      assert.equal(other.body.error.code, 'lease-held')
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})

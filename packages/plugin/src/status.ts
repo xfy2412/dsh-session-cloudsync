@@ -68,6 +68,22 @@ export interface BlockedDecisionView {
   readonly at: number
 }
 
+/** 一个会话的本地租约状态；用于设备独占。 */
+export interface SessionLeaseView {
+  /** 会话 id。 */
+  readonly sessionId: string
+  /** 当前租约状态。 */
+  readonly state: 'held' | 'foreign' | 'lost' | 'renewing'
+  /** 租约到期时间。 */
+  readonly leaseUntil?: number
+  /** 持有该租约的设备（服务端返回时）。 */
+  readonly ownerDeviceId?: string
+  /** 最近一次成功续租时间。 */
+  readonly lastRenewAt?: number
+  /** 最近一次续租/申请错误。 */
+  readonly error?: string
+}
+
 /** 客户端轮询的完整同步状态。 */
 export interface SyncStatus {
   /** serverUrl / token / passphrase 是否齐全。 */
@@ -92,6 +108,8 @@ export interface SyncStatus {
   readonly revision: number
   /** 最近一轮的逐会话结果；尚未执行过为空数组。 */
   readonly sessions: readonly SessionSyncView[]
+  /** 活跃会话的设备独占租约。 */
+  readonly leases: readonly SessionLeaseView[]
   /** 等待用户决定 cwd 修正/跳过的会话 id。 */
   readonly cwdPending: readonly string[]
   /** 已分叉、必须人工处理的会话；这些会话不能继续写入。 */

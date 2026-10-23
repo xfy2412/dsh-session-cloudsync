@@ -20,7 +20,7 @@ import {
   type SyncReport,
   type UnmappedSessionState,
 } from './engine.ts'
-import type { BlockedSessionView, SessionSyncView, SyncErrorView, SyncStatus } from './status.ts'
+import type { BlockedSessionView, SessionLeaseView, SessionSyncView, SyncErrorView, SyncStatus } from './status.ts'
 
 /** 默认不自动重试、只等待配置或人工处理的错误。 */
 export const DEFAULT_NON_RETRYABLE: ReadonlySet<SyncErrorKind> = new Set([
@@ -48,6 +48,8 @@ export interface SyncControllerOptions {
   readonly intervalMs: number
   /** 启动时从状态文件恢复的 revision/pending。 */
   readonly initial?: PullState
+  /** 当前 live 会话的设备独占租约；缺省为空。 */
+  readonly leases?: () => readonly SessionLeaseView[]
   /** 覆盖默认的不可重试集合（测试用）。 */
   readonly nonRetryable?: ReadonlySet<SyncErrorKind>
   /** 日志。 */
@@ -126,6 +128,7 @@ export class SyncController {
       pending: this.pending ?? null,
       revision: this.revision,
       sessions: this.sessions,
+      leases: this.options.leases?.() ?? [],
       cwdPending: [...this.cwdPending],
       blocked: [...this.blocked.values()] as readonly BlockedSessionView[],
       blockedDecisions: [...this.blockedDecisions.values()],

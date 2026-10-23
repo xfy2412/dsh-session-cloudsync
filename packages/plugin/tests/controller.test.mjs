@@ -33,6 +33,7 @@ function createController(overrides = {}) {
     intervalMs: overrides.intervalMs ?? 60_000,
     nonRetryable: overrides.nonRetryable,
     initial: overrides.initial,
+    leases: overrides.leases,
     now: () => now,
   })
   return {
@@ -44,8 +45,7 @@ function createController(overrides = {}) {
   }
 }
 
-test('控制器：实时阶段只进入 live，轮次结束后清空', async () => {
-  let fixture
+test('控制器：实时阶段只进入 live，轮次结束后清空', async () => {  let fixture
   fixture = createController({
     push: async () => {
       fixture.controller.updateProgress({ sessionId: 's1', direction: 'push', phase: 'start', progress: 0 })
@@ -366,4 +366,13 @@ test('控制器：未配置时不调用引擎，快照带原因', async () => {
   assert.equal(result.status.reason, 'passphrase 未配置')
   assert.equal(result.status.lastAttempt, null)
   assert.deepEqual(fixture.calls, { push: 0, pull: 0 })
+})
+
+test('控制器：快照携带 live 会话的设备独占租约', () => {
+  const fixture = createController({
+    leases: () => [{ sessionId: 's1', state: 'foreign', error: 'held by other' }],
+  })
+  assert.deepEqual(fixture.controller.snapshot().leases, [
+    { sessionId: 's1', state: 'foreign', error: 'held by other' },
+  ])
 })

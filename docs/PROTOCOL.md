@@ -68,6 +68,7 @@
 - 会话租约资源为 `session:<sessionId>`；Vault 租约资源为 `vault-writer:<writer>`。
 - 所有 lease/append 请求带 `X-Client-Id`；append 必须匹配租约 owner。
 - `DELETE /v1/sessions/:id/lease` / `DELETE /v1/vault/lease` 主动释放；只允许当前 owner。
+- 插件对本地 **live** 会话持续续租（20s）形成设备独占；cold 会话不持有；进程正常退出主动释放，异常退出靠 TTL。同一会话的 live 设备因此只有一个写者。
 - 读 manifest/cursor/stream 不加租约；不同 session、不同 writer 之间不互斥。
 - append 请求体只带**新增/替换的批次**，不重复整份 manifest：
 

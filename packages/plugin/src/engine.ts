@@ -178,6 +178,11 @@ export interface SyncDeps<Session> {
   readonly isTailOpen?: (events: readonly SyncEvent[]) => boolean
   /** 实时阶段回调；不抛异常，调用方负责容错。 */
   readonly onProgress?: (progress: SyncProgress) => void
+  /**
+   * 释放一次推送租约。宿主传 presence lease 管理器时，已由本进程长期持有的
+   * 会话租约不能在这里被释放；缺省走服务端 DELETE。
+   */
+  readonly leaseRelease?: (sessionId: string) => Promise<void>
   /** 由根会话的本机 cwd 解析 workspaceKey；V2 推送必需。 */
   readonly workspaceKeyOf: (sessionId: string, cwd: string) => string | undefined
 }
@@ -916,7 +921,12 @@ async function syncSession<Session>(
       safeThroughSeq,
     })
   } finally {
-    await releaseLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
+    try {
+      if (deps.leaseRelease !== undefined) await deps.leaseRelease(sessionId)
+      else await releaseLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
+    } catch {
+      // 释放失败由租约 TTL 兜底，不覆盖本次同步结果。
+    }
   }
 
   return {
