@@ -7,9 +7,13 @@ import { createHostApi } from '../src/host-api.ts'
 function control(overrides = {}) {
   return {
     status: () => overrides.status ?? {
+      schemaVersion: 2,
+      statusVersion: 1,
       configured: true,
       reason: null,
       running: false,
+      run: { id: 1, trigger: 'auto', state: 'finished', startedAt: 10, finishedAt: 10 },
+      scheduler: { autoSync: true, intervalMs: 60_000, nextRunAt: null, backoffUntil: null },
       lastAttempt: 10,
       lastSuccess: 10,
       lastError: null,
@@ -18,8 +22,10 @@ function control(overrides = {}) {
       pending: null,
       revision: 3,
       sessions: [],
-      live: [],
     },
+    events: overrides.events ?? (async () => new Response('event: status\ndata: {}\n\n', {
+      headers: { 'content-type': 'text/event-stream' },
+    })),
     setup: async () => overrides.setup ?? {
       configured: true,
       reason: null,
@@ -91,10 +97,11 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/setup/workspaces/test/sync/cwd/blocked/replace/bind 九条精确路由', () => {
+test('宿主 API：注册 status/events/setup/workspaces/test/sync/cwd/blocked/replace/bind 十条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-cloudsync/status', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/events', ['GET'], 'buffered'],
     ['/api/session-cloudsync/setup', ['GET'], 'buffered'],
     ['/api/session-cloudsync/workspaces', ['GET'], 'buffered'],
     ['/api/session-cloudsync/test', ['POST'], 'buffered'],
@@ -114,6 +121,15 @@ test('宿主 API：status 返回快照且禁止缓存', async () => {
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('cache-control'), 'no-store')
   assert.equal((await bodyOf(response)).value.revision, 3)
+})
+
+test('宿主 API：events 返回 text/event-stream', async () => {
+  const routes = createHostApi(control())
+  const response = await route(routes, '/api/session-cloudsync/events').fetch(
+    new Request('http://host/api/session-cloudsync/events?until=idle'),
+  )
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('content-type') ?? '', /^text\/event-stream/)
 })
 
 test('宿主 API：setup 只返回非敏感字段', async () => {

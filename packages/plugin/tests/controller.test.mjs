@@ -266,6 +266,18 @@ test('控制器：local-active 聚合为 deferred 并保留待下载事件数', 
   assert.equal(session.pending.download, 5)
 })
 
+test('控制器：subscribe 在状态变化时通知，可取消', async () => {
+  const fixture = createController()
+  let calls = 0
+  const unsubscribe = fixture.controller.subscribe(() => { calls += 1 })
+  await fixture.controller.run()
+  assert.ok(calls > 0)
+  const afterRun = calls
+  unsubscribe()
+  fixture.controller.notifyChanged()
+  assert.equal(calls, afterRun)
+})
+
 test('控制器：推送错误进入退避，自动轮次跳过，手动轮次立即重试', async () => {
   let pushCalls = 0
   let fail = true

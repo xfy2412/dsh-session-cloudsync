@@ -269,6 +269,11 @@ window.__ModuleLoader__.load({
       }
       var listeners = new Set()
       var pollTimer = null
+      var streamTimer = null
+      var streamAbort = null
+      var streamFailedUntil = 0
+      var lastVersion = -1
+      var hidden = false
       var toastTimer = null
       var inflight = null
       var disposed = false
@@ -288,22 +293,151 @@ window.__ModuleLoader__.load({
         })
       }
 
+      function statusActive(status) {
+        return status !== null && (status.running === true || status.pending !== null)
+      }
+
+      function acceptStatus(status) {
+        if (status === null || typeof status !== 'object') return false
+        if (typeof status.statusVersion === 'number' && status.statusVersion < lastVersion) return false
+        if (typeof status.statusVersion === 'number') lastVersion = status.statusVersion
+        patch({ status: status, loading: false })
+        return true
+      }
+
+      function consumeSse(text) {
+        var index = text.indexOf('\n\n')
+        while (index !== -1) {
+          var frame = text.slice(0, index)
+          text = text.slice(index + 2)
+          var data = []
+          frame.split('\n').forEach(function (line) {
+            if (line.indexOf('data:') === 0) data.push(line.slice(5).trimStart())
+          })
+          if (data.length > 0) {
+            try { handleStreamStatus(JSON.parse(data.join('\n'))) } catch (error) { /* 忽略坏帧 */ }
+          }
+          index = text.indexOf('\n\n')
+        }
+        return text
+      }
+
+      function handleStreamStatus(status) {
+        if (disposed) return
+        if (!acceptStatus(status)) return
+        if (statusActive(status)) {
+          if (streamTimer !== null) {
+            clearTimeout(streamTimer)
+            streamTimer = null
+          }
+          return
+        }
+        if (streamTimer !== null) clearTimeout(streamTimer)
+        streamTimer = setTimeout(function () {
+          streamTimer = null
+          closeStream()
+        }, 2500)
+      }
+
+      function closeStream() {
+        if (streamTimer !== null) {
+          clearTimeout(streamTimer)
+          streamTimer = null
+        }
+        if (streamAbort !== null) {
+          var controller = streamAbort
+          streamAbort = null
+          controller.abort()
+        }
+        schedule()
+      }
+
+      function openStream() {
+        if (disposed || streamAbort !== null) return
+        var controller = new AbortController()
+        streamAbort = controller
+        function fail(error) {
+          if (streamAbort !== controller) return
+          streamAbort = null
+          streamFailedUntil = Date.now() + 3000
+          schedule()
+        }
+        fetch(API + '/events?until=idle', {
+          credentials: 'same-origin',
+          headers: { accept: 'text/event-stream' },
+          signal: controller.signal,
+        }).then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status)
+          if (response.body === null || typeof response.body.getReader !== 'function') {
+            throw new Error('SSE 不可用')
+          }
+          streamFailedUntil = 0
+          var reader = response.body.getReader()
+          var decoder = new TextDecoder()
+          var buffer = ''
+          function pump() {
+            return reader.read().then(function (result) {
+              if (streamAbort !== controller) return
+              if (result.done) {
+                streamAbort = null
+                if (statusActive(snapshot.status)) streamFailedUntil = Date.now() + 3000
+                schedule()
+                return
+              }
+              buffer += decoder.decode(result.value, { stream: true })
+              buffer = consumeSse(buffer)
+              return pump()
+            }, function (error) {
+              fail(error)
+            })
+          }
+          return pump()
+        }).catch(function (error) {
+          if (controller.signal.aborted) return
+          fail(error)
+        })
+      }
+
       function schedule() {
         if (pollTimer !== null) clearTimeout(pollTimer)
         pollTimer = null
-        if (disposed) return
+        if (disposed || hidden) return
         var status = snapshot.status
         if (status === null) return
-        if (!status.running && status.pending === null) return
+        if (statusActive(status)) {
+          if (streamAbort === null) {
+            if (Date.now() < streamFailedUntil) {
+              pollTimer = setTimeout(function () { refreshStatus() }, 1000)
+            } else {
+              openStream()
+            }
+          }
+          return
+        }
+        if (streamAbort !== null) {
+          if (streamTimer === null) {
+            streamTimer = setTimeout(function () {
+              streamTimer = null
+              closeStream()
+            }, 1000)
+          }
+          return
+        }
+        var scheduler = status.scheduler || {}
+        if (scheduler.autoSync !== true) return
+        var interval = typeof scheduler.intervalMs === 'number' ? scheduler.intervalMs : 60000
+        var now = Date.now()
+        var next = typeof scheduler.nextRunAt === 'number' ? scheduler.nextRunAt : now + interval
+        var delay = Math.max(1000, Math.min(next - 1500 - now, interval - 5000))
         pollTimer = setTimeout(function () {
-          refreshStatus().finally(schedule)
-        }, 1000)
+          refreshStatus()
+        }, delay)
       }
 
       async function refreshStatus() {
         try {
           var status = await fetchJson('/status')
-          patch({ status: status, loading: false })
+          acceptStatus(status)
           return status
         } catch (error) {
           patch({ loading: false, error: errorText(error) })
@@ -311,6 +445,20 @@ window.__ModuleLoader__.load({
         } finally {
           schedule()
         }
+      }
+
+      function onVisibilityChange() {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+          hidden = true
+          closeStream()
+          if (pollTimer !== null) {
+            clearTimeout(pollTimer)
+            pollTimer = null
+          }
+          return
+        }
+        hidden = false
+        refreshStatus()
       }
 
       async function refreshSetup() {
@@ -349,8 +497,10 @@ window.__ModuleLoader__.load({
       }
 
       async function syncNow() {
+        openStream()
         var result = await fetchJson('/sync', { method: 'POST', body: '{}' })
-        await refreshStatus()
+        if (result && result.status) acceptStatus(result.status)
+        else await refreshStatus()
         return result
       }
 
@@ -413,6 +563,12 @@ window.__ModuleLoader__.load({
       function dispose() {
         disposed = true
         if (pollTimer !== null) clearTimeout(pollTimer)
+        if (streamTimer !== null) clearTimeout(streamTimer)
+        if (streamAbort !== null) {
+          var controller = streamAbort
+          streamAbort = null
+          controller.abort()
+        }
         if (toastTimer !== null) clearTimeout(toastTimer)
         listeners.clear()
       }
@@ -422,6 +578,7 @@ window.__ModuleLoader__.load({
         subscribe: subscribe,
         refreshAll: refreshAll,
         refreshStatus: refreshStatus,
+        onVisibilityChange: onVisibilityChange,
         refreshSetup: refreshSetup,
         refreshWorkspaces: refreshWorkspaces,
         syncNow: syncNow,
@@ -1380,7 +1537,7 @@ window.__ModuleLoader__.load({
 
       useEffect(function () {
         function onVisibility() {
-          if (document.visibilityState === 'visible') model.refreshStatus()
+          model.onVisibilityChange()
         }
         document.addEventListener('visibilitychange', onVisibility)
         return function () { document.removeEventListener('visibilitychange', onVisibility) }

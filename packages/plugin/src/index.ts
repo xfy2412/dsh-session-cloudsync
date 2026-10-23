@@ -29,7 +29,9 @@ import {
   type SyncLogger,
 } from './engine.ts'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
+import { createEventStreamResponse } from './event-stream.ts'
 import { LeaseKeeper } from './lease-keeper.ts'
+import { SyncScheduler } from './scheduler.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
 import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
@@ -225,6 +227,8 @@ export function apply(ctx: Context, config: Config): void {
     clientId,
   }
 
+  let scheduler: SyncScheduler | undefined
+
   /**
    * 重新读取 volatile 引用。设置页写入后，DSH 可能原地更新引用而不重启
    * 插件；每轮同步/设置读取前调用，保证不会一直拿 apply 时的旧值。
@@ -249,7 +253,9 @@ export function apply(ctx: Context, config: Config): void {
     engineConfig.requestTimeoutMs = requestTimeoutMs
     if (salt === '') delete engineConfig.salt
     else engineConfig.salt = salt
+    scheduler?.reconfigure()
   }
+  let notifyChanged: (() => void) | undefined
   const leaseKeeper = new LeaseKeeper({
     listLiveSessionIds: () => {
       const service = ctx.sessions as unknown as { list?: () => readonly LiveSession[] }
@@ -266,6 +272,7 @@ export function apply(ctx: Context, config: Config): void {
       if (serverUrl.trim() === '' || engineConfig.token.trim() === '') return undefined
       return { serverUrl, token: engineConfig.token, clientId, requestTimeoutMs }
     },
+    onChange: () => notifyChanged?.(),
     logger,
   })
   let tokenSource: string | null = configToken.trim() === '' ? null : 'config'
@@ -490,12 +497,12 @@ export function apply(ctx: Context, config: Config): void {
     configuration,
     intervalMs,
     leases: () => leaseKeeper.snapshot(),
-    scheduler: () => ({
+    scheduler: () => scheduler?.snapshot() ?? {
       autoSync,
       intervalMs,
       nextRunAt: null,
       backoffUntil: null,
-    }),
+    },
     initial: {
       revision: initialJournal.revision,
       ...initialJournal.pending === undefined ? {} : { pending: initialJournal.pending },
@@ -506,6 +513,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     logger,
   })
+  notifyChanged = () => controller.notifyChanged()
 
   // 分叉会话已经无法安全确定远端历史；Host 侧在模型 step 前拒绝，
   // 避免只有 client composer 提示、实际仍能继续写本地。
@@ -682,6 +690,14 @@ export function apply(ctx: Context, config: Config): void {
     return result
   }
 
+  scheduler = new SyncScheduler({
+    run: (trigger) => runSync(trigger === 'manual', trigger),
+    intervalMs: () => intervalMs,
+    autoSync: () => autoSync,
+    onChange: () => controller.notifyChanged(),
+    logger,
+  })
+
   const workspaces = async (): Promise<SyncWorkspaceList> => {
     refreshConfig()
     await refreshBindings()
@@ -802,10 +818,14 @@ export function apply(ctx: Context, config: Config): void {
 
   const control: SyncControl = {
     status: () => controller.snapshot(),
+    events: async (request: Request) => createEventStreamResponse(request, {
+      status: () => controller.snapshot(),
+      subscribe: (listener) => controller.subscribe(listener),
+    }),
     setup,
     workspaces,
     test: async (serverUrl: string) => testConnection(serverUrl, fetch, engineConfig.requestTimeoutMs),
-    syncNow: () => runSync(true, 'manual'),
+    syncNow: () => scheduler?.manual() ?? runSync(true, 'manual'),
     cwdDecision: async (sessionId: string, action: 'fix' | 'skip') => {
       if (action === 'skip') {
         const snapshot = await ctx.sessionPersistence.stat(sessionId as SessionId)
@@ -878,12 +898,10 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
   })
-  if (autoSync) {
-    ctx.effect(() => {
-      const timer = setInterval(() => { void runSync() }, intervalMs)
-      return () => { clearInterval(timer) }
-    })
-  }
+  ctx.effect(() => {
+    scheduler?.start()
+    return () => scheduler?.stop()
+  }, 'dsh-session-cloudsync: sync scheduler')
   ctx.effect(() => {
     leaseKeeper.start()
     const offSessionCreated = (ctx as unknown as {

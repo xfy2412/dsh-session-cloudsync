@@ -118,6 +118,7 @@ export class SyncController {
   private readonly blocked = new Map<string, BlockedSessionState>()
   private readonly blockedDecisions = new Map<string, BlockedDecision>()
   private readonly unmapped = new Map<string, UnmappedSessionState>()
+  private readonly listeners = new Set<() => void>()
 
   /**
    * @param options - 引擎、持久化与时钟注入点。
@@ -226,8 +227,26 @@ export class SyncController {
       .sort((left, right) => left.sessionId.localeCompare(right.sessionId))
   }
 
+  /** 订阅状态变化；返回取消订阅。 */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  /** 外部（如 LeaseKeeper）修改了快照可见状态。 */
+  notifyChanged(): void {
+    this.bump()
+  }
+
   private bump(): void {
     this.statusVersion += 1
+    for (const listener of [...this.listeners]) {
+      try {
+        listener()
+      } catch {
+        // 订阅者异常不能影响同步。
+      }
+    }
   }
 
   /** 用户已处理某个 cwd 决策后清除警告。 */

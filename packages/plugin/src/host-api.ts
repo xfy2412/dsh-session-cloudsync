@@ -16,6 +16,8 @@ import type { SetupInfo, SyncStatus, SyncWorkspaceList } from './status.ts'
 export interface SyncControl {
   /** 当前状态快照。 */
   status(): SyncStatus
+  /** 打开一个状态 SSE 流。 */
+  events(request: Request): Promise<Response>
   /** 非敏感配置，供首启/设置页读取；会顺带刷新凭据。 */
   setup(): Promise<SetupInfo>
   /** 同步列表：工作区、会话计数与当前选中项。 */
@@ -70,6 +72,12 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async () => json({ ok: true, value: control.status() }),
+    },
+    {
+      path: '/api/session-cloudsync/events',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => control.events(request),
     },
     {
       path: '/api/session-cloudsync/setup',

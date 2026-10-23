@@ -27,7 +27,7 @@
 | A4 | 客户端可读的状态通道（session projection 或 host service） | A3 |
 | A5 | 子代理闭包：根会话 + 全部后代；推送按后序（子先父后），拉取先建子再挂根；默认开启 | A3 |
 
-> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-cloudsync/status`、`GET /api/session-cloudsync/setup`、`GET /api/session-cloudsync/workspaces`、`POST /api/session-cloudsync/test`、`POST /api/session-cloudsync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照含 `configured/reason/running/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`，逐会话视图带 `direction/status/batches|applied/tailOpen/kind/error`。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。
+> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-cloudsync/status`、`GET /api/session-cloudsync/events`、`GET /api/session-cloudsync/setup`、`GET /api/session-cloudsync/workspaces`、`POST /api/session-cloudsync/test`、`POST /api/session-cloudsync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照为 **schema v2**：`configured/reason/running/run/scheduler/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`；`sessions` 每个 sessionId 一行，带 push/pull 方向、`phase/pending/totalEvents/doneEvents/tailOpen/remoteAhead/lease`。`/events?until=idle` 是同一快照的 SSE 全量流（80ms 合并、15s 心跳、abort/空闲关闭）；自动同步由自调度 `nextRunAt` 驱动。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。
 >
 > **A5 已完成**：默认同步子代理闭包（`includeSubagents` 默认 true）；只把 `origin === 'subagent'` 当后代，fork 是独立根；推送按“后代深到浅、根最后”排序；拉取按远端 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入跳过列表。
 
@@ -48,7 +48,7 @@
 > - 工作区落点由 V2 的 `workspaceKey` 一次性绑定决定，M4 的单一 `workspacePath` 已删除。
 > - 启动对账（候选列表/确认/忽略）与 raw 前缀校验见 [RECONCILE.md](RECONCILE.md)；实现前不能把当前“自动拉取所有远端会话”当作最终 UX。
 > - 宿主每轮 status/setup/sync 都重新读取 `.volatile()` 引用的 `.get()`，所以设置页保存后不必重启插件即可生效。测试连接不走配置热更新：按钮直接把当前输入的 `serverUrl` 交给宿主探测。
-> - B4：`GET /status`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 只请求公开的 `/v1/health`，验证地址可达、确认是本插件服务端；不读配置、不带 token、不校验口令。
+> - B4：`GET /status`、`GET /events`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 只请求公开的 `/v1/health`，验证地址可达、确认是本插件服务端；不读配置、不带 token、不校验口令。
 > - **B3/B5 已完成**：`client/index.js` 通过 `plugins.bundle.config` 渲染自定义设置页（表单来自 `ctx.configForms.get('session-cloudsync')`），`shell.overlay` 提供首启向导与顶部气泡；非敏感字段走 settings，token/passphrase 走 `remote.credentials`；首启完成后立即触发一轮同步。首启/设置页「测试连接」都直接测当前输入，不落盘、不需要 token；首启步骤切换带方向动画，并且一旦以未配置姿态打开，后续保存不会把向导抽掉。
 
 **官方前端接口（已确认，来自本地 DSH 源码/类型）：**
@@ -74,8 +74,8 @@
   - 用户主动打开或操作过气泡后，失焦 5 秒再自动收回；焦点/指针回到气泡会取消，焦点在气泡内时不收回；手动点图标可立即收起；
   - 顶部居中、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
   - 窄屏切底部 sheet；`aria-live="polite"`。
-- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区候选、根会话列表（含子代理计数）、本地排除的根会话 id、一次性绑定与未映射工作区；选择粒度是根会话，子代理跟随根，不做工作区白名单。`test` 接收 `{ serverUrl }`，直接探测 `/v1/health`，不依赖已保存配置。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
-- **刷新**：同步中每 1s 轮询 status，空闲停止。
+- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /events`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区候选、根会话列表（含子代理计数）、本地排除的根会话 id、一次性绑定与未映射工作区；选择粒度是根会话，子代理跟随根，不做工作区白名单。`test` 接收 `{ serverUrl }`，直接探测 `/v1/health`，不依赖已保存配置。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
+- **刷新**：空闲只按 `nextRunAt`（略提前）或最长 55s 安全轮询 `/status`；手动同步或接近排期时打开 `/events?until=idle`，终态/空闲后关闭；SSE 失败退避 1s 轮询；页面隐藏断开。
 - **动效**：状态变化才动；微交互 120–180ms、面板 220–320ms、气泡进出 320–420ms；只动 `transform` / `opacity` / `grid-template-rows`，进度用 `linear`；必须支持 `prefers-reduced-motion`。详细约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
 
 ### C. 客户端防误操作
@@ -89,7 +89,7 @@
 | C5 | GUI 回归：下拉、拖拽、键盘、深链打开都不误 resume | C2–C4 |
 | C6 | 顶部居中的分段进度气泡：收起态是唯一云图标，点击后同一图标展开成卡片，完成缩回；进度条按会话等分，黄→绿/红，子先父后并发推进；展开逐会话列表，不占标题栏 | A3、C1 |
 
-> C 进度：C1 状态下发到 `/status` 的 `live`（实时阶段）、`pending`（applying）与逐会话 `tailOpen`/`remote-ahead`（safe 落后）；C2 用 `conversation.input.dock` 的不可见守卫调用 `conversation.blocks.set`；C3 在 document 捕获阶段拦列表行 click/pointerdown/keydown；C4 用 `sidebar.session.row.leading` 渲染同步标记、`sidebar.session.row.hover` 渲染原因。C5 仍需在真实 GUI 做一次点击/拖拽/键盘回归。
+> C 进度：C1 状态下发到 `/status` v2 的每会话聚合（`phase`、push/pull、`pending`、`tailOpen`/`remoteAhead`/`lease`）和 `/events` SSE；C2 用 `conversation.input.dock` 的不可见守卫调用 `conversation.blocks.set`；C3 在 document 捕获阶段拦列表行 click/pointerdown/keydown；C4 用 `sidebar.session.row.leading` 渲染同步标记、`sidebar.session.row.hover` 渲染原因。C5 仍需在真实 GUI 做一次点击/拖拽/键盘回归。
 
 ### D. 故障演练
 

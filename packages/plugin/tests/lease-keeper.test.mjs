@@ -55,6 +55,7 @@ function makeKeeper(options = {}) {
     now: () => now.value,
     renewIntervalMs: 20_000,
     renewBeforeMs: 30_000,
+    onChange: options.onChange,
   })
   return { keeper, now, live, server }
 }
@@ -84,6 +85,16 @@ test('租约：首次申请、提前续租、会话变 cold 后释放', async ()
   await keeper.tick()
   assert.equal(server.calls.filter((call) => call.method === 'DELETE').length, 1)
   assert.deepEqual(keeper.snapshot(), [])
+})
+
+test('租约：视图变化触发 onChange', async () => {
+  let changes = 0
+  const { keeper } = makeKeeper({ onChange: () => { changes += 1 } })
+  await keeper.tick()
+  assert.ok(changes > 0)
+  const afterHold = changes
+  await keeper.tick()
+  assert.equal(changes, afterHold, '没有变化时不应重复通知')
 })
 
 test('租约：其他设备持有时标记 foreign，不删除本地 held 记录', async () => {

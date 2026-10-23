@@ -38,6 +38,8 @@ export interface LeaseKeeperOptions {
   readonly renewIntervalMs?: number
   /** 剩余租期低于该值时续租。默认 30s。 */
   readonly renewBeforeMs?: number
+  /** 租约视图变化时通知（供 SSE/状态版本使用）。 */
+  readonly onChange?: () => void
 }
 
 /** 一条由本进程持有的租约。 */
@@ -104,6 +106,7 @@ export class LeaseKeeper {
   private readonly views = new Map<string, SessionLeaseView>()
   private timer: ReturnType<typeof setInterval> | undefined
   private ticking = false
+  private dirty = false
   private disposed = false
   private readonly renewIntervalMs: number
   private readonly renewBeforeMs: number
@@ -174,6 +177,7 @@ export class LeaseKeeper {
           || lease.token !== config.token || lease.clientId !== config.clientId) {
           this.held.delete(sessionId)
           this.views.delete(sessionId)
+          this.dirty = true
           await this.release({
             serverUrl: lease.serverUrl,
             token: lease.token,
@@ -183,7 +187,10 @@ export class LeaseKeeper {
       }
 
       for (const sessionId of [...this.views.keys()]) {
-        if (!liveSet.has(sessionId)) this.views.delete(sessionId)
+        if (!liveSet.has(sessionId)) {
+          this.views.delete(sessionId)
+          this.dirty = true
+        }
       }
 
       for (const sessionId of live) {
@@ -203,6 +210,10 @@ export class LeaseKeeper {
       }
     } finally {
       this.ticking = false
+      if (this.dirty) {
+        this.dirty = false
+        this.options.onChange?.()
+      }
     }
   }
 
@@ -328,6 +339,7 @@ export class LeaseKeeper {
     const held = [...this.held.entries()]
     this.held.clear()
     this.views.clear()
+    this.dirty = true
     await Promise.all(held.map(async ([sessionId, lease]) => {
       await this.release({
         serverUrl: lease.serverUrl,
@@ -339,7 +351,15 @@ export class LeaseKeeper {
 
   private setView(sessionId: string, view: SessionLeaseView): void {
     const previous = this.views.get(sessionId)
+    const changed = previous === undefined
+      || previous.state !== view.state
+      || previous.leaseUntil !== view.leaseUntil
+      || previous.ownerDeviceId !== view.ownerDeviceId
+      || previous.lastRenewAt !== view.lastRenewAt
+      || previous.error !== view.error
+    if (!changed) return
     this.views.set(sessionId, view)
+    this.dirty = true
     if (previous?.state !== view.state && (view.state === 'foreign' || view.state === 'lost')) {
       this.options.logger?.warn(`dsh-session-cloudsync: ${sessionId} 的租约状态变为 ${view.state}${view.error === undefined ? '' : `：${view.error}`}`)
     }
