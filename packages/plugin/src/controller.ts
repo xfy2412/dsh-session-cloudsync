@@ -23,7 +23,7 @@ import {
 import type {
   BlockedDecisionView,
   BlockedSessionView,
-  SessionLeaseView,
+  DeviceLeaseView,
   SyncDirectionPhase,
   SyncDirectionStatus,
   SyncErrorView,
@@ -60,8 +60,8 @@ export interface SyncControllerOptions {
   readonly intervalMs: number
   /** 启动时从状态文件恢复的 revision/pending。 */
   readonly initial?: PullState
-  /** 当前 live 会话的设备独占租约；缺省为空。 */
-  readonly leases?: () => readonly SessionLeaseView[]
+  /** 全局单写者租约；缺省视为持有（测试/只读注入）。 */
+  readonly deviceLease?: () => DeviceLeaseView
   /** 调度器视图；缺省使用 intervalMs 与 nextRetryAt。 */
   readonly scheduler?: () => SyncSchedulerView
   /** 覆盖默认的不可重试集合（测试用）。 */
@@ -152,6 +152,7 @@ export class SyncController {
         nextRunAt: null,
         backoffUntil: this.nextRetryAt === 0 ? null : this.nextRetryAt,
       },
+      deviceLease: this.options.deviceLease?.() ?? { state: 'held' },
       lastAttempt: this.lastAttempt === 0 ? null : this.lastAttempt,
       lastSuccess: this.lastSuccess === 0 ? null : this.lastSuccess,
       lastError: this.lastError ?? null,
@@ -215,12 +216,6 @@ export class SyncController {
       value.decision = entry as BlockedDecisionView
       value.updatedAt = now
     }
-    for (const lease of this.options.leases?.() ?? []) {
-      const value = ensure(lease.sessionId)
-      value.lease = lease
-      value.live = true
-      value.updatedAt = now
-    }
 
     return [...map.values()]
       .map((entry) => finishSessionView(entry, now))
@@ -233,7 +228,7 @@ export class SyncController {
     return () => { this.listeners.delete(listener) }
   }
 
-  /** 外部（如 LeaseKeeper）修改了快照可见状态。 */
+  /** 外部（如 DeviceLeaseKeeper）修改了快照可见状态。 */
   notifyChanged(): void {
     this.bump()
   }
@@ -437,7 +432,11 @@ export class SyncController {
     const errors: Array<{ kind: SyncErrorKind; message: string }> = []
     const views: SyncDirectionStatus[] = []
     try {
-      this.collectPush(await this.options.push(), views, errors)
+      // 拉取不需要租约；只有持有全局单写者租约时才允许上传。
+      const lease = this.options.deviceLease?.()
+      if (lease === undefined || lease.state === 'held') {
+        this.collectPush(await this.options.push(), views, errors)
+      }
       const pull = await this.options.pull(this.pullState())
       this.collectPull(pull, views, errors)
       if (pull.configured && pull.sessions.every((session) => session.status !== 'error')) {
@@ -673,7 +672,7 @@ function directionPhaseOf(direction: 'push' | 'pull', status: string): SyncDirec
   if (status === 'up-to-date') return 'up-to-date'
   if (status === 'pushed' || status === 'pulled') return 'done'
   if (status === 'skipped' || status === 'excluded' || status === 'tombstone') return 'skipped'
-  if (status === 'remote-ahead' || status === 'lease-held' || status === 'partial'
+  if (status === 'remote-ahead' || status === 'partial'
     || status === 'local-active' || status === 'local-ahead' || status === 'unmapped') return 'deferred'
   if (direction === 'push' ? status === 'pushing' : status === 'pulling') return 'transferring'
   return 'planned'
@@ -691,7 +690,6 @@ interface MutableSessionStatus {
   unmapped?: { readonly workspaceKey: string; readonly label?: string }
   blocked?: BlockedSessionView
   decision?: BlockedDecisionView
-  lease?: SessionLeaseView
   updatedAt: number
 }
 
@@ -714,7 +712,6 @@ function finishSessionView(entry: MutableSessionStatus, now: number): SyncSessio
   const deferred = entry.live || entry.remoteAhead || entry.cwdPending
     || entry.unmapped !== undefined
     || entry.pull?.phase === 'deferred'
-    || entry.push?.status === 'lease-held'
     || (entry.push?.phase === 'deferred' && entry.remoteAhead)
   const terminal = directions.length > 0 && directions.every((direction) =>
     direction.phase === 'done' || direction.phase === 'up-to-date' || direction.phase === 'skipped'
@@ -745,7 +742,6 @@ function finishSessionView(entry: MutableSessionStatus, now: number): SyncSessio
     ...entry.unmapped === undefined ? {} : { unmapped: entry.unmapped },
     ...entry.blocked === undefined ? {} : { blocked: entry.blocked },
     ...entry.decision === undefined ? {} : { decision: entry.decision },
-    ...entry.lease === undefined ? {} : { lease: entry.lease },
     updatedAt: now,
   }
 }

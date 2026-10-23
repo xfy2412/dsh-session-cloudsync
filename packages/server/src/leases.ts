@@ -1,5 +1,5 @@
 /**
- * 通用资源写租约：会话 append 与 Vault writer 共用同一张表。
+ * 通用资源写租约：全局同步写锁与 Vault writer 共用同一张表。
  *
  * owner 是 `(deviceId, clientInstanceId)`；同一 device token 的两个 DSH 进程
  * 会有不同 clientId，因此第二个进程会被 409 拒绝，而不是靠 append 冲突兜底。
@@ -12,9 +12,12 @@ import { DEFAULT_DATASET, withTransaction, type ServerDb } from './db.ts'
 /** 租约有效期。 */
 export const LEASE_TTL_MS = 60_000
 
+/** 全局单写者租约资源；持有者才能 append/创建/删除会话。 */
+export const SYNC_RESOURCE = 'sync'
+
 /** 租约状态。 */
 export interface LeaseState {
-  /** 资源名，例如 `session:<id>`。 */
+  /** 资源名，例如 `sync` 或 `vault-writer:<writer>`。 */
   readonly resource: string
   /** 设备 id。 */
   readonly deviceId: string
@@ -30,11 +33,6 @@ interface LeaseRow {
   readonly device_id: string
   readonly client_id: string
   readonly lease_until: number
-}
-
-/** 会话资源名。 */
-export function sessionResource(sessionId: string): string {
-  return `session:${sessionId}`
 }
 
 /** Vault writer 资源名。 */

@@ -262,7 +262,6 @@
   td.session-id code { color: #b8c7de; }
   .row-copy { border: 0; background: transparent; color: var(--faint); padding: 2px 4px; border-radius: 5px; font-size: 10px; }
   .row-copy:hover { color: var(--text); background: rgba(255,255,255,.07); }
-  .lease { color: var(--warn); font-size: 10.5px; }
   .empty { padding: 24px 14px; text-align: center; color: var(--faint); }
   .empty b { display: block; margin-bottom: 3px; color: var(--muted); font-size: 12.5px; }
   .empty .btn { margin-top: 10px; }
@@ -404,13 +403,12 @@
               <option value="all">全部状态</option>
               <option value="active">正常</option>
               <option value="deleted">已删除</option>
-              <option value="leased">有租约</option>
             </select>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>会话 id</th><th>格式</th><th>批次</th><th>最后序号</th><th>更新时间</th><th>租约</th><th>状态</th></tr>
+                <tr><th>会话 id</th><th>格式</th><th>批次</th><th>最后序号</th><th>更新时间</th><th>状态</th></tr>
               </thead>
               <tbody id="sessions"></tbody>
             </table>
@@ -635,7 +633,6 @@ function filteredSessions() {
     if (query && !session.sessionId.toLowerCase().includes(query)) return false
     if (mode === 'active' && session.deletedAt !== null) return false
     if (mode === 'deleted' && session.deletedAt === null) return false
-    if (mode === 'leased' && session.lease === null) return false
     return true
   })
 }
@@ -649,8 +646,6 @@ function sessionRow(session) {
   copy.onclick = () => copyText(session.sessionId)
   idCell.append(copy)
   row.append(idCell, el('td', null, 'v' + session.formatVersion), el('td', null, String(session.batchCount)), el('td', null, String(session.lastSeq)), el('td', null, time(session.updatedAt)))
-  if (session.lease === null) row.append(el('td', null, '—'))
-  else row.append(el('td', 'lease', session.lease.deviceId + ' · ' + time(session.lease.leaseUntil)))
   const status = el('td')
   status.append(el('span', 'badge' + (session.deletedAt === null ? ' good' : ' bad'), session.deletedAt === null ? '正常' : '已删除'))
   row.append(status)
@@ -660,7 +655,7 @@ function sessionRow(session) {
 function workspaceGroupRow(group) {
   const row = el('tr', 'session-group')
   const cell = el('td')
-  cell.colSpan = 7
+  cell.colSpan = 6
   const head = el('div', 'session-group-head')
   if (group.key) {
     const input = el('input', 'workspace-alias')

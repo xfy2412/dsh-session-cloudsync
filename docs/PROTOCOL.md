@@ -5,6 +5,7 @@
 >
 > 2026-10-22：租约已扩展为 `session:<id>` / `vault-writer:<writer>`，owner 增加
 > `clientInstanceId`；Vault V1 的 append/cursor/stream 与 writer 租约已实现，见 [VAULT.md](VAULT.md)。
+> 2026-10-23：会话租约升级为全局单写者 `sync` 租约；上传/创建/删除需要它，拉取不需要。
 >
 > **M3/M4 语义**：同步单位是**连续事件批次**；差异见文末「M3/M4 语义」。
 
@@ -52,8 +53,9 @@
 | GET | `/v1/cursor?since=<revision>` | 设备 | 自某 revision 以来的变更**摘要** |
 | GET | `/v1/sessions/:id/manifest` | 设备 | 完整 manifest（大会话只在需要时拉） |
 | GET | `/v1/sessions/:id/batches?from=<index>&limit=<n>` | 设备 | 批次引用分页（默认 500/页） |
-| POST | `/v1/sessions/:id/lease` | 设备 | 申请/续租租约（带 `X-Client-Id`） |
-| POST | `/v1/sessions/:id/append` | 设备 | 提交新批次（`baseIndex + baseChainHash` + 封批次条目） |
+| POST | `/v1/sync/lease` | 设备 | 申请/续租全局单写者租约（带 `X-Client-Id`） |
+| DELETE | `/v1/sync/lease` | 设备 | 释放全局单写者租约 |
+| POST | `/v1/sessions/:id/append` | 设备 | 提交新批次（需要全局租约） |
 | POST | `/v1/sessions/:id/delete` | 设备 | 墓碑（绑定 `sessionId + createdAt + formatVersion`） |
 | POST | `/v1/vault/lease` | 设备 | Vault writer 租约 |
 | DELETE | `/v1/vault/lease` | 设备 | 释放 Vault writer 租约 |
@@ -65,11 +67,11 @@
 
 - 租约 TTL **60 秒**；owner 为 `(deviceId, clientInstanceId)`，同一 owner 续租会顺延；
   其他 client 在过期前拿到 `409 lease-held`，过期后可抢占。
-- 会话租约资源为 `session:<sessionId>`；Vault 租约资源为 `vault-writer:<writer>`。
-- 所有 lease/append 请求带 `X-Client-Id`；append 必须匹配租约 owner。
-- `DELETE /v1/sessions/:id/lease` / `DELETE /v1/vault/lease` 主动释放；只允许当前 owner。
-- 插件对本地 **live** 会话持续续租（20s）形成设备独占；cold 会话不持有；进程正常退出主动释放，异常退出靠 TTL。同一会话的 live 设备因此只有一个写者。
-- 读 manifest/cursor/stream 不加租约；不同 session、不同 writer 之间不互斥。
+- **全局单写者租约资源为 `sync`**；Vault 租约资源为 `vault-writer:<writer>`。
+- 所有 lease/append 请求带 `X-Client-Id`；append/create/delete 必须匹配全局租约 owner。
+- `DELETE /v1/sync/lease` / `DELETE /v1/vault/lease` 主动释放；只允许当前 owner。
+- 插件在进程存活期间持续续租（20s）形成设备独占；进程正常退出主动释放，异常退出靠 TTL。
+- **拉取不需要租约**：manifest/cursor/blob/批次读取不加锁；没有全局租约时宿主跳过上传，只拉取。
 - append 请求体只带**新增/替换的批次**，不重复整份 manifest：
 
 ```json
@@ -136,7 +138,7 @@
 | GET | `/admin/devices` | 设备列表（最后在线） |
 | POST | `/admin/devices` | 签发设备 token（只返回一次） |
 | DELETE | `/admin/devices/:id` | 吊销设备 token |
-| GET | `/admin/sessions` | 会话元数据列表（id/代际/批次数/最后更新/租约/墓碑） |
+| GET | `/admin/sessions` | 会话元数据列表（id/代际/批次数/最后更新/墓碑） |
 
 首版管理台不提供内容读取；会话预览（需要“允许服务器解密”）是 P2。根路径 `/` 会重定向到 `/admin`。
 

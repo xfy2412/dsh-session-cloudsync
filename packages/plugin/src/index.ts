@@ -30,7 +30,7 @@ import {
 } from './engine.ts'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
 import { createEventStreamResponse } from './event-stream.ts'
-import { LeaseKeeper } from './lease-keeper.ts'
+import { DeviceLeaseKeeper } from './device-lease.ts'
 import { SyncScheduler } from './scheduler.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
@@ -256,17 +256,7 @@ export function apply(ctx: Context, config: Config): void {
     scheduler?.reconfigure()
   }
   let notifyChanged: (() => void) | undefined
-  const leaseKeeper = new LeaseKeeper({
-    listLiveSessionIds: () => {
-      const service = ctx.sessions as unknown as { list?: () => readonly LiveSession[] }
-      if (typeof service.list !== 'function') return []
-      try {
-        return service.list().map((session) => String(session.id))
-      } catch (error: unknown) {
-        logger.warn(`dsh-session-cloudsync: 读取 live 会话失败：${error instanceof Error ? error.message : String(error)}`)
-        return []
-      }
-    },
+  const deviceLease = new DeviceLeaseKeeper({
     configuration: () => {
       refreshConfig()
       if (serverUrl.trim() === '' || engineConfig.token.trim() === '') return undefined
@@ -328,7 +318,6 @@ export function apply(ctx: Context, config: Config): void {
     },
     config: engineConfig,
     logger,
-    leaseRelease: (sessionId: string) => leaseKeeper.releaseAfterWrite(sessionId),
     isTailOpen: (events: readonly { readonly seq: number }[]) =>
       interruptedTurnClosers(events as readonly SessionEvent[]).length > 0,
   }
@@ -496,7 +485,7 @@ export function apply(ctx: Context, config: Config): void {
     persist: persistState,
     configuration,
     intervalMs,
-    leases: () => leaseKeeper.snapshot(),
+    deviceLease: () => deviceLease.snapshot(),
     scheduler: () => scheduler?.snapshot() ?? {
       autoSync,
       intervalMs,
@@ -676,7 +665,7 @@ export function apply(ctx: Context, config: Config): void {
   ): Promise<Awaited<ReturnType<SyncController['run']>>> => {
     refreshConfig()
     await refreshSecrets()
-    void leaseKeeper.tick()
+    await deviceLease.ensure()
     await refreshBindings()
     const result = await controller.run({
       manual,
@@ -833,6 +822,9 @@ export function apply(ctx: Context, config: Config): void {
         controller.clearCwdPending(sessionId)
         return { ok: true, status: 'attached' as const }
       }
+      if (!(await deviceLease.ensure())) {
+        return { ok: false, status: 'lease-held' as const, message: '未持有全局同步租约，暂不能写入 cwd 修正' }
+      }
       const result = await fixCwd(sessionId)
       if (result.ok) controller.clearCwdPending(sessionId)
       return result
@@ -903,13 +895,7 @@ export function apply(ctx: Context, config: Config): void {
     return () => scheduler?.stop()
   }, 'dsh-session-cloudsync: sync scheduler')
   ctx.effect(() => {
-    leaseKeeper.start()
-    const offSessionCreated = (ctx as unknown as {
-      on(name: string, listener: () => void): () => void
-    }).on('session/created', () => { void leaseKeeper.tick() })
-    return () => {
-      offSessionCreated()
-      return leaseKeeper.dispose()
-    }
-  }, 'dsh-session-cloudsync: presence leases')
+    deviceLease.start()
+    return () => { void deviceLease.dispose() }
+  }, 'dsh-session-cloudsync: device lease')
 }

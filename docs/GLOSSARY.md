@@ -136,7 +136,7 @@ sessionId + createdAt + formatVersion
 |---|---|
 | **push / 推送** | 本机 → 服务端 |
 | **pull / 拉取** | 服务端 → 本机 |
-| **lease / 租约** | 服务端资源写锁；资源为 `session:<id>` 或 `vault-writer:<writer>`，owner 为 `(deviceId, clientInstanceId)` |
+| **lease / 租约** | 服务端资源写锁；会话上传使用全局 `sync`，Vault 使用 `vault-writer:<writer>`，owner 为 `(deviceId, clientInstanceId)` |
 | **clientInstanceId** | 每次 DSH 进程启动生成的随机标识，用于区分同一 token 的两个 writer |
 | **append** | 向会话末尾追加批次；只接受前缀延续 |
 | **tailOpen** | 会话尾部是否还有未闭合的 turn |

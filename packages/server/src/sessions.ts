@@ -14,7 +14,7 @@ import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 import { SyncError } from '../../shared/src/wire.ts'
 import { blobPath } from './blobs.ts'
 import { DEFAULT_DATASET, bumpRevision, readRevision, withTransaction, type ServerDb } from './db.ts'
-import { requireLease as requireResourceLease, sessionResource } from './leases.ts'
+import { requireLease as requireResourceLease, SYNC_RESOURCE } from './leases.ts'
 
 /** 单个 append 请求体上限（万帧会话首次同步约 1.5 MB）。 */
 export const MAX_APPEND_BODY_BYTES = 8 * 1024 * 1024
@@ -147,7 +147,7 @@ function manifestOf(
  */
 export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, now = Date.now()): SessionSummary {
   return withTransaction(db, () => {
-    requireResourceLease(db, sessionResource(input.sessionId), input.deviceId, input.clientId, now)
+    requireResourceLease(db, SYNC_RESOURCE, input.deviceId, input.clientId, now)
     const row = sessionRow(db, input.sessionId)
     let combined: SealedFrameRef[]
     let formatVersion = input.formatVersion
@@ -241,7 +241,7 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
  */
 export function deleteSession(db: ServerDb, sessionId: string, deviceId: string, clientId: string, createdAt: number, now = Date.now()): SessionSummary {
   return withTransaction(db, () => {
-    requireResourceLease(db, sessionResource(sessionId), deviceId, clientId, now)
+    requireResourceLease(db, SYNC_RESOURCE, deviceId, clientId, now)
     const row = sessionRow(db, sessionId)
     if (row === undefined) throw new SyncError('not-found', `没有会话 ${sessionId}`)
     if (row.created_at !== createdAt) throw new SyncError('conflict', 'createdAt 与当前生命周期不符')
@@ -283,7 +283,7 @@ export function listBatches(db: ServerDb, sessionId: string, from: number, limit
 }
 
 /**
- * 管理台用的会话行（含租约）。
+ * 管理台用的会话行。
  */
 export interface AdminSession {
   readonly sessionId: string
@@ -297,7 +297,6 @@ export interface AdminSession {
   readonly deletedAt: number | null
   /** manifest 里的 opaque workspaceKey；子代理或旧 manifest 为 null。 */
   readonly workspaceKey: string | null
-  readonly lease: { readonly deviceId: string; readonly leaseUntil: number } | null
 }
 
 /**
@@ -310,9 +309,8 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
   const rows = db.handle
     .prepare(`SELECT s.session_id, s.created_at, s.format_version, s.frame_count, s.last_seq, s.head_chain_hash,
                      s.revision, s.updated_at, s.deleted_at,
-                     json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key,
-                     l.device_id AS lease_device, l.lease_until AS lease_until
-              FROM sessions s LEFT JOIN leases l ON l.dataset = s.dataset AND l.resource = 'session:' || s.session_id
+                     json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key
+              FROM sessions s
               WHERE s.dataset = ? ORDER BY s.updated_at DESC LIMIT ?`)
     .all(DEFAULT_DATASET, limit) as unknown as Array<{
       session_id: string
@@ -325,8 +323,6 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
       updated_at: number
       deleted_at: number | null
       workspace_key: string | null
-      lease_device: string | null
-      lease_until: number | null
     }>
   return rows.map((row) => ({
     sessionId: row.session_id,
@@ -339,7 +335,6 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
     workspaceKey: row.workspace_key === null ? null : String(row.workspace_key),
-    lease: row.lease_device === null || row.lease_until === null ? null : { deviceId: row.lease_device, leaseUntil: row.lease_until },
   }))
 }
 

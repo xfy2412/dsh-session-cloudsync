@@ -238,7 +238,7 @@ pathKey = base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)
 租约统一为**资源写锁**，不再只按会话：
 
 ```text
-resource = session:<sessionId>
+resource = sync
          | vault-writer:<writer/deviceId>
 owner    = (deviceId, clientInstanceId)
 TTL      = 60s
@@ -247,16 +247,17 @@ TTL      = 60s
 - `clientInstanceId` 每次 DSH 进程启动时随机生成，不持久化；通过 `X-Client-Id` 随 lease/append 请求发送；
 - 同一 `(deviceId, clientInstanceId)` 的再次 acquire 视为续租，顺延 TTL；
 - 不同 client 在过期前 acquire 同一资源返回 `409 lease-held`；
-- append 必须同时匹配 token 派生的 deviceId、租约里的 deviceId 和 clientInstanceId；
+- 会话 append/create/delete 必须匹配全局 `sync` 租约；Vault append 必须匹配
+  `vault-writer` 租约；两者都校验 token 派生的 deviceId 与 clientInstanceId；
 - release 只允许当前 owner；进程崩溃由 TTL 释放；
-- 读操作（manifest/cursor/stream）不加租约；
-- 不同 session、不同 device writer 之间不互斥；
+- 读操作（manifest/cursor/stream/blob 读取）不加租约；会话拉取不需要 `sync`；
+- 全局 `sync` 租约让同一时间只有一台设备上传会话；Vault writer 租约独立，两者互不阻塞；
 - V0/V1 先不做租约续租接口；单次 append 远小于 60 秒，后续确有长写入再加；
 - 服务端租约是权威，本地再加 `$DSH_HOME/session-cloudsync/vault/writer.lock`
   （`{pid, clientInstanceId, acquiredAt}`）做快速失败；启动时 PID 已死则清掉 stale lock。
 
-这条规则同时修掉现有会话租约的漏洞：同一 token 的两个进程此前都能 acquire 同一把
-session lease；加入 clientInstanceId 后，第二个进程会被前端拿到 `lease-held`。
+加入 `clientInstanceId` 后，同一 token 的第二个进程会被服务端以 `lease-held` 拒绝；
+会话侧现在使用全局 `sync` 租约，Vault 侧使用 `vault-writer` 租约，互不阻塞。
 
 Vault 写入流程：
 
@@ -266,7 +267,7 @@ Vault 写入流程：
 4. append；
 5. release。
 
-租约冲突只影响 Vault，不阻塞会话同步；会话租约冲突也不阻塞 Vault。
+租约冲突只影响对应资源：Vault writer 冲突不阻塞会话同步；全局会话 `sync` 冲突不阻塞 Vault。
 
 append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已有记录，不生成
 第二条同 seq 记录；租约已释放也允许幂等重放。

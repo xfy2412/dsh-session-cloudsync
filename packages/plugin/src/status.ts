@@ -94,8 +94,6 @@ export interface SyncSessionStatus {
   readonly blocked?: BlockedSessionView
   /** 用户对分叉的决定。 */
   readonly decision?: BlockedDecisionView
-  /** 设备独占租约。 */
-  readonly lease?: SessionLeaseView
   /** 最后更新时间。 */
   readonly updatedAt: number
 }
@@ -160,19 +158,17 @@ export interface BlockedDecisionView {
   readonly at: number
 }
 
-/** 一个会话的本地租约状态；用于设备独占。 */
-export interface SessionLeaseView {
-  /** 会话 id。 */
-  readonly sessionId: string
+/** 全局单写者租约状态；本机没有 held 时只拉取、不上传。 */
+export interface DeviceLeaseView {
   /** 当前租约状态。 */
-  readonly state: 'held' | 'foreign' | 'lost' | 'renewing'
+  readonly state: 'held' | 'foreign' | 'lost' | 'unconfigured'
   /** 租约到期时间。 */
   readonly leaseUntil?: number
-  /** 持有该租约的设备（服务端返回时）。 */
+  /** 持有该租约的设备（服务端返回错误时通常不可得）。 */
   readonly ownerDeviceId?: string
   /** 最近一次成功续租时间。 */
   readonly lastRenewAt?: number
-  /** 最近一次续租/申请错误。 */
+  /** 最近一次申请/续租错误。 */
   readonly error?: string
 }
 
@@ -192,6 +188,8 @@ export interface SyncStatus {
   readonly run: SyncRunView
   /** 调度器视图。 */
   readonly scheduler: SyncSchedulerView
+  /** 全局单写者租约；缺失即只读。 */
+  readonly deviceLease: DeviceLeaseView
   /** 最近一轮开始时间；从未执行过为 null。 */
   readonly lastAttempt: number | null
   /** 最近一轮无错误完成的时间；从未成功为 null。 */

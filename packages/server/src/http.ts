@@ -39,7 +39,7 @@ import {
   listBatches,
   sessionCounts,
 } from './sessions.ts'
-import { acquireLease, releaseLease, sessionResource, vaultResource } from './leases.ts'
+import { acquireLease, releaseLease, SYNC_RESOURCE, vaultResource } from './leases.ts'
 import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 
@@ -317,7 +317,7 @@ function intParam(value: string | null, fallback: number, min: number, max: numb
   return Math.min(max, Math.max(min, parsed))
 }
 
-const LEASE_PATH = /^\/v1\/sessions\/([^/]+)\/lease$/u
+const SYNC_LEASE_PATH = /^\/v1\/sync\/lease$/u
 const APPEND_PATH = /^\/v1\/sessions\/([^/]+)\/append$/u
 const DELETE_PATH = /^\/v1\/sessions\/([^/]+)\/delete$/u
 const MANIFEST_PATH = /^\/v1\/sessions\/([^/]+)\/manifest$/u
@@ -693,22 +693,20 @@ export function createHttpServer(options: ServerOptions): Server {
     },
     {
       method: 'POST',
-      path: LEASE_PATH,
+      path: SYNC_LEASE_PATH,
       handler: async (req, res) => {
         const device = requireDevice(db, req)
         const clientId = clientIdFrom(req)
-        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, LEASE_PATH)
-        return json(res, 200, { ok: true, value: acquireLease(db, sessionResource(id), device.deviceId, clientId) })
+        return json(res, 200, { ok: true, value: acquireLease(db, SYNC_RESOURCE, device.deviceId, clientId) })
       },
     },
     {
       method: 'DELETE',
-      path: LEASE_PATH,
+      path: SYNC_LEASE_PATH,
       handler: async (req, res) => {
         const device = requireDevice(db, req)
         const clientId = clientIdFrom(req)
-        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, LEASE_PATH)
-        return json(res, 200, { ok: true, value: { released: releaseLease(db, sessionResource(id), device.deviceId, clientId) } })
+        return json(res, 200, { ok: true, value: { released: releaseLease(db, SYNC_RESOURCE, device.deviceId, clientId) } })
       },
     },
     {

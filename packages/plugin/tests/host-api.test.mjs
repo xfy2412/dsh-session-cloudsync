@@ -14,6 +14,7 @@ function control(overrides = {}) {
       running: false,
       run: { id: 1, trigger: 'auto', state: 'finished', startedAt: 10, finishedAt: 10 },
       scheduler: { autoSync: true, intervalMs: 60_000, nextRunAt: null, backoffUntil: null },
+      deviceLease: { state: 'held' },
       lastAttempt: 10,
       lastSuccess: 10,
       lastError: null,

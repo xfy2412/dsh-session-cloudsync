@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { createDevice } from '../src/http.ts'
 import { ensureSetupToken, openDatabase } from '../src/db.ts'
+import { PROTOCOL_VERSION } from '../../shared/src/protocol.ts'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
 
 import { listenServer } from './listen.mjs'
@@ -18,7 +19,7 @@ test('健康检查不需要 token，并报告协议版本', async () => {
       assert.equal(response.status, 200)
       const body = await response.json()
       assert.equal(body.ok, true)
-      assert.equal(body.protocol, 1)
+      assert.equal(body.protocol, PROTOCOL_VERSION)
       assert.equal(typeof body.now, 'number')
     } finally {
       await close()

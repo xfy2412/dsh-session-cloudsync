@@ -66,7 +66,7 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
         assert.equal(uploaded.body.value.sha256, sealed.ref.blobSha256)
       }
 
-      assert.equal((await call(base, `/v1/sessions/${sessionId}/lease`, { method: 'POST', token: device.token })).status, 200)
+      assert.equal((await call(base, '/v1/sync/lease', { method: 'POST', token: device.token })).status, 200)
       const created = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,

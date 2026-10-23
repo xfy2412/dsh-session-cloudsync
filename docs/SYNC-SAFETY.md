@@ -174,8 +174,8 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 
 客户端需要知道哪些会话处于 `applying` / `openTail` / safe 落后 / `diverged`。M4 已落地：
 
-- **宿主 API**：`GET /api/session-cloudsync/status`（schema v2）提供运行中/上次结果/退避/pending，以及每个会话一行的聚合视图：`phase`、`push`/`pull` 方向、`pending.upload/download`、`tailOpen`、`remoteAhead`、`lease`；`GET /api/session-cloudsync/events?until=idle` 提供同一快照的 SSE 增量流（心跳、合并、abort 清理、空闲关闭）；`POST /api/session-cloudsync/sync` 手动触发；自动同步由 `nextRunAt` 自调度；
-- **设备独占租约**：`/status.sessions[].lease` 投影每个 live 会话的租约状态；本机 live 期间 20s 续租，服务端 TTL 60s；其他设备 append 得到 `lease-held`；`foreign`/`lost` 时 composer 停止写入，live 行仍允许打开/切换；cold 会话不持有租约；
+- **宿主 API**：`GET /api/session-cloudsync/status`（schema v2）提供运行中/上次结果/退避/pending、全局 `deviceLease`，以及每个会话一行的聚合视图：`phase`、`push`/`pull` 方向、`pending.upload/download`、`tailOpen`、`remoteAhead`；`GET /api/session-cloudsync/events?until=idle` 提供同一快照的 SSE 增量流（心跳、合并、abort 清理、空闲关闭）；`POST /api/session-cloudsync/sync` 手动触发；自动同步由 `nextRunAt` 自调度；
+- **全局单写者租约**：`/status.deviceLease` 投影本机对 `sync` 资源的持有状态；进程存活期间 20s 续租，服务端 TTL 60s；没有 held 时宿主**跳过上传、仍然拉取**；`foreign`/`lost` 时 composer 停止写入、冷会话 open guard 拦打开，live 行仍允许切换查看；
 - **apply 中**：`pending.sessionId` 命中时 composer 与列表行都拦；
 - **开放尾**：冷会话 `tailOpen: true` 时拦列表打开与 composer；live 会话允许打开，只拦输入；
 - **safe 落后**：冷会话 `remote-ahead` 按 safe 落后处理，拦列表打开与输入；live 会话允许打开，只拦输入。`lag` 必须来自当前聚合状态，不能只用上一轮 push 的 `remote-ahead`；同轮 pull 已补齐时应清掉；
@@ -208,8 +208,10 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 - 即使 open 被 guard 拦住，其他直接调用 `replaceMain`/私有导航的路径、提前解构缓存 `openSession` 的消费者、以及 `openWorkspace` 复用已有会话的路径仍可能绕过；composer block 只能阻止继续输入，不能撤回已经发生的 resume/end-seed 写入；
 - 按 0.2.1-rc.2 源码确认：冷打开会 `history.follow` → `promote` → `agents.resume`，并可能补 closers/end-seed；因此“打开”本身已是写操作，不是只在发消息时写；
 - **live 会话没有公开的 close/dispose 方法**：`AgentHandle.dispose()` 存在，但 session-controller 只保留 `.agent`；`archiveSession({stopActivity:true})` 只取消 running turn，不会 dispose Agent。一个会话一旦在本进程里 live，pull 会一直 `local-active`，只能重启 DSH 后才可 apply；期间另一设备写入会让本地停在 `remote-ahead`。
-- **设备独占租约已实现**：仅对 live 会话持有；cold 不持有。租约在“会话变 live 后”的下一次扫描（最多 20s）拿到；没有 pre-open 租约，冷打开仍可能与另一台设备形成短暂窗口。进程正常退出会主动释放，异常退出靠 60s TTL；没有 close API 时交接仍只能重启。
-- 设备独占的代价：会话被“钉”在当前 DSH 进程；没有 close API 就没有干净交接，进程崩溃后要等 60s TTL。交接只能重启 DSH，或等上游提供 close/dispose idle session 的 API；在那之前不要把“另一台设备可写”当成默认能力。
+- **全局单写者租约已实现**：进程存活期间持续持有 `sync` 租约；没有租约时宿主只拉取、不上传，服务端 append/create/delete 也要求它。正常退出主动释放，异常退出靠 60s TTL；崩溃后另一台设备最多等 60s 就能接手。
+- 全局租约的代价：一台 DSH 开着就会按住上传锁，另一台设备只能拉取，不能上传；没有“强制抢占”按钮，交接靠退出/崩溃 TTL。拉取不需要租约，因此只读镜像仍可用。
+- `correctCwd`/cwd 修正属于写入，必须持有全局租约；`skip` 只做本地 attach，不需要租约。
+- Vault 写入仍使用自己的 `vault-writer` 租约，暂不并入全局 `sync` 租约。
 - 官方没有“禁用会话行”的插槽；可向上游提需求，M4 先用拦截方案；
 - 视觉蒙版需要 DOM 定位，跨滚动/折叠/重排要维护，先不做成默认。
 
@@ -222,9 +224,9 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 - [x] 空闲行 `sidebar.session.row.leading` 的同步标记（`id: 'session-cloudsync-mark'`）；
 - [x] 运行中行的 hover 卡片状态说明（`sidebar.session.row.hover` 的 `session-cloudsync-hover`）；
 - [x] 冷/live 拦截矩阵落地：冷 `remote-ahead`（含尾部已是 end-seed 的会话）硬拦，live 放宽为只拦输入；
-- [x] 设备独占租约：live 会话 20s 续租、push 不误释放 presence lease、客户端 foreign/lost 拦输入；
+- [x] 全局单写者租约：进程存活期间续租；没有 held 时只拉取；服务端 append/create/delete 强制要求；
+- [x] 客户端 foreign/lost 时 composer 拦输入、冷会话 open guard 拦打开；
 - [x] client `uiWorkspace.openSession` 包装：覆盖搜索结果/ schedule / feedback 等入口，探测/安装失败 fail-open；
-- [ ] pre-open 租约：冷会话打开前拿租约（当前仍是 live 后扫描，存在短暂窗口）；
 - [ ] `diverged`/未同步会话的输入拦截、风险说明与“强行写入分叉”确认；
 - [ ] `nonPortable` 会话的本地警告、确认后接收端追加修正与租约推送；
 - [ ] 可选视觉蒙版；

@@ -15,14 +15,6 @@ const React = {
   useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
 }
 
-/** 造一个 JSON 响应。 */
-function json(body) {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  })
-}
-
 test('客户端 openSession guard：拦冷危险会话、放行 live/安全/未知目标，dispose 还原', async () => {
   const status = {
     schemaVersion: 2,
@@ -32,6 +24,7 @@ test('客户端 openSession guard：拦冷危险会话、放行 live/安全/未�
     running: false,
     run: { id: 1, trigger: 'auto', state: 'finished', startedAt: 1, finishedAt: 2 },
     scheduler: { autoSync: false, intervalMs: 60_000, nextRunAt: null, backoffUntil: null },
+    deviceLease: { state: 'held' },
     lastAttempt: 1,
     lastSuccess: 2,
     lastError: null,
@@ -104,8 +97,13 @@ test('客户端 openSession guard：拦冷危险会话、放行 live/安全/未�
     },
     fetch: async (url) => {
       const path = String(url)
-      if (path.endsWith('/status')) return json({ ok: true, value: status })
-      if (path.endsWith('/setup')) return json({ ok: true, value: { configured: true } })
+      if (path.endsWith('/status')) {
+        // 直接返回同一个对象，测试改 status.deviceLease 时客户端能看到。
+        return { ok: true, status: 200, json: async () => ({ ok: true, value: status }) }
+      }
+      if (path.endsWith('/setup')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, value: { configured: true } }) }
+      }
       throw new Error(`unexpected fetch ${path}`)
     },
     setTimeout,
@@ -134,17 +132,25 @@ test('客户端 openSession guard：拦冷危险会话、放行 live/安全/未�
   assert.equal(calls.length, 0)
   workspace.openSession('cold-safe')
   assert.equal(calls.length, 1)
+
+  // 全局租约 foreign：冷会话即使自身安全也不能打开；live 仍允许切换查看。
+  status.deviceLease = { state: 'foreign' }
+  workspace.openSession('cold-safe')
+  assert.equal(calls.length, 1)
   workspace.openSession('live-danger')
   assert.equal(calls.length, 2)
-  workspace.openSession({ parentSessionId: 'p', childSessionId: 'cold-danger' })
-  assert.equal(calls.length, 2)
-  workspace.openSession('unknown-session')
+  status.deviceLease = { state: 'held' }
+  workspace.openSession('cold-safe')
   assert.equal(calls.length, 3)
+  workspace.openSession({ parentSessionId: 'p', childSessionId: 'cold-danger' })
+  assert.equal(calls.length, 3)
+  workspace.openSession('unknown-session')
+  assert.equal(calls.length, 4)
 
   for (const dispose of disposers.reverse()) {
     if (typeof dispose === 'function') await dispose()
   }
   assert.equal(workspace.openSession, originalOpenSession)
   workspace.openSession('cold-danger')
-  assert.equal(calls.length, 4)
+  assert.equal(calls.length, 5)
 })

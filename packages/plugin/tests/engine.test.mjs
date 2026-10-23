@@ -27,6 +27,20 @@ async function call(base, path, options = {}) {
   return { status: response.status, body: text === '' ? undefined : JSON.parse(text) }
 }
 
+/**
+ * 取得全局同步租约；推送测试都通过真实服务端，append 现在要求它。
+ * @param base - 基地址。
+ * @param device - 设备。
+ */
+async function holdLease(base, device) {
+  const response = await call(base, '/v1/sync/lease', {
+    method: 'POST',
+    token: device.token,
+    headers: { 'x-client-id': '0000000000000000' },
+  })
+  assert.equal(response.status, 200)
+}
+
 /** 造连续事件。 */
 function events(from, to) {
   return Array.from({ length: to - from + 1 }, (_, offset) => ({
@@ -113,6 +127,8 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
     const device = createDevice(db, 'v2-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const sessionId = 'session-v2-mapping'
       const workspaceKey = 'abcdefghijklmnopqrstuvwx'
       const header = {
@@ -261,6 +277,8 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
     const device = createDevice(db, 'engine-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const sessionId = 'session-engine-test'
       const header = {
         id: sessionId,
@@ -327,6 +345,8 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
     const device = createDevice(db, 'prefix-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const sessionId = 'session-prefix-test'
       const header = {
         id: sessionId,
@@ -405,6 +425,8 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
     const device = createDevice(db, 'nonportable-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const sessionId = 'session-nonportable-test'
       const header = {
         id: sessionId,
@@ -478,6 +500,8 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
     const device = createDevice(db, 'correct-cwd-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const sessionId = 'session-correct-cwd-test'
       const header = {
         id: sessionId,
@@ -544,6 +568,8 @@ test('拉取引擎：一个只读阶段失败后继续其他安全会话', async
     const device = createDevice(db, 'pull-continue-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const headerA = {
         id: 'session-continue-a',
         version: 4,
@@ -622,6 +648,8 @@ test('推送引擎：默认同步子代理闭包，子先父后，被排除的�
     const device = createDevice(db, 'closure-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const root = {
         id: 'session-closure-root',
         version: 4,
@@ -681,6 +709,8 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
     const device = createDevice(db, 'pull-closure-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const root = {
         id: 'session-pull-root',
         version: 4,
@@ -833,6 +863,8 @@ test('拉取引擎：append 失败留下 pending，重启后按 pending 补完',
     const device = createDevice(db, 'pending-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const sessionId = 'session-pending-test'
       const headerA = {
         id: sessionId,
@@ -894,6 +926,8 @@ test('拉取引擎：一个会话失败后停止，不覆盖它的 pending', asy
     const device = createDevice(db, 'pending-stop-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const firstId = 'session-pending-stop-1'
       const secondId = 'session-pending-stop-2'
       const header = (id, createdAt) => ({
@@ -983,6 +1017,8 @@ test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', asyn
     const device = createDevice(db, 'pull-test')
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
+      await holdLease(base, device)
+
       const sessionId = 'session-pull-test'
       const headerA = {
         id: sessionId,
@@ -1057,56 +1093,6 @@ test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', asyn
       assert.equal(pulledAgain.sessions[0].status, 'pulled')
       assert.equal(localB.events.length, 122)
       assert.equal(localB.events[localB.events.length - 1].seq, 121)
-    } finally {
-      await close()
-      db.close()
-    }
-  } finally {
-    temp.dispose()
-  }
-})
-
-test('租约：leaseRelease 回调存在时由回调决定释放，presence lease 不被误删', async () => {
-  const temp = createTempHome('plugin-lease-release')
-  try {
-    const db = openDatabase(temp.dataDir)
-    const device = createDevice(db, 'lease-release-test')
-    const { base, close } = await listenServer(db, temp.dataDir)
-    try {
-      const sessionId = 'session-lease-release'
-      const header = {
-        id: sessionId,
-        version: 4,
-        createdAt: 1201,
-        isSeeded: false,
-        delegationDepth: 0,
-        cwd: 'D:/local',
-      }
-      const config = {
-        serverUrl: base,
-        token: device.token,
-        passphrase: 'lease pass',
-        batchEvents: 50,
-      }
-      const released = []
-      const pushed = await syncOnce({
-        persistence: fakeStore(header, events(0, 5)),
-        sessions,
-        config,
-        isTailOpen: () => false,
-        workspaceKeyOf: () => TEST_WORKSPACE_KEY,
-        leaseRelease: async (id) => { released.push(id) },
-      })
-      assert.equal(pushed.sessions[0].status, 'pushed')
-      assert.deepEqual(released, [sessionId])
-      // 回调没有 DELETE，presence lease 仍然占着；另一个 client 不能拿到。
-      const other = await call(base, `/v1/sessions/${sessionId}/lease`, {
-        method: 'POST',
-        token: device.token,
-        headers: { 'x-client-id': 'ffffffffffffffff' },
-      })
-      assert.equal(other.status, 409)
-      assert.equal(other.body.error.code, 'lease-held')
     } finally {
       await close()
       db.close()

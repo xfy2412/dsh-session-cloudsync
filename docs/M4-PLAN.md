@@ -2,7 +2,7 @@
 
 > 状态：M3 核心链路已完成（推送/拉取/安全边界/断网降级/双 home 验收）；M4 进行中。本文件是 M4 的唯一清单，ROADMAP 只保留状态摘要。
 >
-> 进度（2026-10-23）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已删除旧别名，只保留 `batches` / `batchCount`；当前 155 tests，状态 v2/SSE/入口守卫/引擎实时事件计数已接入。下一步 D5/C5 的端到端演练与 E3 文档收口。
+> 进度（2026-10-23）：A1–A5、B1–B5、C1–C4、C6 已落地；E1 已删除旧别名，只保留 `batches` / `batchCount`；当前 152 tests，状态 v2/SSE/入口守卫/引擎实时事件计数/全局单写者租约已接入。下一步 D5/C5 的端到端演练与 E3 文档收口。
 >
 > 2026-10-22 调整：先做 [VAULT.md](VAULT.md) V0 → V1 → V2（`workspaceKey` 多工作区落点），
 > 再做 C5/D5/E3；本文件 A–E 不删除，只调整顺序。
@@ -27,7 +27,7 @@
 | A4 | 客户端可读的状态通道（session projection 或 host service） | A3 |
 | A5 | 子代理闭包：根会话 + 全部后代；推送按后序（子先父后），拉取先建子再挂根；默认开启 | A3 |
 
-> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-cloudsync/status`、`GET /api/session-cloudsync/events`、`GET /api/session-cloudsync/setup`、`GET /api/session-cloudsync/workspaces`、`POST /api/session-cloudsync/test`、`POST /api/session-cloudsync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照为 **schema v2**：`configured/reason/running/run/scheduler/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`；`sessions` 每个 sessionId 一行，带 push/pull 方向、`phase/pending/totalEvents/doneEvents/tailOpen/remoteAhead/lease`。`/events?until=idle` 是同一快照的 SSE 全量流（80ms 合并、15s 心跳、abort/空闲关闭）；自动同步由自调度 `nextRunAt` 驱动。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。
+> 进度：**A1–A5 已完成**。A3/A4 暴露了 `GET /api/session-cloudsync/status`、`GET /api/session-cloudsync/events`、`GET /api/session-cloudsync/setup`、`GET /api/session-cloudsync/workspaces`、`POST /api/session-cloudsync/test`、`POST /api/session-cloudsync/sync`（全部走 `ctx.connection.fetch`，owner-only）；手动触发清空当前退避后立即执行。状态快照为 **schema v2**：`configured/reason/running/run/scheduler/deviceLease/lastAttempt/lastSuccess/lastError/retryCount/nextRetryAt/pending/revision/sessions`；`sessions` 每个 sessionId 一行，带 push/pull 方向、`phase/pending/totalEvents/doneEvents/tailOpen/remoteAhead`。`/events?until=idle` 是同一快照的 SSE 全量流（80ms 合并、15s 心跳、abort/空闲关闭）；自动同步由自调度 `nextRunAt` 驱动。拉取在一会话失败后立即停止，避免后续会话覆盖唯一一条 pending 恢复记录。全局 `sync` 租约只拦上传，拉取不需要它。
 >
 > **A5 已完成**：默认同步子代理闭包（`includeSubagents` 默认 true）；只把 `origin === 'subagent'` 当后代，fork 是独立根；推送按“后代深到浅、根最后”排序；拉取按远端 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入跳过列表。
 
@@ -89,7 +89,7 @@
 | C5 | GUI 回归：下拉、拖拽、键盘、深链打开都不误 resume | C2–C4 |
 | C6 | 顶部居中的分段进度气泡：收起态是唯一云图标，点击后同一图标展开成卡片，完成缩回；进度条按会话等分，黄→绿/红，子先父后并发推进；展开逐会话列表，不占标题栏；运行中显示上传/下载事件完成数，进度按事件比例 | A3、C1 |
 
-> C 进度：C1 状态下发到 `/status` v2 的每会话聚合（`phase`、push/pull、`pending`、`tailOpen`/`remoteAhead`/`lease`）和 `/events` SSE；C2 用 `conversation.input.dock` 的不可见守卫调用 `conversation.blocks.set`；C3 在 document 捕获阶段拦列表行 click/pointerdown/keydown，并额外包一层可选 `uiWorkspace.openSession` 覆盖搜索结果等非侧栏入口（fail-open）；C4 用 `sidebar.session.row.leading` 渲染同步标记、`sidebar.session.row.hover` 渲染原因。C5 仍需在真实 GUI 做一次点击/拖拽/键盘回归。
+> C 进度：C1 状态下发到 `/status` v2 的每会话聚合（`phase`、push/pull、`pending`、`tailOpen`/`remoteAhead`）、全局 `deviceLease` 和 `/events` SSE；C2 用 `conversation.input.dock` 的不可见守卫调用 `conversation.blocks.set`；C3 在 document 捕获阶段拦列表行 click/pointerdown/keydown，并额外包一层可选 `uiWorkspace.openSession` 覆盖搜索结果等非侧栏入口（fail-open）；C4 用 `sidebar.session.row.leading` 渲染同步标记、`sidebar.session.row.hover` 渲染原因。C5 仍需在真实 GUI 做一次点击/拖拽/键盘回归。
 
 ### D. 故障演练
 

@@ -11,7 +11,7 @@
 export const API_PREFIX = '/v1'
 
 /** 当前协议版本；端点契约变化时递增。 */
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 /** 健康探针的成功响应。 */
 export interface HealthResponse {
@@ -51,13 +51,6 @@ export interface SessionManifest {
   readonly updatedAt: number
   /** 软删除时存在。 */
   readonly deletedAt?: number
-}
-
-/** 单个会话的租约状态。 */
-export interface Lease {
-  readonly sessionId: string
-  readonly deviceId: string
-  readonly leaseUntil: number
 }
 
 /** 客户端必须能区分的错误码。 */

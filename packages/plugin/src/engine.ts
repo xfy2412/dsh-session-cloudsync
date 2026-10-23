@@ -190,11 +190,6 @@ export interface SyncDeps<Session> {
   readonly isTailOpen?: (events: readonly SyncEvent[]) => boolean
   /** 实时阶段回调；不抛异常，调用方负责容错。 */
   readonly onProgress?: (progress: SyncProgress) => void
-  /**
-   * 释放一次推送租约。宿主传 presence lease 管理器时，已由本进程长期持有的
-   * 会话租约不能在这里被释放；缺省走服务端 DELETE。
-   */
-  readonly leaseRelease?: (sessionId: string) => Promise<void>
   /** 由根会话的本机 cwd 解析 workspaceKey；V2 推送必需。 */
   readonly workspaceKeyOf: (sessionId: string, cwd: string) => string | undefined
 }
@@ -202,7 +197,7 @@ export interface SyncDeps<Session> {
 /** 单个会话的同步结果。 */
 export interface SessionSyncReport {
   readonly sessionId: string
-  readonly status: 'pushed' | 'up-to-date' | 'remote-ahead' | 'lease-held' | 'skipped' | 'error'
+  readonly status: 'pushed' | 'up-to-date' | 'remote-ahead' | 'skipped' | 'error'
   readonly batches?: number
   readonly bytes?: number
   /** 本次计划上传的事件数。 */
@@ -589,55 +584,6 @@ async function uploadBlob(
 }
 
 /**
- * 申请会话租约。
- * @param fetchImpl - fetch 实现。
- * @param base - 服务端地址。
- * @param token - 设备 token。
- * @param sessionId - 会话 id。
- * @returns 是否拿到租约；409 返回 false。
- */
-async function acquireLease(
-  fetchImpl: typeof fetch,
-  base: string,
-  token: string,
-  sessionId: string,
-  clientId: string,
-): Promise<boolean> {
-  const { status, body } = await requestJson(fetchImpl, base, `/v1/sessions/${encodeURIComponent(sessionId)}/lease`, token, {
-    method: 'POST',
-    headers: { 'x-client-id': clientId },
-  })
-  if (status === 200) return true
-  if (status === 409 && errorOf(body).code === 'lease-held') return false
-  const error = errorOf(body)
-  throw new SyncHttpError(error.message, status, error.code)
-}
-
-/**
- * 释放会话租约；失败不覆盖主错误。
- * @param fetchImpl - fetch 实现。
- * @param base - 服务端地址。
- * @param token - 设备 token。
- * @param sessionId - 会话 id。
- */
-async function releaseLease(
-  fetchImpl: typeof fetch,
-  base: string,
-  token: string,
-  sessionId: string,
-  clientId: string,
-): Promise<void> {
-  try {
-    await fetchImpl(`${base}/v1/sessions/${encodeURIComponent(sessionId)}/lease`, {
-      method: 'DELETE',
-      headers: { authorization: `Bearer ${token}`, 'x-client-id': clientId },
-    })
-  } catch {
-    // 租约到期会自然释放；释放失败不改变本次同步结果。
-  }
-}
-
-/**
  * 追加批次。
  * @param fetchImpl - fetch 实现。
  * @param base - 服务端地址。
@@ -978,36 +924,16 @@ async function syncSession<Session>(
   }
   const sealedEntries = uploadSteps.map((step) => step.entry)
 
-  const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
-  if (!leased) {
-    return {
-      sessionId,
-      status: 'lease-held',
-      totalEvents,
-      doneEvents: 0,
-      tailOpen,
-      ...cwdNonPortable ? { cwdNonPortable } : {},
-    }
-  }
-  try {
-    await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
-      baseIndex,
-      baseChainHash,
-      createdAt: meta.createdAt,
-      formatVersion: meta.formatVersion,
-      frames: sealedEntries.map((entry) => entry.ref),
-      ...workspaceKey === undefined ? {} : { workspaceKey },
-      tailOpen,
-      safeThroughSeq,
-    })
-  } finally {
-    try {
-      if (deps.leaseRelease !== undefined) await deps.leaseRelease(sessionId)
-      else await releaseLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
-    } catch {
-      // 释放失败由租约 TTL 兜底，不覆盖本次同步结果。
-    }
-  }
+  await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
+    baseIndex,
+    baseChainHash,
+    createdAt: meta.createdAt,
+    formatVersion: meta.formatVersion,
+    frames: sealedEntries.map((entry) => entry.ref),
+    ...workspaceKey === undefined ? {} : { workspaceKey },
+    tailOpen,
+    safeThroughSeq,
+  })
 
   return {
     sessionId,
@@ -1569,53 +1495,48 @@ export async function correctCwd<Session>(
       return { ok: false, status: 'needs-sync', message: '远端还有未同步事件，请先完成同步' }
     }
 
-    const leased = await acquireLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config))
-    if (!leased) return { ok: false, status: 'lease-held', message: '会话租约被占用' }
-    try {
-      // 租约内再读一次，防止 manifest 在租约前被别的设备推进。
-      const current = await readManifest(fetchImpl, base, deps.config.token, sessionId)
-      if (current === undefined || current.deletedAt !== undefined
-        || current.lastSeq !== localLast || current.tailOpen === true
-        || (current.safeThroughSeq ?? current.lastSeq) !== current.lastSeq) {
-        return { ok: false, status: 'needs-sync', message: '会话已变化，请先重新同步' }
-      }
-      if (current.createdAt !== handle.header.createdAt || current.formatVersion !== handle.header.version) {
-        return { ok: false, status: 'needs-sync', message: '远端会话头已变化，请先重新同步' }
-      }
-      const headerRef = current.frames[0]
-      if (headerRef === undefined
-        || headerRef.chainHash !== headerChainHash(headerMetaOf(handle.header, handle.inheritedEventCount))) {
-        return { ok: false, status: 'needs-sync', message: '远端会话头与本地不一致，请先重新同步' }
-      }
-      await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKeyOf(master, sessionId), current, events)
-
-      const lastTime = (events[events.length - 1] as { readonly time?: unknown } | undefined)?.time
-      const correction = {
-        type: 'working-directory/change',
-        seq: localLast + 1,
-        time: Math.max(Date.now(), (typeof lastTime === 'number' && Number.isFinite(lastTime) ? lastTime : 0) + 1),
-        data: { cwd: deps.targetPath },
-      }
-      await handle.append([correction])
-      await handle.flush()
-
-      const sealed = sealEventBatch([correction], sessionId, current.frames.length, sessionKeyOf(master, sessionId))
-      await uploadBlob(fetchImpl, base, deps.config.token, sealed)
-      const baseFrame = current.frames[current.frames.length - 1]
-      if (baseFrame === undefined) throw new Error('manifest 缺少最后一个批次')
-      await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
-        baseIndex: current.frames.length - 1,
-        baseChainHash: baseFrame.chainHash,
-        createdAt: handle.header.createdAt,
-        formatVersion: handle.header.version,
-        frames: [sealed.ref],
-        tailOpen: false,
-        safeThroughSeq: correction.seq,
-      })
-      return { ok: true, status: 'corrected' }
-    } finally {
-      await releaseLease(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config)).catch(() => {})
+    // 全局单写者租约由宿主在进入本函数前确保；服务端 append 会再次校验。
+    // 再读一次，防止 manifest 在检查与追加之间被别的设备推进。
+    const current = await readManifest(fetchImpl, base, deps.config.token, sessionId)
+    if (current === undefined || current.deletedAt !== undefined
+      || current.lastSeq !== localLast || current.tailOpen === true
+      || (current.safeThroughSeq ?? current.lastSeq) !== current.lastSeq) {
+      return { ok: false, status: 'needs-sync', message: '会话已变化，请先重新同步' }
     }
+    if (current.createdAt !== handle.header.createdAt || current.formatVersion !== handle.header.version) {
+      return { ok: false, status: 'needs-sync', message: '远端会话头已变化，请先重新同步' }
+    }
+    const headerRef = current.frames[0]
+    if (headerRef === undefined
+      || headerRef.chainHash !== headerChainHash(headerMetaOf(handle.header, handle.inheritedEventCount))) {
+      return { ok: false, status: 'needs-sync', message: '远端会话头与本地不一致，请先重新同步' }
+    }
+    await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKeyOf(master, sessionId), current, events)
+
+    const lastTime = (events[events.length - 1] as { readonly time?: unknown } | undefined)?.time
+    const correction = {
+      type: 'working-directory/change',
+      seq: localLast + 1,
+      time: Math.max(Date.now(), (typeof lastTime === 'number' && Number.isFinite(lastTime) ? lastTime : 0) + 1),
+      data: { cwd: deps.targetPath },
+    }
+    await handle.append([correction])
+    await handle.flush()
+
+    const sealed = sealEventBatch([correction], sessionId, current.frames.length, sessionKeyOf(master, sessionId))
+    await uploadBlob(fetchImpl, base, deps.config.token, sealed)
+    const baseFrame = current.frames[current.frames.length - 1]
+    if (baseFrame === undefined) throw new Error('manifest 缺少最后一个批次')
+    await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
+      baseIndex: current.frames.length - 1,
+      baseChainHash: baseFrame.chainHash,
+      createdAt: handle.header.createdAt,
+      formatVersion: handle.header.version,
+      frames: [sealed.ref],
+      tailOpen: false,
+      safeThroughSeq: correction.seq,
+    })
+    return { ok: true, status: 'corrected' }
   } catch (error: unknown) {
     return { ok: false, status: 'error', message: error instanceof Error ? error.message : String(error) }
   } finally {

@@ -64,8 +64,8 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       const refs = sealed.map((entry) => entry.ref)
 
       // 租约：A 先拿，B 被拒。
-      assert.equal((await call(base, `/v1/sessions/${sessionId}/lease`, { method: 'POST', token: deviceA.token })).status, 200)
-      const held = await call(base, `/v1/sessions/${sessionId}/lease`, { method: 'POST', token: deviceB.token })
+      assert.equal((await call(base, `/v1/sync/lease`, { method: 'POST', token: deviceA.token })).status, 200)
+      const held = await call(base, `/v1/sync/lease`, { method: 'POST', token: deviceB.token })
       assert.equal(held.status, 409)
       assert.equal(held.body.error.code, 'lease-held')
 
@@ -91,13 +91,16 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       assert.equal(created.body.value.lastSeq, refs[3].seqTo)
 
       // 释放租约后 append 被拒。
-      assert.equal((await call(base, `/v1/sessions/${sessionId}/lease`, { method: 'DELETE', token: deviceA.token })).status, 200)
+      assert.equal((await call(base, `/v1/sync/lease`, { method: 'DELETE', token: deviceA.token })).status, 200)
       const noLease = await call(base, `/v1/sessions/${sessionId}/append`, { method: 'POST', token: deviceA.token, json: createBody })
       assert.equal(noLease.status, 409)
       assert.equal(noLease.body.error.code, 'lease-held')
+      // 拉取/读 manifest 不需要全局租约。
+      const readWithoutLease = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: deviceA.token })
+      assert.equal(readWithoutLease.status, 200)
 
       // 重新拿租约；base 不匹配 → diverged。
-      assert.equal((await call(base, `/v1/sessions/${sessionId}/lease`, { method: 'POST', token: deviceA.token })).status, 200)
+      assert.equal((await call(base, `/v1/sync/lease`, { method: 'POST', token: deviceA.token })).status, 200)
       const badBase = await call(base, `/v1/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
@@ -177,7 +180,7 @@ test('append 拒绝未上传的 blob、非法请求与错误的 X-Device-Id', as
       const sessionId = 'session-cloudsync-errors'
       const key = sessionKeyOf(Buffer.alloc(32, 6), sessionId)
       const sealed = sealFrames(2, sessionId, key)
-      assert.equal((await call(base, `/v1/sessions/${sessionId}/lease`, { method: 'POST', token: device.token })).status, 200)
+      assert.equal((await call(base, `/v1/sync/lease`, { method: 'POST', token: device.token })).status, 200)
 
       // 没有上传 blob 的帧。
       const missing = await call(base, `/v1/sessions/${sessionId}/append`, {
@@ -196,7 +199,7 @@ test('append 拒绝未上传的 blob、非法请求与错误的 X-Device-Id', as
       assert.equal(bad.status, 400)
 
       // X-Device-Id 与 token 不一致。
-      const mismatched = await call(base, `/v1/sessions/${sessionId}/lease`, {
+      const mismatched = await call(base, `/v1/sync/lease`, {
         method: 'POST',
         token: device.token,
         headers: { 'x-device-id': 'deadbeefdeadbeef' },

@@ -33,7 +33,7 @@ function createController(overrides = {}) {
     intervalMs: overrides.intervalMs ?? 60_000,
     nonRetryable: overrides.nonRetryable,
     initial: overrides.initial,
-    leases: overrides.leases,
+    deviceLease: overrides.deviceLease,
     now: () => now,
   })
   return {
@@ -454,11 +454,18 @@ test('控制器：未配置时不调用引擎，快照带原因', async () => {
   assert.deepEqual(fixture.calls, { push: 0, pull: 0 })
 })
 
-test('控制器：快照把 live 会话的设备独占租约并入会话视图', () => {
+test('控制器：全局租约不在时跳过推送，但仍拉取', async () => {
+  let pushCalls = 0
+  let pullCalls = 0
   const fixture = createController({
-    leases: () => [{ sessionId: 's1', state: 'foreign', error: 'held by other' }],
+    deviceLease: () => ({ state: 'foreign', error: 'held by other' }),
+    push: async () => { pushCalls += 1; return pushReport([]) },
+    pull: async () => { pullCalls += 1; return pullReport([{ sessionId: 's1', status: 'pulled', applied: 2, totalEvents: 2 }], 1) },
   })
-  const session = fixture.controller.snapshot().sessions.find((entry) => entry.sessionId === 's1')
-  assert.equal(session.live, true)
-  assert.deepEqual(session.lease, { sessionId: 's1', state: 'foreign', error: 'held by other' })
+  const result = await fixture.controller.run()
+  assert.equal(result.ok, true)
+  assert.equal(pushCalls, 0)
+  assert.equal(pullCalls, 1)
+  assert.equal(result.status.deviceLease.state, 'foreign')
+  assert.equal(result.status.sessions.find((session) => session.sessionId === 's1').pull.applied, 2)
 })
