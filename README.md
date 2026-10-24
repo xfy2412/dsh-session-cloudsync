@@ -96,6 +96,7 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 - [docs/USAGE-AGREEMENT.md](docs/USAGE-AGREEMENT.md)：使用协议草案（修改边界、加密边界、风险告知）。
 - [docs/PROTOCOL.md](docs/PROTOCOL.md)：服务端端点与不变量。
 - [docs/SYNC-SAFETY.md](docs/SYNC-SAFETY.md)：开放尾与安全边界、拉取原子性、客户端防误操作。
+- [docs/SYNC-PERF-PLAN.md](docs/SYNC-PERF-PLAN.md)：同步性能重构计划：官方首屏窗口与冷读边界、官方 Discussions 对照、42s 规划实测、首同步流水线、worker 封帧、帧缓存、payload 压缩与请求合并。
 - [docs/UI-GUIDELINES.md](docs/UI-GUIDELINES.md)：客户端页面的动效与可访问性约定。
 - [dev/ui/README.md](dev/ui/README.md)：设置页 / 首启 / 同步气泡的静态原型。
 - [tests/README.md](tests/README.md)：临时 home 与夹具约定。
