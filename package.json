@@ -15,7 +15,8 @@
     "fixtures": "node tests/tools/make-fixtures.ts",
     "dev:server": "node packages/server/src/index.ts serve --data-dir .tmp/dev-data --port 8787 --host 127.0.0.1",
     "dev:dsh": "node scripts/dev-dsh.mjs",
-    "dev:console": "node tests/m0/console/server.mjs"
+    "dev:console": "node tests/m0/console/server.mjs",
+    "dev:panel": "node dev/console/server.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

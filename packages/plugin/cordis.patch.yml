@@ -35,3 +35,7 @@
         batchBytes: 262144
         # 单次 HTTP 读取超时（毫秒）。
         requestTimeoutMs: 10000
+        # 开发控制台：debug=true 时把日志发到 devLogUrl（也可用
+        # DSH_SESSION_CLOUDSYNC_DEV_LOG 覆盖）。
+        debug: false
+        devLogUrl: ''

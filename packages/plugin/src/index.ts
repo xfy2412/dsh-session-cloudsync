@@ -30,6 +30,7 @@ import {
 } from './engine.ts'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
 import { createEventStreamResponse } from './event-stream.ts'
+import { DevLogSink, withDevLog } from './dev-log.ts'
 import { DeviceLeaseKeeper } from './device-lease.ts'
 import { SyncScheduler } from './scheduler.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
@@ -80,6 +81,10 @@ export interface Config {
   batchBytes?: number
   /** 单次 HTTP 读取超时（毫秒），默认 10000。 */
   requestTimeoutMs?: number
+  /** 开发模式：把插件日志同时发到本地 dev 控制台；默认关闭。 */
+  debug?: boolean
+  /** 开发控制台日志接收地址，例如 `http://127.0.0.1:3092/api/log/a`。 */
+  devLogUrl?: string
 }
 
 /** 配置 schema；非敏感字段可被 DSH 设置页直接编辑并热更新。 */
@@ -98,6 +103,8 @@ export const Config = z.object({
   batchEvents: z.number().min(1).default(50).volatile(),
   batchBytes: z.number().min(1024).default(256 * 1024).volatile(),
   requestTimeoutMs: z.number().min(1000).default(10_000).volatile(),
+  debug: z.boolean().default(false).volatile(),
+  devLogUrl: z.string().default('').volatile(),
 })
 
 /** 活动的会话类型（由 ctx.sessions 推导，避免手写 DSH 内部类型）。 */
@@ -186,25 +193,44 @@ function readVolatile<T>(value: unknown): T | undefined {
  * @param config - 服务端、凭据与批次参数。
  */
 export function apply(ctx: Context, config: Config): void {
-  const logger: SyncLogger = {
+  const envDevLogUrl = process.env.DSH_SESSION_CLOUDSYNC_DEV_LOG?.trim() ?? ''
+  const envSyncServerUrl = process.env.DSH_SESSION_CLOUDSYNC_SERVER_URL?.trim() ?? ''
+  const envSyncToken = process.env.DSH_SESSION_CLOUDSYNC_TOKEN?.trim() ?? ''
+  const envSyncPassphrase = process.env.DSH_SESSION_CLOUDSYNC_PASSPHRASE?.trim() ?? ''
+  const envSyncDeviceName = process.env.DSH_SESSION_CLOUDSYNC_DEVICE_NAME?.trim() ?? ''
+  let debug = envDevLogUrl !== '' || readVolatile<boolean>(config.debug) === true
+  let devLogUrl = envDevLogUrl !== ''
+    ? envDevLogUrl
+    : (readVolatile<string>(config.devLogUrl)?.trim() ?? '')
+  const baseLogger: SyncLogger = {
     info: (message) => ctx.logger.info(message),
     warn: (message) => ctx.logger.warn(message),
     error: (message) => ctx.logger.error(message),
   }
+  const logger = withDevLog(baseLogger, new DevLogSink({
+    enabled: () => debug && devLogUrl !== '',
+    url: () => devLogUrl,
+  }))
 
   if (readVolatile<boolean>(config.enabled) === false) {
     logger.info('dsh-session-cloudsync: 已禁用')
     return
   }
-  let serverUrl = readVolatile<string>(config.serverUrl) ?? ''
-  const configToken = readVolatile<string>(config.token) ?? ''
-  const configPassphrase = readVolatile<string>(config.passphrase) ?? ''
+  let serverUrl = envSyncServerUrl !== ''
+    ? envSyncServerUrl
+    : (readVolatile<string>(config.serverUrl) ?? '')
+  const yamlToken = readVolatile<string>(config.token) ?? ''
+  const yamlPassphrase = readVolatile<string>(config.passphrase) ?? ''
+  const configToken = envSyncToken !== '' ? envSyncToken : yamlToken
+  const configPassphrase = envSyncPassphrase !== '' ? envSyncPassphrase : yamlPassphrase
   let intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
   let excludedSessionIds: string[] = []
   let autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
   let salt = readVolatile<string>(config.salt) ?? ''
   let includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
-  let deviceName = readVolatile<string>(config.deviceName) ?? ''
+  let deviceName = envSyncDeviceName !== ''
+    ? envSyncDeviceName
+    : (readVolatile<string>(config.deviceName) ?? '')
   let autoSync = readVolatile<boolean>(config.autoSync) !== false
   let batchEvents = readVolatile<number>(config.batchEvents) ?? 50
   let batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
@@ -240,17 +266,25 @@ export function apply(ctx: Context, config: Config): void {
    * 插件；每轮同步/设置读取前调用，保证不会一直拿 apply 时的旧值。
    */
   const refreshConfig = (): void => {
-    serverUrl = readVolatile<string>(config.serverUrl) ?? ''
+    serverUrl = envSyncServerUrl !== ''
+      ? envSyncServerUrl
+      : (readVolatile<string>(config.serverUrl) ?? '')
     intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
     excludedSessionIds = readExcludedSessions()
     autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
     salt = readVolatile<string>(config.salt) ?? ''
     includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
-    deviceName = readVolatile<string>(config.deviceName) ?? ''
+    deviceName = envSyncDeviceName !== ''
+      ? envSyncDeviceName
+      : (readVolatile<string>(config.deviceName) ?? '')
     autoSync = readVolatile<boolean>(config.autoSync) !== false
     batchEvents = readVolatile<number>(config.batchEvents) ?? 50
     batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
     requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
+    debug = envDevLogUrl !== '' || readVolatile<boolean>(config.debug) === true
+    devLogUrl = envDevLogUrl !== ''
+      ? envDevLogUrl
+      : (readVolatile<string>(config.devLogUrl)?.trim() ?? '')
     engineConfig.serverUrl = serverUrl
     engineConfig.includeSubagents = includeSubagents
     engineConfig.excludedSessionIds = excludedSessionIds
@@ -271,8 +305,12 @@ export function apply(ctx: Context, config: Config): void {
     onChange: () => notifyChanged?.(),
     logger,
   })
-  let tokenSource: string | null = configToken.trim() === '' ? null : 'config'
-  let passphraseSource: string | null = configPassphrase === '' ? null : 'config'
+  let tokenSource: string | null = envSyncToken !== ''
+    ? 'env'
+    : configToken.trim() === '' ? null : 'config'
+  let passphraseSource: string | null = envSyncPassphrase !== ''
+    ? 'env'
+    : configPassphrase === '' ? null : 'config'
   let refreshingSecrets: Promise<void> | undefined
 
   /**
@@ -298,14 +336,22 @@ export function apply(ctx: Context, config: Config): void {
       ])
       const credentialToken = tokenValue?.value ?? ''
       const credentialPassphrase = passphraseValue?.value ?? ''
-      engineConfig.token = credentialToken !== '' ? credentialToken : configToken
-      engineConfig.passphrase = credentialPassphrase !== '' ? credentialPassphrase : configPassphrase
-      tokenSource = credentialToken !== ''
-        ? tokenValue?.source ?? 'credentials'
-        : configToken.trim() !== '' ? 'config' : null
-      passphraseSource = credentialPassphrase !== ''
-        ? passphraseValue?.source ?? 'credentials'
-        : configPassphrase !== '' ? 'config' : null
+      engineConfig.token = envSyncToken !== ''
+        ? envSyncToken
+        : credentialToken !== '' ? credentialToken : configToken
+      engineConfig.passphrase = envSyncPassphrase !== ''
+        ? envSyncPassphrase
+        : credentialPassphrase !== '' ? credentialPassphrase : configPassphrase
+      tokenSource = envSyncToken !== ''
+        ? 'env'
+        : credentialToken !== ''
+          ? tokenValue?.source ?? 'credentials'
+          : configToken.trim() !== '' ? 'config' : null
+      passphraseSource = envSyncPassphrase !== ''
+        ? 'env'
+        : credentialPassphrase !== ''
+          ? passphraseValue?.source ?? 'credentials'
+          : configPassphrase.trim() !== '' ? 'config' : null
     })()
     try {
       await refreshingSecrets
@@ -329,7 +375,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const workspaceRegistry = ctx.get('workspaceRegistry') as unknown as WorkspaceRegistryLike | undefined
-  if (configToken !== '' || configPassphrase !== '') {
+  if (yamlToken !== '' || yamlPassphrase !== '') {
     logger.warn(
       'dsh-session-cloudsync: token/passphrase 仍写在 YAML；建议迁到 DSH 凭据库'
       + `（${CREDENTIAL_REFS.token} / ${CREDENTIAL_REFS.passphrase}），YAML 仅作 fallback`,

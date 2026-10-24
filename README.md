@@ -77,6 +77,12 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 
 需要保留已登录状态时：`node scripts/dev-dsh.mjs --credentials <旧 home 的 .credentials.yaml>`。脚本拒绝在 `.tmp/` 之外创建实例目录。
 
+双实例调试用 `pnpm dev:panel`：起一个本地控制台（默认 <http://127.0.0.1:3092/>），
+上方左右两个 iframe 分别是独立的 DSH A/B，下方左右两个控制台显示各自 host stdout
+与插件 dev sink。首次启动会自动构建并安装本插件、带起本地同步服务端并给 A/B
+预配置 token/口令；面板还提供 **恢复预配置** 和勾选式 **清理数据**。详见
+[dev/console/README.md](dev/console/README.md)。
+
 ## 两条硬约定
 
 - **测试绝不碰真实 `~/.dsh`**：所有临时 home 经 `tests/helpers/tmp-home.mjs` 创建，位于 `.tmp/` 且被 git 忽略；规则与断言清单见 [tests/README.md](tests/README.md)。
@@ -99,6 +105,7 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 - [docs/SYNC-PERF-PLAN.md](docs/SYNC-PERF-PLAN.md)：同步性能重构计划：官方首屏窗口与冷读边界、官方 Discussions 对照、42s 规划实测、首同步流水线、worker 封帧、帧缓存、payload 压缩与请求合并。
 - [docs/UI-GUIDELINES.md](docs/UI-GUIDELINES.md)：客户端页面的动效与可访问性约定。
 - [dev/ui/README.md](dev/ui/README.md)：设置页 / 首启 / 同步气泡的静态原型。
+- [dev/console/README.md](dev/console/README.md)：双实例 DSH 控制台（双 iframe + 双日志 + 插件 dev sink）。
 - [tests/README.md](tests/README.md)：临时 home 与夹具约定。
 
 ## 许可证

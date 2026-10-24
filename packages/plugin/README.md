@@ -34,6 +34,8 @@ includeSubagents: true
 batchEvents: 50
 batchBytes: 262144
 requestTimeoutMs: 10000  # 单次 HTTP 读取超时；避免挂死
+debug: false             # 开发控制台：额外发插件日志
+devLogUrl: ''            # 例如 http://127.0.0.1:3092/api/log/a
 ```
 
 token 与同步口令写在 DSH 凭据库，引用名固定：
@@ -42,6 +44,10 @@ token 与同步口令写在 DSH 凭据库，引用名固定：
 - `DSH_SESSION_CLOUDSYNC_PASSPHRASE`
 
 YAML 里的 `token` / `passphrase` 只作为 bootstrap fallback；插件每轮同步前重新解析凭据。
+
+开发控制台（`pnpm dev:panel`）会用以下环境变量覆盖上述配置，优先级高于 YAML 和
+DSH 凭据库：`DSH_SESSION_CLOUDSYNC_SERVER_URL`、`..._TOKEN`、`..._PASSPHRASE`、
+`..._DEVICE_NAME`。请不要在生产实例里设置这些变量。
 
 ## 客户端
 
