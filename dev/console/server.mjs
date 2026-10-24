@@ -40,6 +40,7 @@ const credentials = process.env.DEV_CONSOLE_CREDENTIALS === undefined
 
 const syncDataDir = join(tempRoot, 'sync-data')
 const syncCredentialsFile = join(tempRoot, 'sync-credentials.json')
+const onboardingCodeFile = join(syncDataDir, 'onboarding-code.json')
 const benchTracePath = process.env.DEV_CONSOLE_TRACE?.trim()
   ? resolve(process.env.DEV_CONSOLE_TRACE)
   : join(repoRoot, 'tests', 'fixtures', 'shapes', 'b0e-69587.trace.json')
@@ -441,9 +442,93 @@ async function ensureSync() {
   return sync.prepare
 }
 
+/** 读取当前服务端初始化状态与本地初始化密钥。 */
+async function setupCodeInfo() {
+  const adminUrl = `${syncUrl}/admin`
+  if (sync.mode !== 'local') {
+    return {
+      available: false,
+      mode: sync.mode,
+      adminUrl,
+      reason: '外部同步服务端不由控制台管理',
+    }
+  }
+  let initialized = false
+  let serverReachable = false
+  try {
+    const response = await fetch(`${sync.url}/setup/state`, { signal: AbortSignal.timeout(2_000) })
+    if (response.ok) {
+      const body = await response.json()
+      initialized = body?.value?.initialized === true
+      serverReachable = true
+    }
+  } catch {
+    // 服务端未启动时继续看本地文件，界面会提示。
+  }
+  let stored
+  try {
+    const parsed = JSON.parse(readFileSync(onboardingCodeFile, 'utf8'))
+    if (typeof parsed?.code === 'string' && Number.isSafeInteger(parsed?.expiresAt)) {
+      stored = { code: parsed.code, expiresAt: parsed.expiresAt }
+    }
+  } catch {
+    // 没有文件或文件损坏。
+  }
+  const expiresAt = stored?.expiresAt
+  const valid = stored !== undefined && expiresAt !== undefined && expiresAt > Date.now()
+  if (initialized) {
+    return {
+      available: false,
+      initialized: true,
+      serverReachable,
+      adminUrl,
+      expiresAt,
+      reason: '服务端已完成初始化，请用管理密码登录管理台',
+    }
+  }
+  if (!serverReachable) {
+    return {
+      available: false,
+      initialized,
+      serverReachable,
+      adminUrl,
+      expiresAt,
+      reason: '同步服务端未运行；启动服务端后会生成新的初始化密钥',
+    }
+  }
+  if (!valid) {
+    return {
+      available: false,
+      initialized,
+      serverReachable,
+      adminUrl,
+      expiresAt,
+      reason: '初始化密钥未生成或已过期；重启同步服务端会生成新密钥',
+    }
+  }
+  return {
+    available: true,
+    initialized,
+    serverReachable,
+    adminUrl,
+    code: stored.code,
+    expiresAt,
+  }
+}
+
+/** 重启本地同步服务端（保留数据），用于重新生成初始化密钥。 */
+async function restartLocalSync() {
+  if (sync.mode !== 'local') throw new Error('只有本地同步服务端可以重启')
+  await stopSyncServer()
+  sync.status = 'idle'
+  sync.ready = false
+  sync.error = null
+  await ensureSync()
+  return setupCodeInfo()
+}
+
 /** 停本地同步服务端。 */
-async function stopSyncServer() {
-  const child = sync.child
+async function stopSyncServer() {  const child = sync.child
   if (child === null) {
     sync.ready = false
     sync.status = sync.mode === 'off' ? 'off' : 'idle'
@@ -997,8 +1082,16 @@ const server = createServer(async (req, res) => {
       json(res, 200, { ok: true })
       return
     }
-    if (req.method === 'POST' && pathname === '/api/clean') {
-      const body = await readBody(req)
+    if (req.method === 'GET' && pathname === '/api/sync/setup-code') {
+      json(res, 200, { ok: true, setup: await setupCodeInfo(), sync: state().sync })
+      return
+    }
+    if (req.method === 'POST' && pathname === '/api/sync/restart') {
+      const setup = await restartLocalSync()
+      json(res, 200, { ok: true, setup, sync: state().sync })
+      return
+    }
+    if (req.method === 'POST' && pathname === '/api/clean') {      const body = await readBody(req)
       const removed = await cleanData(body)
       json(res, 200, { ok: true, removed, state: state() })
       return

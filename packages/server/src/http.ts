@@ -8,7 +8,8 @@
  * @module @dsh-session-cloudsync/server/http
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { PROTOCOL_VERSION, errorBody, type DeviceRef } from '../../shared/src/protocol.ts'
 import { SyncError, statusOf } from '../../shared/src/wire.ts'
@@ -363,7 +364,10 @@ const ADMIN_TTL_MS = 12 * 60 * 60 * 1000
 const SETUP_TTL_MS = 15 * 60 * 1000
 
 /** 初始化密钥有效期。 */
-const ONBOARDING_TTL_MS = 10 * 60 * 1000
+export const ONBOARDING_TTL_MS = 10 * 60 * 1000
+
+/** 初始化密钥落盘文件名；仅首次初始化时存在。 */
+export const ONBOARDING_CODE_FILE = 'onboarding-code.json'
 
 /** 初始化密钥字符表：去掉容易混淆的 0/O/1/I。 */
 const ONBOARDING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -962,6 +966,7 @@ export function createHttpServer(options: ServerOptions): Server {
         markAdminInitialized(db)
         onboarding.expiresAt = 0
         setupSessionsByKey.clear()
+        rmSync(join(options.dataDir, ONBOARDING_CODE_FILE), { force: true })
         writeSetupCookie(res, '', 0)
         return json(res, 200, { ok: true, value: { redirect: '/admin', expiresAt: issueAdminSession(res) } })
       },

@@ -65,7 +65,7 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 
 夹具由官方 `@deepseek-ai/dsh-session` 校验器验证（`packages/shared` 的 devDependencies，版本与 DSH 对齐）。
 
-**首次启动服务端**：控制台会打印一次性初始化密钥，并提示打开 <http://127.0.0.1:8787/admin>；按向导设置管理密码、存储配额，可选创建第一台设备。之后管理台用密码登录；忘记密码执行 `node packages/server/src/index.ts admin reset`（重启后重新打印初始化密钥）。
+**首次启动服务端**：控制台会打印一次性初始化密钥，并提示打开 <http://127.0.0.1:8787/admin>；开发控制台顶部“同步服务端”徽标也会显示/复制这个密钥（同时写入数据目录的 `onboarding-code.json`，0600，初始化完成即删除）。按向导设置管理密码、存储配额，可选创建第一台设备。之后管理台用密码登录；忘记密码执行 `node packages/server/src/index.ts admin reset`（重启后重新打印初始化密钥）。
 
 ### 隔离的 DSH 开发实例
 

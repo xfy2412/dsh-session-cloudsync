@@ -75,7 +75,9 @@
     color: var(--muted); font-size: 10.5px;
     border: 1px solid var(--line); border-radius: 5px;
     padding: 3px 7px; white-space: nowrap;
+    background: transparent; font-family: inherit; cursor: pointer;
   }
+  .sync-state:hover { color: var(--text); border-color: var(--faint); }
   .sync-state[data-tone="ok"] { color: var(--green); border-color: rgba(88, 201, 138, .35); }
   .sync-state[data-tone="run"] { color: var(--amber); border-color: rgba(240, 182, 74, .35); }
   .sync-state[data-tone="bad"] { color: var(--red); border-color: rgba(255, 123, 114, .4); }
@@ -224,6 +226,17 @@
   .clean-list small { display: block; color: var(--faint); font-size: 10.5px; margin-top: 2px; }
   .clean-list input { margin-top: 2px; }
   .clean-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .clean-actions a { color: var(--accent); font-size: 11px; align-self: center; text-decoration: none; }
+  .setup-code {
+    display: flex; align-items: center; gap: 8px;
+    margin: 12px 0; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: #12171d;
+  }
+  .setup-code code {
+    flex: 1; color: var(--green); font-family: ui-monospace, Consolas, monospace;
+    font-size: 18px; letter-spacing: .12em; user-select: all;
+  }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: #2d3743; border-radius: 999px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -246,7 +259,7 @@
     <span>A/B 独立 home · stdout + 插件 dev sink</span>
   </div>
   <div class="top-actions">
-    <span class="sync-state" id="sync-state" data-tone="">同步服务端：准备中…</span>
+    <button class="sync-state" id="sync-state" type="button" data-tone="" title="查看同步服务端">同步服务端：准备中…</button>
     <span class="global-state" id="global-state">连接控制台…</span>
     <button id="restore">恢复预配置</button>
     <button id="import-open">导入大会话</button>
@@ -394,6 +407,23 @@
   </form>
 </dialog>
 
+<dialog class="clean-dialog" id="server-dialog">
+  <form class="clean-body" method="dialog">
+    <h2>同步服务端</h2>
+    <p id="server-summary">正在读取服务端状态…</p>
+    <div class="setup-code" id="setup-code-row" hidden>
+      <code id="setup-code"></code>
+      <button type="button" id="setup-copy">复制</button>
+    </div>
+    <p id="server-hint"></p>
+    <div class="clean-actions">
+      <button type="button" id="sync-restart">重启服务端</button>
+      <a id="server-admin" href="#" target="_blank" rel="noreferrer">打开管理台</a>
+      <button value="cancel">关闭</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const sideIds = ['a', 'b']
 const logs = { a: [], b: [] }
@@ -473,6 +503,7 @@ function renderState(data) {
     syncEl.dataset.tone = ''
     syncEl.title = sync.url
   }
+  syncEl.title = `${syncEl.title || '同步服务端'} · 点击查看服务端`
   $('global-state').textContent = data.sides.every((side) => side.url !== null)
     ? 'A/B 就绪'
     : data.sides.some((side) => side.running) ? '实例运行中' : '实例未启动'
@@ -638,7 +669,69 @@ async function copyText(text) {
 }
 
 /** 绑定按钮。 */
+/** 刷新服务端初始化密钥面板。 */
+async function refreshServerDialog() {
+  const summary = $('server-summary')
+  const hint = $('server-hint')
+  const codeRow = $('setup-code-row')
+  const code = $('setup-code')
+  const restart = $('sync-restart')
+  const admin = $('server-admin')
+  try {
+    const result = await api('/api/sync/setup-code')
+    const setup = result.setup
+    const mode = result.sync?.mode ?? setup.mode
+    const stateLabel = setup.initialized ? '已初始化' : setup.serverReachable ? '未初始化' : '未运行'
+    admin.href = setup.adminUrl || `${result.sync?.url ?? ''}/admin`
+    admin.hidden = admin.href === '/admin'
+    restart.disabled = mode !== 'local' || setup.initialized === true
+    summary.textContent = `${setup.adminUrl || result.sync?.url || '同步服务端'} · ${stateLabel}`
+    if (setup.available === true) {
+      code.textContent = setup.code
+      codeRow.hidden = false
+      hint.textContent = `有效期到 ${new Date(setup.expiresAt).toLocaleTimeString()}；仅用于首次初始化管理台。`
+    } else {
+      code.textContent = ''
+      codeRow.hidden = true
+      hint.textContent = setup.reason || '当前没有可用的初始化密钥。'
+    }
+  } catch (error) {
+    summary.textContent = '读取服务端状态失败'
+    hint.textContent = error.message
+    codeRow.hidden = true
+    restart.disabled = true
+  }
+}
+
+/** 打开同步服务端面板。 */
+async function openServerDialog() {
+  const dialog = $('server-dialog')
+  if (!dialog.open) dialog.showModal()
+  await refreshServerDialog()
+}
+
 function bindActions() {
+  $('sync-state').addEventListener('click', () => void openServerDialog())
+  $('setup-copy').addEventListener('click', () => {
+    const code = $('setup-code').textContent
+    if (code) void copyText(code)
+  })
+  $('sync-restart').addEventListener('click', async (event) => {
+    const button = event.currentTarget
+    const old = button.textContent
+    button.disabled = true
+    button.textContent = '重启中…'
+    try {
+      await api('/api/sync/restart', { method: 'POST' })
+      await refresh()
+      await refreshServerDialog()
+    } catch (error) {
+      $('server-hint').textContent = `重启失败：${error.message}`
+    } finally {
+      button.disabled = false
+      button.textContent = old
+    }
+  })
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
       const side = button.dataset.side
