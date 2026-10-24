@@ -1,4 +1,4 @@
-{"type":"session","version":4,"id":"session-fixture-minimal","createdAt":1790000000000,"cwd":"D:\\fixture","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}
+{"type":"session","version":4,"id":"session-fixture-minimal","createdAt":1790000000000,"cwd":"/fixture","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}
 {"type":"permission/preset","seq":0,"time":1790000000001,"data":{"preset":"workspace-write"}}
 {"type":"turn/start","seq":1,"time":1790000000002,"data":{"turn":1}}
 {"type":"step/start","seq":2,"time":1790000000003,"data":{"turn":1,"step":1}}

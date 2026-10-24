@@ -16,7 +16,7 @@ import { decodeLog, splitRows } from '../../packages/shared/src/frames.ts'
 const TEXT = '<text>'
 const ARG = '<arg>'
 /** cwd 必须是绝对路径；用固定占位路径，并在泄漏断言里单独放行。 */
-const FIXTURE_CWD = 'C:/fixture/workspace'
+const FIXTURE_CWD = '/fixture/workspace'
 
 /** 这些键的值是枚举/标识/关系坐标，必须保留才能保持结构。 */
 const KEEP_KEYS = new Set([

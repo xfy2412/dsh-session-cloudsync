@@ -117,8 +117,8 @@ test('事件序号从 0 连续，且序号唯一的头事件在最前', () => {
 })
 
 test('覆盖夹具不含真实内容：纯 ASCII、无盘符路径、无 URL', () => {
-  // cwd 必须是绝对路径，生成器固定用这一个占位值；其余盘符路径一律不允许。
-  const cleaned = coverageText.split('C:/fixture/workspace').join('')
+  // cwd 必须是绝对路径，生成器固定用跨平台的 `/fixture/workspace` 占位值；其余盘符路径一律不允许。
+  const cleaned = coverageText.split('/fixture/workspace').join('')
   assert.ok(!/[^\x00-\x7f]/u.test(cleaned), '出现非 ASCII 字符')
   assert.ok(!/[A-Za-z]:[\\/]/u.test(cleaned), '出现盘符路径')
   assert.ok(!/https?:\/\//iu.test(cleaned), '出现 URL')

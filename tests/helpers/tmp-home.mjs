@@ -19,7 +19,15 @@ export const tmpRoot = join(repoRoot, '.tmp')
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000
 
 function real(path) {
-  return realpathSync.native(path)
+  try {
+    return realpathSync.native(path)
+  } catch (error) {
+    // The protected parent may not exist on a fresh runner (for example
+    // ~/.dsh before DSH has ever been started). Comparing its resolved
+    // lexical path is still enough to prove the temp home is outside it.
+    if (error?.code === 'ENOENT') return resolve(path)
+    throw error
+  }
 }
 
 function inside(parent, child) {

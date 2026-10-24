@@ -1,4 +1,4 @@
-{"type":"session","version":4,"id":"session-fixture-device","createdAt":1790000001000,"cwd":"D:\\fixture","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}
+{"type":"session","version":4,"id":"session-fixture-device","createdAt":1790000001000,"cwd":"/fixture","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}
 {"type":"permission/preset","seq":0,"time":1790000001001,"data":{"preset":"workspace-write"}}
 {"type":"plugin:dsh-session-cloudsync/device","seq":1,"time":1790000001002,"data":{"deviceId":"device-a","deviceName":"PC-1","at":1790000001002,"reason":"run"},"ignorable":true}
 {"type":"user/message","seq":2,"time":1790000001003,"data":{"content":[{"type":"text","text":"Synthetic fixture prompt."}],"source":{"kind":"user"},"role":"user","id":"fixture-user-2"},"surfaceOp":"append"}
