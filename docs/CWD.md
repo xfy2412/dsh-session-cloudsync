@@ -47,7 +47,7 @@ DSH 源码关系：
 - 工具调用/消息里提到的外部路径；
 - 远端工作区没有本地绑定（`unmapped`）；
 - 另一个独立工作区（不同 `workspaceKey`）；
-- 被本地排除的根会话（`excludedSessionIds`）。
+- 不在本地白名单里的根会话（`syncSessionIds`）。
 
 ### 1.2 canonical 只用于 header，不是文件 checksum
 

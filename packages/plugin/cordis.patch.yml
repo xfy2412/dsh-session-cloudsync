@@ -20,8 +20,8 @@
         salt: ''
         # 本设备在台账/日志里的短标签；空表示未使用。
         deviceName: ''
-        # 本地排除的根会话 id；默认同步全部根会话，子代理跟随所属根。
-        excludedSessionIds: []
+        # 显式勾选的根会话 id；默认不勾选任何会话，空数组表示不同步。
+        syncSessionIds: []
         # 是否在同步后自动绑定同路径的远端工作区（一次性绑定）；默认关闭。
         autoBindSamePath: false
         # 是否按间隔自动推送；false 时只做一次启动推送。

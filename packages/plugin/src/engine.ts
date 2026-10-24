@@ -102,8 +102,8 @@ export interface EngineConfig {
   readonly salt?: string
   /** 是否同步子代理会话，默认 true。 */
   readonly includeSubagents?: boolean
-  /** 本地排除的根会话 id；子代理跟随根。 */
-  readonly excludedSessionIds?: readonly string[]
+  /** 显式选中的根会话 id；缺省（undefined）只用于底层调用，等同于全选。 */
+  readonly syncSessionIds?: readonly string[]
   /** 单批事件上限，默认 50。 */
   readonly batchEvents?: number
   /** 单批规范 JSON 字节上限，默认 256 KiB。 */
@@ -947,6 +947,20 @@ async function syncSession<Session>(
   }
 }
 
+/** 解析根会话选择：undefined 只保留给底层调用（全选），插件配置总是传数组。 */
+function sessionSelection(config: EngineConfig): {
+  readonly all: boolean
+  readonly selected?: ReadonlySet<string>
+} {
+  if (config.syncSessionIds === undefined) return { all: true }
+  return { all: false, selected: new Set(config.syncSessionIds) }
+}
+
+/** 一个根会话是否在同步选择内。 */
+function selectedRoot(selection: ReturnType<typeof sessionSelection>, rootId: string): boolean {
+  return selection.all || selection.selected?.has(rootId) === true
+}
+
 /**
  * 执行一次推送；单个会话失败不影响其他会话。
  * @param deps - 引擎依赖。
@@ -963,9 +977,10 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   const master = deriveMasterKey(config.passphrase, salt)
   const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
   const snapshots = await deps.persistence.list()
+  const selection = sessionSelection(config)
   const plan = planSessionClosure(snapshots, {
     includeSubagents: config.includeSubagents !== false,
-    excludedSessionIds: config.excludedSessionIds ?? [],
+    ...selection.selected === undefined ? {} : { selectedSessionIds: [...selection.selected] },
   })
   const sessions: SessionSyncReport[] = []
 
@@ -1560,7 +1575,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       revision: state.revision,
     }
   }
-  const excluded = new Set(config.excludedSessionIds ?? [])
+  const selection = sessionSelection(config)
   if (deps.workspacePathOf === undefined) {
     return { configured: false, reason: 'workspace 绑定未初始化', sessions: [], revision: state.revision }
   }
@@ -1607,7 +1622,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
     try {
       const loaded = await loadRemoteHeader(fetchImpl, base, config.token, master, state.pending.sessionId)
       const rootId = await resolveRootSessionId(loaded, fetchImpl, base, config.token, master, () => undefined)
-      if (excluded.has(rootId)) {
+      if (!selectedRoot(selection, rootId)) {
         reports.push({ sessionId: state.pending.sessionId, status: 'excluded' })
         return { configured: true, sessions: reports, revision: state.revision }
       }
@@ -1672,7 +1687,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
           master,
           (sessionId) => preparedById.get(sessionId),
         )
-        if (excluded.has(rootId)) {
+        if (!selectedRoot(selection, rootId)) {
           reports.push({ sessionId: item.sessionId, status: 'excluded' })
           notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'done', progress: 1 })
           continue

@@ -65,8 +65,8 @@ export interface Config {
   salt?: string
   /** 本设备短标签；空表示未使用。 */
   deviceName?: string
-  /** 本地排除的根会话 id；子代理跟随根。 */
-  excludedSessionIds?: string[]
+  /** 显式选中的根会话 id；空数组表示不选任何会话。 */
+  syncSessionIds?: string[]
   /** 是否自动绑定同路径的远端工作区；默认关闭。 */
   autoBindSamePath?: boolean
   /** 是否自动按间隔推送，默认 true；关闭后只做一次启动推送。 */
@@ -95,7 +95,7 @@ export const Config = z.object({
   passphrase: z.string().default(''),
   salt: z.string().default(''),
   deviceName: z.string().default('').volatile(),
-  excludedSessionIds: z.array(z.string()).default([]).volatile(),
+  syncSessionIds: z.array(z.string()).default([]).volatile(),
   autoBindSamePath: z.boolean().default(false).volatile(),
   autoSync: z.boolean().default(true).volatile(),
   intervalMs: z.number().min(1000).default(60000).volatile(),
@@ -224,7 +224,7 @@ export function apply(ctx: Context, config: Config): void {
   const configToken = envSyncToken !== '' ? envSyncToken : yamlToken
   const configPassphrase = envSyncPassphrase !== '' ? envSyncPassphrase : yamlPassphrase
   let intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
-  let excludedSessionIds: string[] = []
+  let syncSessionIds: string[] = []
   let autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
   let salt = readVolatile<string>(config.salt) ?? ''
   let includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
@@ -238,13 +238,13 @@ export function apply(ctx: Context, config: Config): void {
   // 每次 DSH 进程启动生成一次；同一进程内 lease/append 复用，重启后换新值。
   const clientId = randomBytes(16).toString('hex')
 
-  const readExcludedSessions = (): string[] => {
-    const raw = readVolatile<unknown>(config.excludedSessionIds)
+  const readSyncSessions = (): string[] => {
+    const raw = readVolatile<unknown>(config.syncSessionIds)
     return Array.isArray(raw)
       ? raw.filter((id): id is string => typeof id === 'string' && id.trim() !== '')
       : []
   }
-  excludedSessionIds = readExcludedSessions()
+  syncSessionIds = readSyncSessions()
 
   const engineConfig: MutableEngineConfig = {
     serverUrl,
@@ -252,7 +252,7 @@ export function apply(ctx: Context, config: Config): void {
     passphrase: configPassphrase,
     ...salt === '' ? {} : { salt },
     includeSubagents,
-    excludedSessionIds,
+    syncSessionIds,
     batchEvents,
     batchBytes,
     requestTimeoutMs,
@@ -270,7 +270,7 @@ export function apply(ctx: Context, config: Config): void {
       ? envSyncServerUrl
       : (readVolatile<string>(config.serverUrl) ?? '')
     intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
-    excludedSessionIds = readExcludedSessions()
+    syncSessionIds = readSyncSessions()
     autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
     salt = readVolatile<string>(config.salt) ?? ''
     includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
@@ -287,7 +287,7 @@ export function apply(ctx: Context, config: Config): void {
       : (readVolatile<string>(config.devLogUrl)?.trim() ?? '')
     engineConfig.serverUrl = serverUrl
     engineConfig.includeSubagents = includeSubagents
-    engineConfig.excludedSessionIds = excludedSessionIds
+    engineConfig.syncSessionIds = syncSessionIds
     engineConfig.batchEvents = batchEvents
     engineConfig.batchBytes = batchBytes
     engineConfig.requestTimeoutMs = requestTimeoutMs
@@ -699,7 +699,7 @@ export function apply(ctx: Context, config: Config): void {
       reason: state.reason ?? null,
       serverUrl,
       deviceName,
-      excludedSessionIds,
+      syncSessionIds,
       autoBindSamePath,
       autoSync,
       intervalMs,
@@ -775,7 +775,6 @@ export function apply(ctx: Context, config: Config): void {
     await refreshWorkspaceLabels()
     const snapshots = await ctx.sessionPersistence.list()
     const tree = buildSessionTree(snapshots)
-    const excludedSet = new Set(excludedSessionIds)
     const sessions: SyncSessionCandidate[] = []
     const groups = new Map<string, { path: string; rootSessions: number; subagentSessions: number }>()
     for (const entry of tree.roots) {
@@ -794,7 +793,6 @@ export function apply(ctx: Context, config: Config): void {
         formatVersion: entry.root.header.version ?? 0,
         eventCount: entry.root.eventCount ?? 0,
         subagentSessions: entry.descendants.length,
-        excluded: excludedSet.has(sessionId),
       })
     }
     sessions.sort((left, right) => right.createdAt - left.createdAt || left.sessionId.localeCompare(right.sessionId))
@@ -875,7 +873,7 @@ export function apply(ctx: Context, config: Config): void {
     return {
       workspaces: candidates,
       sessions,
-      excludedSessionIds,
+      syncSessionIds,
       bindings: Object.values(bindings.bindings).map((binding) => ({
         workspaceKey: binding.key,
         localPath: binding.localPath,

@@ -32,7 +32,7 @@ function control(overrides = {}) {
       reason: null,
       serverUrl: 'http://127.0.0.1:8787',
       deviceName: 'dev',
-      excludedSessionIds: ['session-a'],
+      syncSessionIds: [],
       autoSync: true,
       intervalMs: 60_000,
       includeSubagents: true,
@@ -59,9 +59,8 @@ function control(overrides = {}) {
         formatVersion: 4,
         eventCount: 3,
         subagentSessions: 1,
-        excluded: true,
       }],
-      excludedSessionIds: ['session-a'],
+      syncSessionIds: [],
       bindings: [],
       unmapped: [],
       remoteWorkspaces: [],
@@ -80,7 +79,7 @@ function control(overrides = {}) {
     bindWorkspace: overrides.bindWorkspace ?? (async () => ({
       workspaces: [],
       sessions: [],
-      excludedSessionIds: [],
+      syncSessionIds: [],
       bindings: [],
       unmapped: [],
       remoteWorkspaces: [],
@@ -154,7 +153,7 @@ test('宿主 API：workspaces 返回会话选择列表', async () => {
   const body = await bodyOf(response)
   assert.equal(body.value.workspaces[0].rootSessions, 2)
   assert.equal(body.value.sessions[0].sessionId, 'session-a')
-  assert.deepEqual(body.value.excludedSessionIds, ['session-a'])
+  assert.deepEqual(body.value.syncSessionIds, [])
 })
 
 test('宿主 API：workspaces 读取失败时返回 500', async () => {

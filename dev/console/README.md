@@ -72,6 +72,7 @@ DEV_CONSOLE_SYNC=off pnpm dev:panel
   约 69,587 事件 / 52 MB 合成会话导入 A 的默认工作区；
 - 导入会停止正在运行的实例、写会话 artifact 和 `workspace.json`，然后重启；
 - 会话正文是合成占位文本，不含真实内容；导入后侧栏显示 `Benchmark 69k`，可正常加载历史；
+- 插件默认不勾选任何会话，导入后需要在 DSH 的同步设置里显式勾选它才会上传；
 - 两边都勾选会得到两份相同会话 id 的本地副本，**不会制造 A→B 的同步差异**；
   测 A 推 B 拉时只勾 A；
 - 轨迹可用 `pnpm bench:trace -- <真实日志> --out <trace>` 重新提取，或用

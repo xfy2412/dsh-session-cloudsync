@@ -218,8 +218,8 @@ export interface SetupInfo {
   readonly serverUrl: string
   /** 本设备短标签。 */
   readonly deviceName: string
-  /** 本地排除的根会话 id。 */
-  readonly excludedSessionIds: readonly string[]
+  /** 显式选中的根会话 id；空数组表示不选任何会话。 */
+  readonly syncSessionIds: readonly string[]
   /** 是否自动绑定同路径远端工作区。 */
   readonly autoBindSamePath: boolean
   /** 是否按间隔自动同步。 */
@@ -265,8 +265,6 @@ export interface SyncSessionCandidate {
   readonly formatVersion: number
   readonly eventCount: number
   readonly subagentSessions: number
-  /** 是否被本地排除。 */
-  readonly excluded: boolean
 }
 
 /** 一条本机 workspace 绑定。 */
@@ -301,8 +299,8 @@ export interface SyncWorkspaceList {
   readonly workspaces: readonly SyncWorkspaceCandidate[]
   /** 根会话选择列表。 */
   readonly sessions: readonly SyncSessionCandidate[]
-  /** 当前本地排除的根会话 id。 */
-  readonly excludedSessionIds: readonly string[]
+  /** 当前显式选中的根会话 id。 */
+  readonly syncSessionIds: readonly string[]
   /** 本机一次性映射。 */
   readonly bindings: readonly SyncWorkspaceBinding[]
   /** 最近一次拉取中未映射的远端工作区。 */

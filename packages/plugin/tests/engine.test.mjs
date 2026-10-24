@@ -260,7 +260,7 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       const excluded = await pullOnce({
         persistence: excludedStore,
         sessions,
-        config: { ...config, excludedSessionIds: [sessionId] },
+        config: { ...config, syncSessionIds: [] },
         workspacePathOf: () => 'D:/mapped',
       })
       assert.equal(excluded.sessions[0].status, 'excluded')
@@ -627,7 +627,7 @@ test('拉取引擎：一个只读阶段失败后继续其他安全会话', async
   }
 })
 
-test('推送引擎：本地排除根会话时不推送', async () => {
+test('推送引擎：白名单为空时不推送', async () => {
   const header = { id: 'session-no-allowlist', version: 4, createdAt: 1, isSeeded: false, delegationDepth: 0, cwd: 'D:/work' }
   const report = await syncOnce({
     persistence: fakePersistence(header, { events: events(0, 2) }),
@@ -636,7 +636,7 @@ test('推送引擎：本地排除根会话时不推送', async () => {
       serverUrl: 'http://127.0.0.1:1',
       token: 'token',
       passphrase: 'pass',
-      excludedSessionIds: [header.id],
+      syncSessionIds: [],
     },
   })
   assert.equal(report.configured, true)
@@ -645,7 +645,7 @@ test('推送引擎：本地排除根会话时不推送', async () => {
   ])
 })
 
-test('推送引擎：默认同步子代理闭包，子先父后，被排除的根跳过', async () => {
+test('推送引擎：白名单只选根时同步其子代理闭包', async () => {
   const temp = createTempHome('plugin-closure')
   try {
     const db = openDatabase(temp.dataDir)
@@ -682,7 +682,7 @@ test('推送引擎：默认同步子代理闭包，子先父后，被排除的�
           serverUrl: base,
           token: device.token,
           passphrase: 'closure pass',
-          excludedSessionIds: [other.id],
+          syncSessionIds: [root.id],
         },
         isTailOpen: () => false,
       })

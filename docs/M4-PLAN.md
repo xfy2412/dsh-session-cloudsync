@@ -36,7 +36,7 @@
 | ID | 内容 | 依赖 |
 |---|---|---|
 | B1 | `token` / `passphrase` 迁到 DSH `ctx.credentials`；支持环境变量/配置作为 bootstrap fallback | A3 |
-| B2 | 非敏感配置：serverUrl、excludedSessionIds、autoSync、interval、batch 上限 | A3 |
+| B2 | 非敏感配置：serverUrl、syncSessionIds、autoSync、interval、batch 上限 | A3 |
 | B3 | 设置页：Plugins 页的 `plugins.bundle.config` / `plugins.row.config` + `SettingsForm`；`settings.plugins.tab` 只用于 Built-in inventory，不是第三方插件配置位 | A4、B1、B2 |
 | B4 | Host↔Client 控制通道（测试连接、立即同步、读取状态） | A3 |
 | B5 | 首启引导：连接 → 凭据 → 根会话选择 → 映射 → 测试/首次同步；未配置时显示 | B3、B4 |
@@ -74,7 +74,7 @@
   - 用户主动打开或操作过气泡后，失焦 5 秒再自动收回；焦点/指针回到气泡会取消，焦点在气泡内时不收回；手动点图标可立即收起；
   - 顶部居中、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
   - 窄屏切底部 sheet；`aria-live="polite"`。
-- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /events`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区候选、根会话列表（含子代理计数）、本地排除的根会话 id、一次性绑定、未映射工作区与 `remoteWorkspaces`（本机/远端配对表的数据源）；选择粒度是根会话，子代理跟随根，不做工作区白名单。`test` 接收 `{ serverUrl }`，直接探测 `/v1/health`，不依赖已保存配置。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
+- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /events`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区候选、根会话列表（含子代理计数）、本地白名单、一次性绑定、未映射工作区与 `remoteWorkspaces`（本机/远端配对表的数据源）；选择粒度是根会话，子代理跟随根，不做工作区白名单。`test` 接收 `{ serverUrl }`，直接探测 `/v1/health`，不依赖已保存配置。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
 - **刷新**：空闲只按 `nextRunAt`（略提前）或最长 55s 安全轮询 `/status`；手动同步或接近排期时打开 `/events?until=idle`，终态/空闲后关闭；SSE 失败退避 1s 轮询；页面隐藏断开。
 - **动效**：状态变化才动；微交互 120–180ms、面板 220–320ms、气泡进出 320–420ms；只动 `transform` / `opacity` / `grid-template-rows`，进度用 `linear`；必须支持 `prefers-reduced-motion`。详细约定见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
 
@@ -108,7 +108,7 @@
 | ID | 内容 |
 |---|---|
 | E1 | `frames → batches` 协议/字段/文档重命名：已删除旧别名，只保留 `batches`/`batchCount`、`/batches` 路由 | 已完成 |
-| E2 | 根会话选择；默认全选，本地排除根及其子代理；首启/设置页的同步列表提供「全选/清空会话」；子代理跟随根会话闭包 | A5 |
+| E2 | 根会话选择；默认不选，显式白名单中的根及其子代理同步；首启/设置页的同步列表提供「全选/清空会话」；子代理跟随根会话闭包 | A5 |
 | E3 | 更新 ROADMAP/PROTOCOL/SYNC-SAFETY/tests 文档 |
 
 ## 3. 已定与实施备注
@@ -121,7 +121,7 @@
 - 非敏感配置走 settings，token/passphrase 走 credentials。
 - **凭据已定**：固定引用 `DSH_SESSION_CLOUDSYNC_TOKEN` / `DSH_SESSION_CLOUDSYNC_PASSPHRASE`；`ctx.credentials` 优先，YAML `token`/`passphrase` 仅作 bootstrap fallback；每轮同步前解析，不要求重启。非敏感字段标 `.volatile()`，由设置页热更新。
 - **子代理闭包默认开启**（`includeSubagents: true`）：同步根会话及其全部 `origin === 'subagent'` 后代；fork 作为独立根。
-- **会话选择默认全选**：`excludedSessionIds` 只记录取消勾选的根；子代理跟随根。首启/设置页的同步列表提供「全选/清空会话」。
+- **会话选择默认不选**：`syncSessionIds` 是显式白名单，空数组 = 不同步任何根；新会话不会自动加入。子代理跟随根。首启/设置页的同步列表提供「全选/清空会话」。
 
 **实施备注：**
 

@@ -70,12 +70,12 @@ test('闭包：缺父会话或父链成环的子代理被跳过', () => {
   assert.equal(plan.skipped.length, 3)
 })
 
-test('闭包：根被本地排除时整棵子树都不推', () => {
+test('闭包：根不在白名单时整棵子树都不推', () => {
   const root = snap('root', { cwd: 'D:/work' })
   const child = snap('child', { cwd: 'D:/work', origin: 'subagent', parentSession: 'root' })
   const plan = planSessionClosure([root, child], {
     includeSubagents: true,
-    excludedSessionIds: ['root'],
+    selectedSessionIds: [],
   })
   assert.equal(plan.planned.length, 0)
   assert.deepEqual(plan.skipped.map((entry) => [entry.snapshot.header.id, entry.reason]), [
