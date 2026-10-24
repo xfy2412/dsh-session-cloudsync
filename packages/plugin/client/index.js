@@ -1228,12 +1228,13 @@ window.__ModuleLoader__.load({
                 placeholder: tokenConfigured ? '已配置；留空保持不变' : '粘贴 token',
                 onChange: function (event) { setToken(event.target.value) },
               })),
-            h(Field, { id: 'dssync-pass', label: '同步口令', hint: passConfigured ? '已配置；留空保持不变。' : '只用于本地派生加密密钥。' },
+            h(Field, { id: 'dssync-pass', label: '同步口令', hint: passConfigured ? '已配置；留空保持不变。所有设备必须使用同一口令。' : '用于派生端到端加密密钥；所有设备必须一致。' },
               h('input', {
                 id: 'dssync-pass', type: 'password', value: passphrase, autoComplete: 'new-password',
                 placeholder: passConfigured ? '已配置；留空保持不变' : '设置同步口令',
                 onChange: function (event) { setPassphrase(event.target.value) },
               }))),
+          h('div', { className: 'dssync-note' }, '同步口令必须与其它设备一致；加解密参数还取决于服务端地址，建议各设备填写同一个规范地址（如 http://127.0.0.1:8787），不要混用 localhost/127.0.0.1 或省略 //。口令或地址不同都会导致加解密参数不符、无法解密。'),
           h('div', { className: 'dssync-note' }, '口令丢失后，云端内容无法解密。凭据引用：' + CREDENTIAL_REFS.token + ' / ' + CREDENTIAL_REFS.passphrase)),
 
         h('section', { className: 'dssync-sec' },
@@ -1376,7 +1377,7 @@ window.__ModuleLoader__.load({
       var messageState = useState(null)
       var message = messageState[0]
       var setMessage = messageState[1]
-      var loadedWorkspaces = useRef(false)
+      var mappingRefreshed = useRef(false)
 
       useEffect(function () { model.refreshAll() }, [model])
       useEffect(function () {
@@ -1389,11 +1390,16 @@ window.__ModuleLoader__.load({
         if (setup && setup.configured) setDismissed()
       }, [setup && setup.configured])
       useEffect(function () {
-        if (!loadedWorkspaces.current) {
-          loadedWorkspaces.current = true
-          model.refreshWorkspaces()
-        }
-      }, [model])
+        if (step !== 2 || state.workspaces !== null) return
+        void refreshMapping()
+      }, [step, state.workspaces, model])
+      useEffect(function () {
+        // 进入映射步骤时再拉一次：首启早期调用可能发生在服务端地址/凭据
+        // 尚未真正热更新完成之前，那一次的空结果不能留到映射页。
+        if (step !== 3 || mappingRefreshed.current) return
+        mappingRefreshed.current = true
+        void refreshMapping()
+      }, [step, model])
       useEffect(function () {
         if (setup && step === 0) setFields(fieldsFrom(null, setup))
       }, [setup && setup.serverUrl])
@@ -1416,6 +1422,21 @@ window.__ModuleLoader__.load({
           else list.push(sessionId)
           return Object.assign({}, previous, { excludedSessionIds: list })
         })
+      }
+
+      /**
+       * 首启保存配置后，DSH 配置热更新可能稍晚于下一次 /workspaces 请求。
+       * 第一次为空/失败时短暂等待再拉一次，避免映射页把早期空结果固定下来。
+       */
+      async function refreshMapping() {
+        var loaded = await model.refreshWorkspaces()
+        var hasMappingData = loaded !== null && (
+          (Array.isArray(loaded.workspaces) && loaded.workspaces.length > 0)
+          || (Array.isArray(loaded.remoteWorkspaces) && loaded.remoteWorkspaces.length > 0)
+          || (Array.isArray(loaded.unmapped) && loaded.unmapped.length > 0))
+        if (hasMappingData) return loaded
+        await new Promise(function (resolve) { setTimeout(resolve, 300) })
+        return await model.refreshWorkspaces()
       }
 
       async function saveFields() {
@@ -1501,7 +1522,8 @@ window.__ModuleLoader__.load({
           try {
             await saveFields()
             await model.refreshSetup()
-            await model.refreshWorkspaces()
+            var loaded = await refreshMapping()
+            if (loaded === null) throw new Error('读取工作区失败，请重试')
             setStep(3)
           } catch (error) {
             setMessage({ bad: true, text: errorText(error) })
@@ -1552,8 +1574,9 @@ window.__ModuleLoader__.load({
         body = [
           h(Field, { id: 'ob-token', label: '设备 token', hint: setup.hasToken ? '已配置；留空保持不变。' : '由服务端管理台或 CLI 签发。' },
             h('input', { id: 'ob-token', type: 'password', value: token, placeholder: setup.hasToken ? '已配置；留空保持不变' : '粘贴 token', onChange: function (e) { setToken(e.target.value) } })),
-          h(Field, { id: 'ob-pass', label: '同步口令', hint: setup.hasPassphrase ? '已配置；留空保持不变。' : '只用于本地派生加密密钥。' },
+          h(Field, { id: 'ob-pass', label: '同步口令', hint: setup.hasPassphrase ? '已配置；留空保持不变。所有设备必须使用同一口令。' : '用于派生端到端加密密钥；所有设备必须一致。' },
             h('input', { id: 'ob-pass', type: 'password', value: passphrase, placeholder: setup.hasPassphrase ? '已配置；留空保持不变' : '设置同步口令', onChange: function (e) { setPassphrase(e.target.value) } })),
+          h('div', { className: 'dssync-note' }, '同步口令必须与其它设备一致；加解密参数还取决于服务端地址，建议各设备填写同一个规范地址（如 http://127.0.0.1:8787），不要混用 localhost/127.0.0.1 或省略 //。口令或地址不同都会导致加解密参数不符、无法解密。'),
           h('div', { className: 'dssync-note' }, '凭据保存在 DSH 凭据库（引用 ' + CREDENTIAL_REFS.token + ' / ' + CREDENTIAL_REFS.passphrase + '），不会写入普通配置。'),
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]

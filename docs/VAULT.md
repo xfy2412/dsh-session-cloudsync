@@ -298,10 +298,16 @@ append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已
 ## 4. 密钥与加密
 
 ```text
+masterKey = scrypt(passphrase, salt)
 masterKey ──HKDF("dsh-sync/vault/v1")──▶ vaultKey
 vaultKey  ──HMAC("workspace|"+path)────▶ workspaceKey
 ```
 
+- **所有设备必须使用同一个同步口令**；没有显式配置 `salt` 时，盐由 `serverUrl` 派生
+  （`sha256("dsh-session-cloudsync/v1|" + serverUrl)` 的前 16 字节），因此各设备的
+  服务端地址写法也必须一致。设备 token 只用于鉴权，不参与密钥派生；
+- 口令、默认盐或显式 `salt` 任一不一致，会话密钥的 `keyId` 就会不同，拉取会报
+  `封帧的 keyId 与当前密钥不符`，无法解密远端封帧；
 - 每个 Vault 记录单独封帧，AAD 至少绑定 `writer + seq + prevHash + schema`；
   防止把记录挪到另一台设备/另一个 seq；
 - `keyId` 随记录保存，支持未来口令轮换；

@@ -6,6 +6,7 @@ DSH 会话云同步插件：自部署服务端、端到端加密，同步根会�
 
 - 事件批次增量推送/拉取；批次哈希、AES-256-GCM 封批次；
 - 服务端只存密文、manifest 与 blob 去重，不持有明文口令；
+- **多设备必须使用同一同步口令**；默认盐由 `serverUrl` 派生，所以服务端地址写法也必须一致（不要混用 `localhost` / `127.0.0.1` 或省略 `//`）。设备 token 只用于鉴权，不参与解密；口令、地址或 `salt` 任一不同都会报 `keyId` 不符；
 - 开放尾只备份、不直接 apply；拉取带 durable pending journal；
 - 根会话选择：默认同步全部根会话；本地排除的根及其子代理跳过；子代理跟随根会话闭包，fork 是独立根；
 - 工作区映射：未映射会话持久化、映射后按 cursor revision 回填；本地工作区自己的 key 自动解析；已有远端会话沿用原 key；设置页/首启显示本机↔远端配对表（已绑定/本机身份/仅本机/待映射）、统计和待映射选择，绑定前二次确认；
@@ -14,7 +15,7 @@ DSH 会话云同步插件：自部署服务端、端到端加密，同步根会�
 - **入口级 open guard**：client 侧包一层 `uiWorkspace.openSession`，覆盖搜索结果、schedule、feedback、workflow-run、subagent 等没有 `data-row-key` 的入口；冷危险会话直接 toast + 不导航，live 会话放行；服务探测/安装失败一律 fail-open，不影响插件加载；
 - **按需长连接**：默认只轮询 `/status`；手动同步或接近 `nextRunAt` 时打开 `/api/session-cloudsync/events?until=idle`，空闲/终态后关闭，SSE 失败退避到 1s 轮询；页面隐藏时断开；
 - **自调度**：自动同步用绝对 `nextRunAt`（`setTimeout`）取代固定 `setInterval`，手动触发会清掉当前排期并在结束后重排；失败退避时间参与下一次排期；
-- 气泡标题优先 durable title，空白会话显示“未命名会话”，不再把 cwd 目录名当标题；
+- 气泡标题优先 durable title，空白会话显示“未命名会话”，不再把 cwd 目录名当标题；新拉取的冷会话在 attach 前会用本地日志预热 DSH 投影缓存，避免列表标题为空；
 - **全局单写者租约**：进程存活期间持续持有 `sync` 租约（20s 续租、服务端 TTL 60s）；没有 held 时只拉取、不上传，服务端 append/create/delete 也要求它；进程正常退出主动释放，异常退出靠 TTL；拉取始终不需要租约；
 - 冷会话在同步中/开放尾/安全边界落后时，侧栏行会被拦截并显示原因；live 会话允许打开/切换，由 composer 拦截输入；
 - “接受远端”只生成停机脚本：检查 DSH 已退出、备份并校验本地、删除 artifact、清理 blocked/ignore 状态，重启后再全量拉取。

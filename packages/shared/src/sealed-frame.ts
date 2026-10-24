@@ -207,7 +207,9 @@ export function parseSealedHeader(sealed: Buffer): { version: number; flags: num
 export function openSealedFrame(sealed: Buffer, position: OpenPosition, sessionKey: Buffer): Buffer {
   const header = parseSealedHeader(sealed)
   const expectedKeyId = keyIdOf(sessionKey)
-  if (!header.keyId.equals(expectedKeyId)) throw new Error('封帧的 keyId 与当前密钥不符')
+  if (!header.keyId.equals(expectedKeyId)) {
+    throw new Error('封帧的 keyId 与当前密钥不符（请确认各设备同步口令、服务端地址与 salt 一致）')
+  }
 
   const headerBytes = sealed.subarray(0, SEALED_HEADER_BYTES)
   const aad = buildAad(headerBytes, position)

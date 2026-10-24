@@ -28,6 +28,18 @@ npm 包名：`dsh-session-cloudsync`。
 dsh plugin --profile web add dsh-session-cloudsync
 ```
 
+## 多设备密钥
+
+所有设备必须使用**同一个同步口令**。主密钥由 `scrypt(口令, salt)` 派生；没有显式配置 `salt` 时，盐由 `serverUrl` 派生，所以各设备的服务端地址写法也要一致（建议统一使用 `http://host:port`，不要混用 `localhost` / `127.0.0.1` 或省略 `//`）。设备 token 只用于服务端鉴权，不参与解密。
+
+口令、默认盐或显式 `salt` 任一不一致，拉取都会报：
+
+```text
+封帧的 keyId 与当前密钥不符
+```
+
+这意味着该设备派生出的会话密钥与远端封帧不一致，当前无法解密；需要先统一口令/地址/salt。
+
 ## 目录
 
 ```
