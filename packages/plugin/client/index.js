@@ -826,7 +826,7 @@ window.__ModuleLoader__.load({
         remote: remote,
         rows: rows,
         pending: pending,
-        candidates: rows.filter(function (row) { return row.kind === 'local' }).map(function (row) { return row.local }),
+        candidates: rows.filter(function (row) { return row.binding === null }).map(function (row) { return row.local }),
         counts: counts,
       }
     }
@@ -945,6 +945,8 @@ window.__ModuleLoader__.load({
         var selectedPath = choices[key] || ''
         var selectedLocal = candidates.find(function (local) { return local.path === selectedPath }) || null
         var selectedTitle = selectedLocal === null ? selectedPath : (selectedLocal.title || selectedLocal.path)
+        var selectedNative = selectedLocal !== null && selectedLocal.workspaceKey !== undefined
+          && mapping.remote.some(function (entry) { return entry.workspaceKey === selectedLocal.workspaceKey })
         var picker = candidates.length === 0
           ? h('div', { className: 'dssync-mapempty' },
             h('b', null, '没有可用的本机工作区'),
@@ -955,6 +957,8 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'dssync-note warn' },
                   '绑定不可撤销：把 ' + (remote.label || shortMapKey(key))
                   + ' 永久绑定到「' + selectedTitle + '」？'),
+                selectedNative ? h('span', { className: 'dssync-note warn' },
+                  '这个本机工作区已有自己的本机身份 key；确认后会改绑到左侧远端 key。') : null,
                 h('button', {
                   className: 'dssync-pill', type: 'button', disabled: busy[key] === true,
                   onClick: function () { setConfirming(null) },
@@ -980,7 +984,9 @@ window.__ModuleLoader__.load({
                   disabled: selectedPath === '' || busy[key] === true,
                   onClick: function () { if (selectedPath !== '') setConfirming(key) },
                 }, '绑定…')),
-              h('div', { className: 'dssync-mapnote' }, '绑定不可改绑；未映射会话不会写入本机。'))
+              h('div', { className: 'dssync-mapnote' }, selectedNative
+                ? '所选工作区已有本机身份 key；绑定会把它改绑到这个远端 key。'
+                : '绑定不可改绑；未映射会话不会写入本机。'))
         rows.push(h('tr', { className: 'dssync-map-pair pending', key: 'pending:' + String(key) },
           h('td', null, picker),
           h('td', { className: 'relcell' }, workspaceRelation('pending')),
