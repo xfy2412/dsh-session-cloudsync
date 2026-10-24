@@ -37,7 +37,7 @@ import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } fr
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
 import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
 import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
-import type { SetupInfo, SyncSessionCandidate, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
+import type { SetupInfo, SyncConfigSnapshot, SyncSessionCandidate, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
 export const name = 'dsh-session-cloudsync'
@@ -395,6 +395,7 @@ export function apply(ctx: Context, config: Config): void {
   let workspaceLabels: Record<string, string> = {}
   let labelsIdentity: string | undefined
   let labelsFetchedAt = 0
+  let remoteInventory: { readonly identity: string; readonly at: number; readonly byKey: Map<string, string[]> } | undefined
   const refreshWorkspaceLabels = async (): Promise<void> => {
     if (statePath === undefined || bindingsDir === undefined) return
     if (engineConfig.token.trim() === '' || engineConfig.passphrase === '') return
@@ -422,6 +423,70 @@ export function apply(ctx: Context, config: Config): void {
       logger.warn(`dsh-session-cloudsync: 读取 Vault 工作区 label 失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
+  /**
+   * 读取远端会话清单，按 workspaceKey 聚合。只用于设置页/映射页展示，
+   * 不参与同步判定本身。
+   */
+  const readRemoteInventory = async (): Promise<Map<string, string[]>> => {
+    const base = serverUrl.trim().replace(/\/+$/u, '')
+    const token = engineConfig.token.trim()
+    if (base === '' || token === '') return new Map()
+    const identity = `${base}\u0000${token}`
+    if (remoteInventory !== undefined && remoteInventory.identity === identity && Date.now() - remoteInventory.at < 15_000) {
+      return remoteInventory.byKey
+    }
+    const byKey = new Map<string, string[]>()
+    try {
+      let since = 0
+      for (let page = 0; page < 50; page += 1) {
+        const response = await fetch(`${base}/v1/cursor?since=${since}&limit=200`, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(engineConfig.requestTimeoutMs ?? 10_000),
+        })
+        if (!response.ok) break
+        const body = await response.json() as {
+          readonly value?: {
+            readonly revision?: number
+            readonly sessions?: readonly { readonly sessionId?: string; readonly deletedAt?: number | null }[]
+            readonly hasMore?: boolean
+          }
+        }
+        const sessions = body.value?.sessions ?? []
+        for (const change of sessions) {
+          if (change.deletedAt !== null && change.deletedAt !== undefined) continue
+          const sessionId = change.sessionId
+          if (typeof sessionId !== 'string' || sessionId === '') continue
+          const manifestResponse = await fetch(`${base}/v1/sessions/${encodeURIComponent(sessionId)}/manifest`, {
+            headers: { authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(engineConfig.requestTimeoutMs ?? 10_000),
+          })
+          if (!manifestResponse.ok) continue
+          const manifestBody = await manifestResponse.json() as {
+            readonly value?: {
+              readonly manifest?: {
+                readonly workspaceKey?: unknown
+                readonly deletedAt?: unknown
+              }
+            }
+          }
+          const manifest = manifestBody.value?.manifest
+          if (manifest === undefined || typeof manifest.workspaceKey !== 'string' || manifest.workspaceKey === '') continue
+          if (manifest.deletedAt !== undefined) continue
+          const list = byKey.get(manifest.workspaceKey) ?? []
+          list.push(sessionId)
+          byKey.set(manifest.workspaceKey, list)
+        }
+        const revision = typeof body.value?.revision === 'number' ? body.value.revision : since
+        since = Math.max(since, revision)
+        if (body.value?.hasMore !== true || revision <= 0) break
+      }
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-cloudsync: 读取远端会话清单失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+    remoteInventory = { identity, at: Date.now(), byKey }
+    return byKey
+  }
+
   let vaultKeyCache: { readonly identity: string; readonly key: Buffer } | undefined
   const currentVaultKey = (): Buffer | undefined => {
     const identity = `${serverUrl}\u0000${engineConfig.passphrase}\u0000${engineConfig.salt ?? ''}`
@@ -698,7 +763,9 @@ export function apply(ctx: Context, config: Config): void {
       configured: state.configured,
       reason: state.reason ?? null,
       serverUrl,
+      serverUrlSource: envSyncServerUrl !== '' ? 'env' : 'settings',
       deviceName,
+      deviceNameSource: envSyncDeviceName !== '' ? 'env' : 'settings',
       syncSessionIds,
       autoBindSamePath,
       autoSync,
@@ -773,6 +840,7 @@ export function apply(ctx: Context, config: Config): void {
     await refreshBindings()
     await refreshSecrets()
     await refreshWorkspaceLabels()
+    const inventory = await readRemoteInventory()
     const snapshots = await ctx.sessionPersistence.list()
     const tree = buildSessionTree(snapshots)
     const sessions: SyncSessionCandidate[] = []
@@ -835,38 +903,50 @@ export function apply(ctx: Context, config: Config): void {
     for (const entry of controller.unmappedSessions()) {
       if (bindings.bindings[entry.workspaceKey] !== undefined) continue
       if (localWorkspacePathForKey(entry.workspaceKey) !== undefined) continue
-      unmapped.set(entry.workspaceKey, (unmapped.get(entry.workspaceKey) ?? 0) + 1)
+      unmapped.set(entry.workspaceKey, inventory.get(entry.workspaceKey)?.length ?? 1)
     }
     // 首启映射步骤通常发生在第一次同步之前；Vault 里已有 workspace/profile，
     // 用它补出远端工作区列表，避免“没有未映射工作区”的假象。
     for (const key of Object.keys(workspaceLabels)) {
       if (bindings.bindings[key] !== undefined) continue
       if (localWorkspacePathForKey(key) !== undefined) continue
-      if (!unmapped.has(key)) unmapped.set(key, 0)
+      if (!unmapped.has(key)) unmapped.set(key, inventory.get(key)?.length ?? 0)
+    }
+    for (const key of inventory.keys()) {
+      if (bindings.bindings[key] !== undefined) continue
+      if (localWorkspacePathForKey(key) !== undefined) continue
+      if (!unmapped.has(key)) unmapped.set(key, inventory.get(key)?.length ?? 0)
     }
 
-    const remote = new Map<string, { label?: string; sessions: number }>()
+    const remote = new Map<string, { label?: string; sessions: number; sessionIds?: readonly string[] }>()
     for (const binding of Object.values(bindings.bindings)) {
       const current = remote.get(binding.key)
+      const sessionIds = inventory.get(binding.key)
       remote.set(binding.key, {
         ...current?.label === undefined ? {} : { label: current.label },
         ...binding.label === '' ? {} : { label: binding.label },
-        sessions: current?.sessions ?? 0,
+        ...sessionIds === undefined ? {} : { sessionIds },
+        sessions: sessionIds?.length ?? current?.sessions ?? 0,
       })
     }
     for (const [key, label] of Object.entries(workspaceLabels)) {
+      if (bindings.bindings[key] === undefined && localWorkspacePathForKey(key) !== undefined) continue
       const current = remote.get(key)
+      const sessionIds = inventory.get(key)
       remote.set(key, {
         ...current?.label === undefined ? {} : { label: current.label },
         label,
-        sessions: current?.sessions ?? 0,
+        ...sessionIds === undefined ? {} : { sessionIds },
+        sessions: sessionIds?.length ?? current?.sessions ?? 0,
       })
     }
-    for (const entry of controller.unmappedSessions()) {
-      const current = remote.get(entry.workspaceKey)
-      remote.set(entry.workspaceKey, {
+    for (const [key, sessionIds] of inventory) {
+      if (bindings.bindings[key] === undefined && localWorkspacePathForKey(key) !== undefined) continue
+      const current = remote.get(key)
+      remote.set(key, {
         ...current?.label === undefined ? {} : { label: current.label },
-        sessions: (current?.sessions ?? 0) + 1,
+        sessionIds,
+        sessions: sessionIds.length,
       })
     }
 
@@ -892,6 +972,7 @@ export function apply(ctx: Context, config: Config): void {
           workspaceKey,
           sessions: value.sessions,
           ...value.label === undefined ? {} : { label: value.label },
+          ...value.sessionIds === undefined ? {} : { sessionIds: value.sessionIds },
         }))
         .sort((left, right) => (left.label ?? left.workspaceKey).localeCompare(right.label ?? right.workspaceKey)),
     }
@@ -918,6 +999,21 @@ export function apply(ctx: Context, config: Config): void {
 
   const control: SyncControl = {
     status: () => controller.snapshot(),
+    config: async (): Promise<SyncConfigSnapshot> => {
+      const setupInfo = await setup()
+      const workspaceList = await workspaces()
+      return {
+        schemaVersion: 2,
+        generatedAt: Date.now(),
+        setup: setupInfo,
+        status: controller.snapshot(),
+        workspaces: workspaceList,
+        selection: {
+          uploadRootIds: syncSessionIds,
+          pull: { mode: 'bound-workspaces' },
+        },
+      }
+    },
     events: async (request: Request) => createEventStreamResponse(request, {
       status: () => controller.snapshot(),
       subscribe: (listener) => controller.subscribe(listener),

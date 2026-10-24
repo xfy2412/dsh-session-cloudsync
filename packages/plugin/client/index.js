@@ -36,6 +36,10 @@ window.__ModuleLoader__.load({
       '.dssync{--dssync-accent:#5686fe;--dssync-accent-soft:rgba(86,134,254,.14);--dssync-line:var(--dsw-alias-border-l2,rgba(127,127,127,.24));--dssync-line-strong:var(--dsw-alias-border-l4,rgba(127,127,127,.42));--dssync-text:var(--dsw-alias-label-primary,inherit);--dssync-muted:var(--dsw-alias-label-secondary,rgba(220,220,230,.7));--dssync-faint:var(--dsw-alias-label-tertiary,rgba(220,220,230,.46));color:var(--dssync-text);font-size:14px;line-height:1.55}',
       '.dssync *{box-sizing:border-box}',
       '.dssync-page{display:flex;flex-direction:column;gap:22px;padding:4px 0 28px}',
+      '.dssync-savebar{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:10px;padding:10px 0;background:var(--dsw-alias-bg-primary,#151a20);border-bottom:1px solid var(--dssync-line)}',
+      '.dssync-savebar .spacer{flex:1 1 auto}',
+      '.dssync-savebar .dirty{color:var(--dsw-alias-state-warn-primary,#f0b64a);font-size:12px}',
+      '.dssync-savebar .clean{color:var(--dssync-faint);font-size:12px}',
       '.dssync-sec{display:flex;flex-direction:column;gap:12px;padding:0 0 20px;border-bottom:1px solid var(--dssync-line)}',
       '.dssync-sec:last-child{border-bottom:0;padding-bottom:0}',
       '.dssync-sechead{display:flex;align-items:baseline;gap:10px}',
@@ -293,7 +297,7 @@ window.__ModuleLoader__.load({
 
     function createModel() {
       var snapshot = {
-        loading: true, setup: null, status: null, workspaces: null,
+        loading: true, setup: null, status: null, workspaces: null, config: null,
         error: null, toast: null, replacePlan: null,
       }
       var listeners = new Set()
@@ -490,37 +494,64 @@ window.__ModuleLoader__.load({
         refreshStatus()
       }
 
-      async function refreshSetup() {
+      async function refreshConfig() {
         try {
-          var setup = await fetchJson('/setup')
-          patch({ setup: setup })
-          return setup
+          var config = await fetchJson('/config')
+          if (config && config.status) acceptStatus(config.status)
+          patch({
+            config: config,
+            setup: config ? config.setup : snapshot.setup,
+            workspaces: config ? config.workspaces : snapshot.workspaces,
+            loading: false,
+          })
+          return config
         } catch (error) {
-          patch({ error: errorText(error) })
-          return null
+          // 旧版 host 还没有 /config：退回旧端点，避免升级期间整页失效。
+          try {
+            var values = await Promise.all([fetchJson('/setup'), fetchJson('/status')])
+            var fallback = { setup: values[0], status: values[1], workspaces: null }
+            acceptStatus(values[1])
+            try { fallback.workspaces = await fetchJson('/workspaces') } catch (_) { /* 允许暂不可用 */ }
+            patch({
+              config: null,
+              setup: fallback.setup,
+              workspaces: fallback.workspaces,
+              loading: false,
+            })
+            return fallback
+          } catch (fallbackError) {
+            patch({ loading: false, error: errorText(fallbackError) })
+            return null
+          }
+        } finally {
+          // refreshAll 以前会顺带调用 refreshStatus；改成 /config 后必须显式
+          // 重新排期，否则初始状态不会再打开 SSE / 轮询。
+          schedule()
         }
       }
 
+      async function refreshSetup() {
+        var config = await refreshConfig()
+        return config ? config.setup : null
+      }
+
       async function refreshWorkspaces() {
-        try {
-          var workspaces = await fetchJson('/workspaces')
-          patch({ workspaces: workspaces })
-          return workspaces
-        } catch (error) {
-          patch({ error: errorText(error) })
-          return null
-        }
+        var config = await refreshConfig()
+        return config ? config.workspaces : null
       }
 
       function refreshAll() {
         if (inflight !== null) return inflight
-        inflight = Promise.all([refreshStatus(), refreshSetup()]).then(function (values) {
+        // /config 可能包含远端清单，不能让它挡住第一帧状态；先拿便宜的
+        // /status 打开 SSE/轮询，再等聚合快照。
+        if (snapshot.status === null) void refreshStatus()
+        inflight = refreshConfig().then(function (config) {
           inflight = null
-          return values
+          return config
         }, function (error) {
           inflight = null
           patch({ error: errorText(error) })
-          return []
+          return null
         })
         return inflight
       }
@@ -606,6 +637,7 @@ window.__ModuleLoader__.load({
         getSnapshot: getSnapshot,
         subscribe: subscribe,
         refreshAll: refreshAll,
+        refreshConfig: refreshConfig,
         refreshStatus: refreshStatus,
         onVisibilityChange: onVisibilityChange,
         refreshSetup: refreshSetup,
@@ -1063,6 +1095,9 @@ window.__ModuleLoader__.load({
       var messageState = useState(null)
       var message = messageState[0]
       var setMessage = messageState[1]
+      var dirtyState = useState(false)
+      var dirty = dirtyState[0]
+      var setDirty = dirtyState[1]
       var lastRevision = useRef(revision)
       var loadedWorkspaces = useRef(false)
 
@@ -1077,10 +1112,12 @@ window.__ModuleLoader__.load({
         if (revision !== lastRevision.current) {
           lastRevision.current = revision
           setFields(fieldsFrom(formState && formState.value, state.setup))
+          setDirty(false)
         }
       }, [revision])
 
       function set(key, value) {
+        setDirty(true)
         setFields(function (previous) {
           var next = Object.assign({}, previous)
           next[key] = value
@@ -1089,6 +1126,7 @@ window.__ModuleLoader__.load({
       }
 
       function toggleSession(sessionId) {
+        setDirty(true)
         setFields(function (previous) {
           var list = previous.syncSessionIds.slice()
           var index = list.indexOf(sessionId)
@@ -1104,8 +1142,8 @@ window.__ModuleLoader__.load({
           return false
         }
         var ops = [
-          { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
-          { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
+          ...serverLocked ? [] : [{ op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() }],
+          ...deviceLocked ? [] : [{ op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() }],
           { op: 'set', path: ['syncSessionIds'], value: fields.syncSessionIds.slice() },
           { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
@@ -1136,6 +1174,7 @@ window.__ModuleLoader__.load({
         try {
           if (!await persistFields()) return
           await model.refreshAll()
+          setDirty(false)
           setMessage({ bad: false, text: '设置已保存' })
           model.toast('设置已保存')
         } catch (error) {
@@ -1211,22 +1250,38 @@ window.__ModuleLoader__.load({
       var tokenConfigured = setupInfo ? setupInfo.hasToken : false
       var passConfigured = setupInfo ? setupInfo.hasPassphrase : false
       var disabled = busy !== '' || formState.status !== 'ready' || !formState.writable
+      var serverLocked = setupInfo !== null && setupInfo.serverUrlSource === 'env'
+      var deviceLocked = setupInfo !== null && setupInfo.deviceNameSource === 'env'
+      var tokenLocked = setupInfo !== null && setupInfo.tokenSource === 'env'
+      var passLocked = setupInfo !== null && setupInfo.passphraseSource === 'env'
+      var savebar = h('div', { className: 'dssync-savebar' },
+        h('span', { className: dirty ? 'dirty' : 'clean' },
+          busy === 'save' ? '正在保存…' : dirty ? '有未保存修改' : '非敏感配置已保存'),
+        h('span', { className: 'spacer' }),
+        h('button', {
+          className: 'dssync-pill primary', type: 'button',
+          disabled: disabled || busy === 'save' || !dirty,
+          onClick: save,
+        }, busy === 'save' ? '保存中…' : '保存配置'))
 
       return h('div', { className: 'dssync dssync-page' },
+        savebar,
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
             h('h3', null, '连接'),
             h('span', null, '自部署服务端')),
           h('div', { className: 'dssync-grid' },
-            h(Field, { id: 'dssync-server', label: '服务端地址', hint: '填写后测试服务端与 token。' },
+            h(Field, { id: 'dssync-server', label: '服务端地址', hint: serverLocked ? '由环境变量设置，设置页不可修改。' : '填写后测试服务端与 token。' },
               h('input', {
                 id: 'dssync-server', value: fields.serverUrl, spellCheck: false,
+                disabled: serverLocked,
                 placeholder: 'http://127.0.0.1:8787',
                 onChange: function (event) { set('serverUrl', event.target.value) },
               })),
-            h(Field, { id: 'dssync-device', label: '设备名称', hint: '用于日志与设备台账。' },
+            h(Field, { id: 'dssync-device', label: '设备名称', hint: deviceLocked ? '由环境变量设置，设置页不可修改。' : '用于日志与设备台账。' },
               h('input', {
                 id: 'dssync-device', value: fields.deviceName,
+                disabled: deviceLocked,
                 onChange: function (event) { set('deviceName', event.target.value) },
               }))),
           h('div', { className: 'dssync-btnrow' },
@@ -1239,25 +1294,27 @@ window.__ModuleLoader__.load({
             h('h3', null, '凭据'),
             h('span', null, '保存到 DSH 凭据库，不写进普通配置')),
           h('div', { className: 'dssync-grid' },
-            h(Field, { id: 'dssync-token', label: '设备 token', hint: tokenConfigured ? '已配置；留空保持不变。' : '由服务端管理台或 CLI 签发。' },
+            h(Field, { id: 'dssync-token', label: '设备 token', hint: tokenLocked ? '由环境变量设置，设置页不可修改。' : tokenConfigured ? '已配置；留空保持不变。' : '由服务端管理台或 CLI 签发。' },
               h('input', {
                 id: 'dssync-token', type: 'password', value: token, autoComplete: 'off',
+                disabled: tokenLocked,
                 placeholder: tokenConfigured ? '已配置；留空保持不变' : '粘贴 token',
-                onChange: function (event) { setToken(event.target.value) },
+                onChange: function (event) { setDirty(true); setToken(event.target.value) },
               })),
-            h(Field, { id: 'dssync-pass', label: '同步口令', hint: passConfigured ? '已配置；留空保持不变。所有设备必须使用同一口令。' : '用于派生端到端加密密钥；所有设备必须一致。' },
+            h(Field, { id: 'dssync-pass', label: '同步口令', hint: passLocked ? '由环境变量设置，设置页不可修改。' : passConfigured ? '已配置；留空保持不变。所有设备必须使用同一口令。' : '用于派生端到端加密密钥；所有设备必须一致。' },
               h('input', {
                 id: 'dssync-pass', type: 'password', value: passphrase, autoComplete: 'new-password',
+                disabled: passLocked,
                 placeholder: passConfigured ? '已配置；留空保持不变' : '设置同步口令',
-                onChange: function (event) { setPassphrase(event.target.value) },
+                onChange: function (event) { setDirty(true); setPassphrase(event.target.value) },
               }))),
           h('div', { className: 'dssync-note' }, '同步口令必须与其它设备一致；加解密参数还取决于服务端地址，建议各设备填写同一个规范地址（如 http://127.0.0.1:8787），不要混用 localhost/127.0.0.1 或省略 //。口令或地址不同都会导致加解密参数不符、无法解密。'),
           h('div', { className: 'dssync-note' }, '口令丢失后，云端内容无法解密。凭据引用：' + CREDENTIAL_REFS.token + ' / ' + CREDENTIAL_REFS.passphrase)),
 
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
-            h('h3', null, '同步范围'),
-            h('span', null, '按根会话选择；子代理跟随')),
+            h('h3', null, '上传范围'),
+            h('span', null, '仅本地根会话；拉取由工作区绑定决定')),
           h('div', { className: 'dssync-btnrow' },
             h('button', {
               className: 'dssync-pill', type: 'button', disabled: disabled || sessions.length === 0,
@@ -1291,7 +1348,7 @@ window.__ModuleLoader__.load({
                       h('span', { className: 'dssync-session-status' + (checked ? '' : ' off') }, checked ? '同步' : '未选中')))
                 }))
             })),
-          h('div', { className: 'dssync-note' }, '默认不选中任何会话；选择只在本设备生效，取消勾选不会删除远端历史。')),
+          h('div', { className: 'dssync-note' }, '默认不选中任何会话；勾选只决定本机上传，不决定拉取。绑定工作区后会自动拉取该工作区的远端会话，取消勾选不会删除远端历史。')),
 
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
@@ -1345,10 +1402,8 @@ window.__ModuleLoader__.load({
             h(Switch, { checked: fields.includeSubagents, disabled: disabled, label: '同步子代理会话', onChange: function (value) { set('includeSubagents', value) } }))),
 
         h('div', { className: 'dssync-btnrow' },
-          h('button', { className: 'dssync-pill primary', type: 'button', disabled: disabled || busy === 'save', onClick: save }, busy === 'save' ? '保存中…' : '保存'),
           h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || busy === 'sync', onClick: syncNow }, busy === 'sync' ? '同步中…' : '立即同步'),
           h('span', { className: 'spacer' }),
-          setupInfo && setupInfo.lastSuccess ? null : null,
           message ? h('span', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null),
         h(Toast, { model: model }))
     }
@@ -1630,7 +1685,7 @@ window.__ModuleLoader__.load({
                       h('span', { className: 'dssync-session-status' + (checked ? '' : ' off') }, checked ? '同步' : '未选中')))
                 }))
             })),
-          h('div', { className: 'dssync-note' }, '默认不选中任何会话；选择只在本设备生效；子代理跟随根会话。'),
+          h('div', { className: 'dssync-note' }, '默认不选中任何会话；勾选只决定本机上传；绑定工作区后会自动拉取该工作区的远端会话。'),
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else if (step === 3) {

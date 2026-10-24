@@ -75,6 +75,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
 
   assert.deepEqual(connection.routes.map((route) => route.path), [
     '/api/session-cloudsync/status',
+    '/api/session-cloudsync/config',
     '/api/session-cloudsync/events',
     '/api/session-cloudsync/setup',
     '/api/session-cloudsync/workspaces',
@@ -91,14 +92,14 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
   assert.equal(statusBody.value.configured, false)
   assert.equal(statusBody.value.reason, 'serverUrl 未配置')
 
-  const events = await connection.routes[1].fetch(new Request('http://host/api/session-cloudsync/events?until=idle'))
+  const events = await connection.routes[2].fetch(new Request('http://host/api/session-cloudsync/events?until=idle'))
   assert.match(events.headers.get('content-type') ?? '', /^text\/event-stream/)
   const reader = events.body.getReader()
   const first = await reader.read()
   assert.match(new TextDecoder().decode(first.value), /"schemaVersion":2/)
   await reader.cancel()
 
-  const sync = await connection.routes[5].fetch(new Request('http://host/api/session-cloudsync/sync', { method: 'POST' }))
+  const sync = await connection.routes[6].fetch(new Request('http://host/api/session-cloudsync/sync', { method: 'POST' }))
   const syncBody = JSON.parse(await sync.text())
   assert.equal(syncBody.value.ok, false)
   assert.equal(syncBody.value.code, 'unconfigured')
@@ -190,7 +191,7 @@ test('应用接线：Schemastery volatile 引用按 .get() 读取', async () => 
     batchBytes: ref(1024),
   })
 
-  const setup = await connection.routes[2].fetch(new Request('http://host/api/session-cloudsync/setup'))
+  const setup = await connection.routes[3].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await setup.text())
   assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
   assert.equal(body.value.deviceName, 'dev-box')
@@ -220,12 +221,12 @@ test('应用接线：volatile 引用原地更新后 setup/status 立即读到新
     batchBytes: 1024,
   })
 
-  const first = await connection.routes[2].fetch(new Request('http://host/api/session-cloudsync/setup'))
+  const first = await connection.routes[3].fetch(new Request('http://host/api/session-cloudsync/setup'))
   assert.equal((JSON.parse(await first.text())).value.reason, 'serverUrl 未配置')
 
   values.serverUrl = 'http://127.0.0.1:8787'
   values.sync = ['session-a']
-  const second = await connection.routes[2].fetch(new Request('http://host/api/session-cloudsync/setup'))
+  const second = await connection.routes[3].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await second.text())
   assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
   assert.equal(body.value.configured, true)
@@ -243,7 +244,7 @@ test('应用接线：设置信息不回传 token/passphrase', async () => {
     autoSync: false,
   })
 
-  const response = await connection.routes[2].fetch(new Request('http://host/api/session-cloudsync/setup'))
+  const response = await connection.routes[3].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await response.text())
   assert.equal(body.value.serverUrl, 'http://127.0.0.1:8787')
   assert.equal(body.value.hasToken, true)
@@ -297,7 +298,7 @@ test('应用接线：workspaces 汇总工作区、根会话与子代理计数', 
     autoSync: false,
   })
 
-  const response = await connection.routes[3].fetch(new Request('http://host/api/session-cloudsync/workspaces'))
+  const response = await connection.routes[4].fetch(new Request('http://host/api/session-cloudsync/workspaces'))
   const body = JSON.parse(await response.text())
   assert.deepEqual(body.value.syncSessionIds, [])
   assert.deepEqual(body.value.sessions, [{
@@ -339,7 +340,7 @@ test('应用接线：token/passphrase 优先取 DSH 凭据库', async () => {
     autoSync: false,
   })
 
-  const response = await connection.routes[2].fetch(new Request('http://host/api/session-cloudsync/setup'))
+  const response = await connection.routes[3].fetch(new Request('http://host/api/session-cloudsync/setup'))
   const body = JSON.parse(await response.text())
   assert.equal(body.value.hasToken, true)
   assert.equal(body.value.hasPassphrase, true)

@@ -216,9 +216,13 @@ export interface SetupInfo {
   readonly reason: string | null
   /** 自部署服务端地址。 */
   readonly serverUrl: string
+  /** 服务端地址来源：环境变量或普通配置。 */
+  readonly serverUrlSource: 'env' | 'settings'
   /** 本设备短标签。 */
   readonly deviceName: string
-  /** 显式选中的根会话 id；空数组表示不选任何会话。 */
+  /** 设备名称来源：环境变量或普通配置。 */
+  readonly deviceNameSource: 'env' | 'settings'
+  /** 显式选中的根会话 id（仅上传）；空数组 = 不上传任何会话。 */
   readonly syncSessionIds: readonly string[]
   /** 是否自动绑定同路径远端工作区。 */
   readonly autoBindSamePath: boolean
@@ -289,6 +293,8 @@ export interface SyncRemoteWorkspace {
   readonly workspaceKey: string | null
   /** 远端 workspace/profile 的 label（若有）。 */
   readonly label?: string
+  /** 远端 manifest 中的根会话 id。 */
+  readonly sessionIds?: readonly string[]
   /** 最近一次拉取里属于这个 key 的未映射会话数。 */
   readonly sessions: number
 }
@@ -307,4 +313,19 @@ export interface SyncWorkspaceList {
   readonly unmapped: readonly SyncUnmappedWorkspace[]
   /** 已绑定/已出现在 Vault/最近未映射里的全部远端工作区。 */
   readonly remoteWorkspaces: readonly SyncRemoteWorkspace[]
+}
+
+/** 所有页面共用的单一配置/状态快照。 */
+export interface SyncConfigSnapshot {
+  readonly schemaVersion: 2
+  readonly generatedAt: number
+  readonly setup: SetupInfo
+  readonly status: SyncStatus
+  readonly workspaces: SyncWorkspaceList
+  readonly selection: {
+    /** 上传白名单；默认空。 */
+    readonly uploadRootIds: readonly string[]
+    /** 拉取范围：绑定工作区即可拉取，不读上传白名单。 */
+    readonly pull: { readonly mode: 'bound-workspaces' }
+  }
 }

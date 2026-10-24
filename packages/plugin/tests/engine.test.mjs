@@ -256,15 +256,15 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       assert.equal(unmapped.sessions[0].status, 'unmapped')
       assert.equal(unmappedStore.sessions.has(sessionId), false)
 
-      const excludedStore = fakeStore(undefined)
-      const excluded = await pullOnce({
-        persistence: excludedStore,
+      const pulledStore = fakeStore(undefined)
+      const pulled = await pullOnce({
+        persistence: pulledStore,
         sessions,
         config: { ...config, syncSessionIds: [] },
         workspacePathOf: () => 'D:/mapped',
       })
-      assert.equal(excluded.sessions[0].status, 'excluded')
-      assert.equal(excludedStore.sessions.has(sessionId), false)
+      assert.equal(pulled.sessions[0].status, 'pulled')
+      assert.equal(pulledStore.sessions.has(sessionId), true)
     } finally {
       await close()
       db.close()

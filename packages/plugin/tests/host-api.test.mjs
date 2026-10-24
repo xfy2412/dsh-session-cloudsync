@@ -24,6 +24,7 @@ function control(overrides = {}) {
       revision: 3,
       sessions: [],
     },
+    config: overrides.config ?? (async () => ({ schemaVersion: 2, generatedAt: 1, selection: { uploadRootIds: [], pull: { mode: 'bound-workspaces' } } })),
     events: overrides.events ?? (async () => new Response('event: status\ndata: {}\n\n', {
       headers: { 'content-type': 'text/event-stream' },
     })),
@@ -99,10 +100,11 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/events/setup/workspaces/test/sync/cwd/blocked/replace/bind 十条精确路由', () => {
+test('宿主 API：注册 status/config/events/setup/workspaces/test/sync/cwd/blocked/replace/bind 十一条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-cloudsync/status', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/config', ['GET'], 'buffered'],
     ['/api/session-cloudsync/events', ['GET'], 'buffered'],
     ['/api/session-cloudsync/setup', ['GET'], 'buffered'],
     ['/api/session-cloudsync/workspaces', ['GET'], 'buffered'],
@@ -113,6 +115,17 @@ test('宿主 API：注册 status/events/setup/workspaces/test/sync/cwd/blocked/r
     ['/api/session-cloudsync/replace', ['POST'], 'buffered'],
     ['/api/session-cloudsync/workspaces/bind', ['POST'], 'buffered'],
   ])
+})
+
+test('宿主 API：config 返回单一快照', async () => {
+  const routes = createHostApi(control())
+  const response = await route(routes, '/api/session-cloudsync/config').fetch(
+    new Request('http://host/api/session-cloudsync/config'),
+  )
+  assert.equal(response.status, 200)
+  const body = await bodyOf(response)
+  assert.equal(body.value.schemaVersion, 2)
+  assert.deepEqual(body.value.selection, { uploadRootIds: [], pull: { mode: 'bound-workspaces' } })
 })
 
 test('宿主 API：status 返回快照且禁止缓存', async () => {

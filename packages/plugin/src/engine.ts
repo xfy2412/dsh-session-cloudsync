@@ -956,11 +956,6 @@ function sessionSelection(config: EngineConfig): {
   return { all: false, selected: new Set(config.syncSessionIds) }
 }
 
-/** 一个根会话是否在同步选择内。 */
-function selectedRoot(selection: ReturnType<typeof sessionSelection>, rootId: string): boolean {
-  return selection.all || selection.selected?.has(rootId) === true
-}
-
 /**
  * 执行一次推送；单个会话失败不影响其他会话。
  * @param deps - 引擎依赖。
@@ -1575,7 +1570,6 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       revision: state.revision,
     }
   }
-  const selection = sessionSelection(config)
   if (deps.workspacePathOf === undefined) {
     return { configured: false, reason: 'workspace 绑定未初始化', sessions: [], revision: state.revision }
   }
@@ -1621,11 +1615,6 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   if (state.pending !== undefined) {
     try {
       const loaded = await loadRemoteHeader(fetchImpl, base, config.token, master, state.pending.sessionId)
-      const rootId = await resolveRootSessionId(loaded, fetchImpl, base, config.token, master, () => undefined)
-      if (!selectedRoot(selection, rootId)) {
-        reports.push({ sessionId: state.pending.sessionId, status: 'excluded' })
-        return { configured: true, sessions: reports, revision: state.revision }
-      }
       const workspaceKey = await resolveWorkspaceKey(loaded, fetchImpl, base, config.token, master, () => undefined)
       const workspacePath = resolvePath(workspaceKey)
       if (workspacePath === undefined) {
@@ -1679,19 +1668,6 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', progress: 0 })
       applyStarted = undefined
       try {
-        const rootId = await resolveRootSessionId(
-          item.loaded,
-          fetchImpl,
-          base,
-          config.token,
-          master,
-          (sessionId) => preparedById.get(sessionId),
-        )
-        if (!selectedRoot(selection, rootId)) {
-          reports.push({ sessionId: item.sessionId, status: 'excluded' })
-          notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'done', progress: 1 })
-          continue
-        }
         const workspaceKey = await resolveWorkspaceKey(
           item.loaded,
           fetchImpl,
