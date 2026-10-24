@@ -561,12 +561,12 @@ window.__ModuleLoader__.load({
       }
 
       async function prepareReplace(sessionId) {
-        var result = await fetchJson('/replace', {
+        var plan = await fetchJson('/replace', {
           method: 'POST',
           body: JSON.stringify({ sessionId: sessionId }),
         })
-        if (result && result.ok === true) patch({ replacePlan: result.value })
-        return result
+        patch({ replacePlan: plan })
+        return { ok: true, value: plan }
       }
 
       function dismissReplace() {
