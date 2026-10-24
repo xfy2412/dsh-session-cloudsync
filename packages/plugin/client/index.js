@@ -668,6 +668,23 @@ window.__ModuleLoader__.load({
         : '全局同步租约丢失；本机暂停上传并重试'
     }
 
+    /** 取短会话 id，和同步气泡保持一致。 */
+    function shortDisplaySessionId(sessionId) {
+      var value = String(sessionId || '')
+      if (value.indexOf('session-') === 0) value = value.slice('session-'.length)
+      return value.length > 12 ? value.slice(0, 12) + '…' : value
+    }
+
+    /** 与同步气泡相同：从 DSH 客户端会话列表取标题，取不到时显示未命名。 */
+    function displaySessionTitle(titleOf, sessionId) {
+      try {
+        var title = titleOf ? String(titleOf(sessionId) || '') : ''
+        return title.trim() === '' ? '未命名会话' : title
+      } catch (error) {
+        return '未命名会话'
+      }
+    }
+
     /** 取一个会话的聚合视图。 */
     function findSession(status, sessionId) {
       if (status === null || !Array.isArray(status.sessions)) return null
@@ -1267,8 +1284,8 @@ window.__ModuleLoader__.load({
                     h('input', { type: 'checkbox', checked: !excluded, onChange: function () { toggleSession(session.sessionId) } }),
                     h('span', { className: 'dssync-session-check' }, '✓'),
                     h('span', { className: 'dssync-session-main' },
-                      h('b', null, session.sessionId),
-                      h('span', null, new Date(session.createdAt).toLocaleString())),
+                      h('b', { title: session.sessionId }, displaySessionTitle(props.titleOf, session.sessionId)),
+                      h('span', null, shortDisplaySessionId(session.sessionId) + ' · ' + new Date(session.createdAt).toLocaleString())),
                     h('span', { className: 'dssync-session-meta' },
                       h('span', null, session.subagentSessions + ' 个子代理'),
                       h('span', { className: 'dssync-session-status' + (excluded ? ' off' : '') }, excluded ? '已排除' : '同步')))
@@ -1606,8 +1623,8 @@ window.__ModuleLoader__.load({
                   return h('label', { className: 'dssync-session' + (excluded ? ' off' : ''), key: session.sessionId },
                     h('input', { type: 'checkbox', checked: !excluded, onChange: function () { toggleSession(session.sessionId) } }),
                     h('span', { className: 'dssync-session-main' },
-                      h('b', null, session.sessionId),
-                      h('span', null, new Date(session.createdAt).toLocaleString())),
+                      h('b', { title: session.sessionId }, displaySessionTitle(props.titleOf, session.sessionId)),
+                      h('span', null, shortDisplaySessionId(session.sessionId) + ' · ' + new Date(session.createdAt).toLocaleString())),
                     h('span', { className: 'dssync-session-meta' },
                       h('span', null, session.subagentSessions + ' 个子代理'),
                       h('span', { className: 'dssync-session-status' + (excluded ? ' off' : '') }, excluded ? '已排除' : '同步')))
@@ -2373,6 +2390,7 @@ window.__ModuleLoader__.load({
               setCredential: setCredential,
               writeSettings: writeSettings,
               openSettings: openSettings,
+              titleOf: sessionTitleOf,
             }
           },
         }, SyncSettingsPage)
@@ -2381,7 +2399,7 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('shell.overlay', function* () {
         yield ctx.slots.register({
           name: 'shell.overlay', id: 'dsh-session-cloudsync-onboarding', order: 20,
-          inject: function () { return { model: model, setCredential: setCredential, writeSettings: writeSettings } },
+          inject: function () { return { model: model, setCredential: setCredential, writeSettings: writeSettings, titleOf: sessionTitleOf } },
         }, Onboarding)
         yield ctx.slots.register({
           name: 'shell.overlay', id: 'dsh-session-cloudsync-bubble', order: 30,
