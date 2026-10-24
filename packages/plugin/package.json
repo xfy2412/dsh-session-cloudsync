@@ -1,12 +1,33 @@
 {
   "name": "dsh-session-cloudsync",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.0.1",
+  "private": false,
   "type": "module",
   "description": "DSH 会话云同步插件：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。",
   "license": "MIT",
   "icon": "assets/icon.svg",
   "main": "lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xfy2412/dsh-session-cloudsync.git",
+    "directory": "packages/plugin"
+  },
+  "homepage": "https://github.com/xfy2412/dsh-session-cloudsync#readme",
+  "bugs": {
+    "url": "https://github.com/xfy2412/dsh-session-cloudsync/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "session",
+    "sync",
+    "e2ee"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./client/index.js",

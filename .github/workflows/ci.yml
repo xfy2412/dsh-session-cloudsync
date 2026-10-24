@@ -1,0 +1,32 @@
+# Verification for every push and pull request.  The publish workflow runs the
+# same gates before it is allowed to touch the npm registry.
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      # The npm package contains generated lib/ and the client bundle.  Build
+      # and inspect the exact tarball here, not only in the publish workflow.
+      - run: node packages/plugin/scripts/build.mjs
+      - run: node --check packages/plugin/client/index.js
+      - run: npm pack --dry-run
+        working-directory: packages/plugin

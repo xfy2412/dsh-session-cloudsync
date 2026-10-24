@@ -1,0 +1,68 @@
+# Release via npm trusted publishing (GitHub OIDC): push a `v*` tag, or run
+# this workflow by hand.  No long-lived NPM_TOKEN is stored in the repository.
+#
+# First release only (the package name must exist before npm can attach a
+# trusted publisher):
+#
+#   cd packages/plugin
+#   npm login
+#   npm publish
+#   npm trust github dsh-session-cloudsync \
+#     --repo xfy2412/dsh-session-cloudsync --file publish.yml --allow-publish
+#
+# Later releases: bump packages/plugin/package.json, commit, tag `v<version>`,
+# and push the tag.  `npm publish` performs the OIDC exchange because npm
+# 11.5.1+ supports it; do not replace it with `pnpm publish` here.
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for the npm OIDC exchange.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      # A tag-triggered run must name the version it publishes, so a stray tag
+      # cannot ship the plugin under a different version number.
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="v$(node -p 'require("./packages/plugin/package.json").version')"
+          if [ "$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package version ${version}" >&2
+            exit 1
+          fi
+      # Re-running a tag (or publishing the version that bootstrapped the name)
+      # must not fail because the registry already has it.
+      - id: published
+        working-directory: packages/plugin
+        run: |
+          name="$(node -p 'require("./package.json").name')"
+          version="$(node -p 'require("./package.json").version')"
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "${name}@${version} is already on the registry; nothing to publish."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      # `prepack` builds lib/ from src/; npm publishes the tarball, not the repo.
+      - if: steps.published.outputs.skip != 'true'
+        working-directory: packages/plugin
+        run: npm publish
