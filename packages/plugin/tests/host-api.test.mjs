@@ -64,6 +64,7 @@ function control(overrides = {}) {
       excludedSessionIds: ['session-a'],
       bindings: [],
       unmapped: [],
+      remoteWorkspaces: [],
     })),
     test: overrides.test ?? (async () => ({ ok: true })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
@@ -82,6 +83,7 @@ function control(overrides = {}) {
       excludedSessionIds: [],
       bindings: [],
       unmapped: [],
+      remoteWorkspaces: [],
     })),
   }
 }

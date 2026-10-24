@@ -100,6 +100,34 @@ window.__ModuleLoader__.load({
       '.dssync-maprow.suggested{border-color:rgba(240,182,74,.28);background:rgba(240,182,74,.035)}',
       '.dssync-mapconfirm{display:flex;align-items:center;gap:8px;flex:1 1 100%;flex-wrap:wrap;padding-top:7px;border-top:1px dashed var(--dssync-line)}',
       '.dssync-mapconfirm .dssync-note{flex:1 1 220px}',
+      '.dssync-mappanel{display:flex;flex-direction:column;gap:10px}',
+      '.dssync-mapstats{display:flex;flex-wrap:wrap;gap:7px}',
+      '.dssync-mapstat{padding:3px 8px;border:1px solid var(--dssync-line);border-radius:999px;background:rgba(255,255,255,.025);color:var(--dssync-faint);font-size:10.5px}',
+      '.dssync-mapstat b{color:var(--dssync-text);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}',
+      '.dssync-maptablewrap{overflow-x:auto;border:1px solid var(--dssync-line);border-radius:11px}',
+      '.dssync-maptable{width:100%;border-collapse:collapse;table-layout:fixed}',
+      '.dssync-maptable th{padding:8px 11px;border-bottom:1px solid var(--dssync-line);background:rgba(255,255,255,.025);color:var(--dssync-faint);font-size:10px;font-weight:500;text-align:left;white-space:nowrap}',
+      '.dssync-maptable td{padding:10px 11px;border-bottom:1px solid rgba(255,255,255,.055);vertical-align:top;font-size:11px}',
+      '.dssync-maptable tr:last-child td{border-bottom:0}',
+      '.dssync-maptable col.local{width:41%}',
+      '.dssync-maptable col.rel{width:92px}',
+      '.dssync-maptable .relcell{text-align:center}',
+      '.dssync-maplocal b,.dssync-mapremote b{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dssync-text);font-size:12px;font-weight:550}',
+      '.dssync-mappath,.dssync-mapkeytext{margin-top:2px;color:var(--dssync-faint);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}',
+      '.dssync-mapremote-meta{margin-top:3px;color:var(--dssync-faint);font-size:10px}',
+      '.dssync-mapnote{margin-top:4px;color:var(--dssync-faint);font-size:10px;line-height:1.45}',
+      '.dssync-rel{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:999px;font-size:10px;white-space:nowrap;border:1px solid var(--dssync-line)}',
+      '.dssync-rel.bound{color:#9ce8bc;background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.22)}',
+      '.dssync-rel.native{color:#b9ccff;background:var(--dssync-accent-soft);border-color:rgba(86,134,254,.24)}',
+      '.dssync-rel.local{color:var(--dssync-muted);background:rgba(255,255,255,.04)}',
+      '.dssync-rel.pending{color:#f4cd82;background:rgba(240,182,74,.12);border-color:rgba(240,182,74,.24)}',
+      '.dssync-mappick{display:flex;flex-direction:column;gap:6px}',
+      '.dssync-mappick-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.dssync-mappick select{flex:1 1 170px;min-width:0;height:29px;border:1px solid var(--dssync-line-strong);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#1d1d1f);color:inherit;font:inherit;font-size:11px}',
+      '.dssync-mapempty{padding:16px;border:1px dashed var(--dssync-line);border-radius:10px;color:var(--dssync-faint);font-size:11.5px;line-height:1.55;text-align:center}',
+      '.dssync-mapempty b{display:block;margin-bottom:3px;color:var(--dssync-muted);font-size:12.5px;font-weight:550}',
+      '.dssync-mapempty .dssync-pill{margin-top:9px}',
+      '@media(max-width:640px){.dssync-mappath,.dssync-mapkeytext{overflow-wrap:anywhere}.dssync-maptable col.rel{width:76px}.dssync-maptable th,.dssync-maptable td{padding:8px}}',
       '.dssync-switch{position:relative;display:inline-flex;width:38px;height:22px;flex:0 0 auto}',
       '.dssync-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}',
       '.dssync-switch i{position:absolute;inset:0;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.3));transition:background .16s;pointer-events:none}',
@@ -729,86 +757,260 @@ window.__ModuleLoader__.load({
         h('i'))
     }
 
-    function WorkspaceMappingRow(props) {
-      var model = props.model
-      var options = props.options
-      var suggested = props.suggestedPath
-      var key = props.workspaceKey
-      var boundPaths = props.boundPaths || []
-      var usable = options.filter(function (item) {
-        return boundPaths.indexOf(item.path) === -1 || item.workspaceKey === key
+    function shortMapKey(key) {
+      return key === null || key === undefined ? '' : String(key).slice(0, 12) + '…'
+    }
+
+    /** 合并 /workspaces 的远端列表与绑定/未映射兜底，按 key 去重。 */
+    function remoteWorkspaceList(workspaces) {
+      var source = workspaces && Array.isArray(workspaces.remoteWorkspaces) ? workspaces.remoteWorkspaces : []
+      var seen = new Map()
+      function add(workspaceKey, label, sessions) {
+        if (workspaceKey === null || workspaceKey === undefined) return
+        var current = seen.get(workspaceKey)
+        var resolvedLabel = label === undefined || label === '' ? (current && current.label) : label
+        seen.set(workspaceKey, {
+          workspaceKey: workspaceKey,
+          sessions: Math.max(current ? current.sessions : 0, sessions || 0),
+          ...resolvedLabel === undefined ? {} : { label: resolvedLabel },
+        })
+      }
+      source.forEach(function (entry) { add(entry.workspaceKey, entry.label, entry.sessions || 0) })
+      var bindings = workspaces && Array.isArray(workspaces.bindings) ? workspaces.bindings : []
+      bindings.forEach(function (binding) { add(binding.workspaceKey, binding.label, 0) })
+      var unmapped = workspaces && Array.isArray(workspaces.unmapped) ? workspaces.unmapped : []
+      unmapped.forEach(function (entry) { add(entry.workspaceKey, entry.label, entry.sessions || 0) })
+      return Array.from(seen.values()).sort(function (left, right) {
+        return String(left.label || left.workspaceKey).localeCompare(String(right.label || right.workspaceKey))
       })
-      var hasSuggestion = typeof suggested === 'string' && usable.some(function (item) { return item.path === suggested })
-      var choiceState = useState(hasSuggestion ? suggested : '')
-      var choice = choiceState[0]
-      var setChoice = choiceState[1]
-      var busyState = useState(false)
+    }
+
+    /** 计算本机/远端配对、统计和待绑定行。 */
+    function mappingState(workspaces) {
+      var locals = workspaces && Array.isArray(workspaces.workspaces) ? workspaces.workspaces : []
+      var bindings = workspaces && Array.isArray(workspaces.bindings) ? workspaces.bindings : []
+      var remote = remoteWorkspaceList(workspaces)
+      var paired = new Set()
+      bindings.forEach(function (binding) { paired.add(binding.workspaceKey) })
+      var rows = locals.map(function (local) {
+        var binding = bindings.find(function (entry) { return entry.localPath === local.path }) || null
+        if (binding !== null) {
+          var boundRemote = remote.find(function (entry) { return entry.workspaceKey === binding.workspaceKey }) || {
+            workspaceKey: binding.workspaceKey, label: binding.label, sessions: 0,
+          }
+          paired.add(binding.workspaceKey)
+          return { kind: 'bound', local: local, remote: boundRemote, binding: binding }
+        }
+        var native = local.workspaceKey === undefined
+          ? null
+          : remote.find(function (entry) { return entry.workspaceKey === local.workspaceKey }) || null
+        if (native !== null) {
+          paired.add(native.workspaceKey)
+          return { kind: 'native', local: local, remote: native, binding: null }
+        }
+        return { kind: 'local', local: local, remote: null, binding: null }
+      })
+      var pending = remote.filter(function (entry) {
+        return entry.workspaceKey !== null && !paired.has(entry.workspaceKey)
+      })
+      var counts = {
+        locals: locals.length,
+        total: remote.length,
+        bound: rows.filter(function (row) { return row.kind === 'bound' }).length,
+        native: rows.filter(function (row) { return row.kind === 'native' }).length,
+        localOnly: rows.filter(function (row) { return row.kind === 'local' }).length,
+        pending: pending.length,
+      }
+      return {
+        locals: locals,
+        remote: remote,
+        rows: rows,
+        pending: pending,
+        candidates: rows.filter(function (row) { return row.kind === 'local' }).map(function (row) { return row.local }),
+        counts: counts,
+      }
+    }
+
+    function workspaceRelation(kind) {
+      if (kind === 'bound') return h('span', { className: 'dssync-rel bound' }, '已绑定')
+      if (kind === 'native') return h('span', { className: 'dssync-rel native' }, '本机身份')
+      if (kind === 'pending') return h('span', { className: 'dssync-rel pending' }, '待映射')
+      return h('span', { className: 'dssync-rel local' }, '仅本机')
+    }
+
+    function WorkspaceMappingPanel(props) {
+      var model = props.model
+      var workspaces = props.workspaces
+      var compact = props.compact === true
+      var choiceState = useState({})
+      var choices = choiceState[0]
+      var setChoices = choiceState[1]
+      var busyState = useState({})
       var busy = busyState[0]
       var setBusy = busyState[1]
-      var confirmState = useState(false)
+      var confirmState = useState(null)
       var confirming = confirmState[0]
       var setConfirming = confirmState[1]
-      var selected = usable.find(function (item) { return item.path === choice })
-      var selectedTitle = selected ? (selected.title || selected.path) : choice
+      var mapping = mappingState(workspaces)
 
-      function bindNow() {
-        if (key === null || choice === '') return
-        setBusy(true)
-        model.bindWorkspace(key, choice).then(function (result) {
+      function choose(key, path) {
+        setChoices(function (previous) {
+          var next = Object.assign({}, previous)
+          next[key] = path
+          return next
+        })
+      }
+
+      function bind(key) {
+        var path = choices[key] || ''
+        if (key === null || key === undefined || path === '') return
+        setBusy(function (previous) {
+          var next = Object.assign({}, previous)
+          next[key] = true
+          return next
+        })
+        model.bindWorkspace(key, path).then(function (result) {
           if (!result || result.ok !== true) {
             model.toast((result && result.error && result.error.message) || '绑定失败', true)
             return
           }
+          setConfirming(null)
           model.toast('已建立工作区映射；不能改绑')
-          setConfirming(false)
         }).catch(function (error) { model.toast(errorText(error), true) })
-          .finally(function () { setBusy(false) })
+          .finally(function () {
+            setBusy(function (previous) {
+              var next = Object.assign({}, previous)
+              delete next[key]
+              return next
+            })
+          })
       }
 
-      var controls
-      if (usable.length === 0) {
-        controls = [h('span', { className: 'dssync-note warn' }, '没有可用的本地工作区；已绑定的不能改绑，先注册一个新工作区')]
-      } else if (confirming) {
-        controls = [
-          h('div', { className: 'dssync-mapconfirm', role: 'group', 'aria-label': '确认工作区映射' },
-            h('span', { className: 'dssync-note warn' },
-              '绑定不可撤销：把 ' + (props.label || (key === null ? '未知工作区' : key.slice(0, 12) + '…'))
-              + ' 永久绑定到「' + selectedTitle + '」？'),
-            h('button', {
-              className: 'dssync-pill', type: 'button', disabled: busy,
-              onClick: function () { setConfirming(false) },
-            }, '取消'),
-            h('button', {
-              className: 'dssync-pill primary', type: 'button', disabled: busy,
-              onClick: bindNow,
-            }, busy ? '绑定中…' : '确认绑定')),
-        ]
-      } else {
-        controls = [
-          h('select', {
-            value: choice,
-            onChange: function (event) { setChoice(event.target.value) },
-          }, h('option', { value: '' }, '选择本地工作区…'), usable.map(function (item) {
-            return h('option', { value: item.path, key: item.path }, item.title || item.path)
-          })),
-          h('button', {
-            className: 'dssync-pill', type: 'button',
-            disabled: busy || key === null || choice === '',
-            onClick: function () {
-              if (key === null || choice === '') return
-              setConfirming(true)
-            },
-          }, '绑定…'),
-        ]
+      function localBlock(local) {
+        return h('div', { className: 'dssync-maplocal' },
+          h('b', null, local.title || local.path),
+          h('div', { className: 'dssync-mappath', title: local.path }, local.path),
+          h('div', { className: 'dssync-mapkeytext', title: local.workspaceKey || '尚未解析本机 workspaceKey' },
+            local.workspaceKey === undefined ? '本机 key 尚未解析' : shortMapKey(local.workspaceKey)))
       }
 
-      return h('div', { className: 'dssync-maprow' + (hasSuggestion ? ' suggested' : '') },
-        h('div', { className: 'dssync-mapkey', title: key || '远端没有 workspaceKey' },
-          h('b', null, props.label || (key === null ? '未知工作区' : key.slice(0, 12) + '…')),
-          h('span', null, (key === null ? '' : key.slice(0, 12) + '… · ')
-            + (props.sessions > 0 ? props.sessions + ' 个会话' : '远端工作区')
-            + (hasSuggestion ? ' · 同路径建议' : ''))),
-        ...controls)
+      function remoteBlock(remote, note) {
+        return h('div', { className: 'dssync-mapremote' },
+          h('b', null, remote.label || shortMapKey(remote.workspaceKey) || '未知工作区'),
+          h('div', { className: 'dssync-mapkeytext', title: remote.workspaceKey || '远端没有 workspaceKey' },
+            shortMapKey(remote.workspaceKey) || '没有 workspaceKey'),
+          remote.sessions > 0
+            ? h('div', { className: 'dssync-mapremote-meta' }, remote.sessions + ' 个未映射会话')
+            : null,
+          note === undefined ? null : h('div', { className: 'dssync-mapnote' }, note))
+      }
+
+      if (workspaces === null) {
+        return h('div', { className: 'dssync-mapempty' },
+          h('b', null, '读取工作区映射…'),
+          '连接服务端并读取本机/远端工作区后，这里会显示配对关系。',
+          typeof props.onRetry === 'function' ? h('button', {
+            className: 'dssync-pill', type: 'button', onClick: props.onRetry,
+          }, '重新读取') : null)
+      }
+
+      var stats = h('div', { className: 'dssync-mapstats' },
+        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.locals), ' 本机工作区'),
+        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.total), ' 远端工作区'),
+        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.bound), ' 已绑定'),
+        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.native), ' 本机身份'),
+        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.localOnly), ' 仅本机'),
+        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.pending), ' 待映射'))
+
+      var rows = mapping.rows.map(function (row) {
+        var right
+        if (row.kind === 'bound') {
+          right = remoteBlock(row.remote, '该 key 已绑定到左侧路径；不可改绑。')
+        } else if (row.kind === 'native') {
+          right = remoteBlock(row.remote, 'key 与本机路径一致，已自动对应，无需映射。')
+        } else {
+          right = h('div', { className: 'dssync-mapempty' },
+            h('b', null, '尚未对应远端'),
+            '该工作区第一次推送根会话后，会自动创建远端 workspaceKey。')
+        }
+        return h('tr', { className: 'dssync-map-pair ' + row.kind, key: row.local.path },
+          h('td', null, localBlock(row.local)),
+          h('td', { className: 'relcell' }, workspaceRelation(row.kind)),
+          h('td', null, right))
+      })
+
+      mapping.pending.forEach(function (remote) {
+        var key = remote.workspaceKey
+        var candidates = mapping.candidates
+        var selectedPath = choices[key] || ''
+        var selectedLocal = candidates.find(function (local) { return local.path === selectedPath }) || null
+        var selectedTitle = selectedLocal === null ? selectedPath : (selectedLocal.title || selectedLocal.path)
+        var picker = candidates.length === 0
+          ? h('div', { className: 'dssync-mapempty' },
+            h('b', null, '没有可用的本机工作区'),
+            '先在 DSH 里注册一个新工作区，再回来绑定。')
+          : confirming === key
+            ? h('div', { className: 'dssync-mappick' },
+              h('div', { className: 'dssync-mapconfirm', role: 'group', 'aria-label': '确认工作区映射' },
+                h('span', { className: 'dssync-note warn' },
+                  '绑定不可撤销：把 ' + (remote.label || shortMapKey(key))
+                  + ' 永久绑定到「' + selectedTitle + '」？'),
+                h('button', {
+                  className: 'dssync-pill', type: 'button', disabled: busy[key] === true,
+                  onClick: function () { setConfirming(null) },
+                }, '取消'),
+                h('button', {
+                  className: 'dssync-pill primary', type: 'button', disabled: busy[key] === true,
+                  onClick: function () { bind(key) },
+                }, busy[key] === true ? '绑定中…' : '确认绑定')))
+            : h('div', { className: 'dssync-mappick' },
+              h('div', { className: 'dssync-mappick-row' },
+                h('select', {
+                  value: selectedPath,
+                  onChange: function (event) { choose(key, event.target.value) },
+                  'aria-label': '为 ' + (remote.label || shortMapKey(key)) + ' 选择本机工作区',
+                },
+                h('option', { value: '' }, '选择本机工作区…'),
+                candidates.map(function (local) {
+                  return h('option', { value: local.path, key: local.path },
+                    (local.title || local.path) + ' — ' + local.path)
+                })),
+                h('button', {
+                  className: 'dssync-pill primary', type: 'button',
+                  disabled: selectedPath === '' || busy[key] === true,
+                  onClick: function () { if (selectedPath !== '') setConfirming(key) },
+                }, '绑定…')),
+              h('div', { className: 'dssync-mapnote' }, '绑定不可改绑；未映射会话不会写入本机。'))
+        rows.push(h('tr', { className: 'dssync-map-pair pending', key: 'pending:' + String(key) },
+          h('td', null, picker),
+          h('td', { className: 'relcell' }, workspaceRelation('pending')),
+          h('td', null, remoteBlock(remote, '左侧选择一个本机工作区后确认。'))))
+      })
+
+      if (rows.length === 0) {
+        return h('div', { className: 'dssync-mappanel' }, stats,
+          h('div', { className: 'dssync-mapempty' },
+            h('b', null, '还没有工作区'),
+            '本机没有已注册的工作区，远端也没有 workspaceKey。'))
+      }
+
+      return h('div', { className: 'dssync-mappanel' },
+        stats,
+        h('div', { className: 'dssync-maptablewrap' },
+          h('table', { className: 'dssync-maptable' },
+            h('colgroup', null,
+              h('col', { className: 'local' }),
+              h('col', { className: 'rel' }),
+              h('col')),
+            h('thead', null, h('tr', null,
+              h('th', null, '本机工作区'),
+              h('th', null, '关系'),
+              h('th', null, '远端 workspaceKey'))),
+            h('tbody', null, rows))),
+        h('p', { className: 'dssync-mapnote' },
+          compact
+            ? '这一步可以跳过；未映射的远端会话不会写入本机，之后可在设置页补绑定。'
+            : '绑定是每设备本地的，一次确认后不能改绑；未映射会话不会 apply，也不影响其他工作区同步。'))
     }
 
     function SyncSettingsPage(props) {
@@ -1069,35 +1271,20 @@ window.__ModuleLoader__.load({
 
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
-            h('h3', null, '远端工作区映射'),
-            h('span', null, '一次性绑定，不能改绑')),
+            h('h3', null, '工作区映射'),
+            h('span', null, '一次性绑定，不能改绑'),
+            h('button', {
+              className: 'dssync-pill', type: 'button', style: { marginLeft: 'auto' },
+              disabled: workspaces === null,
+              onClick: function () { model.refreshWorkspaces() },
+            }, '刷新')),
           h('div', { className: 'dssync-note' },
-            '远端会话只带 opaque workspaceKey；选择本地工作区后才会拉取。未映射的会话不会写入本机。'),
-          workspaces === null
-            ? h('div', { className: 'dssync-note' }, '读取映射…')
-            : (workspaces.bindings || []).length > 0
-              ? h('div', { className: 'dssync-bindlist' }, (workspaces.bindings || []).map(function (binding) {
-                return h('div', { className: 'dssync-bindrow', key: binding.workspaceKey },
-                  h('b', null, binding.label || binding.localPath),
-                  h('span', { className: 'dssync-note' }, binding.localPath),
-                  h('code', null, binding.workspaceKey.slice(0, 12) + '…'))
-              }))
-              : h('div', { className: 'dssync-note' }, '还没有本机映射。'),
-          workspaces !== null && (workspaces.unmapped || []).length > 0
-            ? h('div', { className: 'dssync-maplist' }, (workspaces.unmapped || []).map(function (item) {
-              var suggested = item.workspaceKey === null ? undefined : candidates.find(function (candidate) { return candidate.workspaceKey === item.workspaceKey })
-              return h(WorkspaceMappingRow, {
-                key: String(item.workspaceKey) + ':' + item.sessions,
-                model: model,
-                workspaceKey: item.workspaceKey,
-                label: item.label,
-                sessions: item.sessions,
-                suggestedPath: suggested ? suggested.path : undefined,
-                options: candidates,
-                boundPaths: (workspaces.bindings || []).map(function (binding) { return binding.localPath }),
-              })
-            }))
-            : h('div', { className: 'dssync-note' }, '当前没有未映射的远端工作区。'),
+            '左侧本机工作区，右侧远端 workspaceKey；只有绑定或本机身份一致的会话才会落到本机。'),
+          h(WorkspaceMappingPanel, {
+            model: model,
+            workspaces: workspaces,
+            onRetry: function () { model.refreshWorkspaces() },
+          }),
           h('div', { className: 'dssync-row' },
             h('div', { className: 'dssync-rowtext' },
               h('b', null, '同路径自动绑定'),
@@ -1401,24 +1588,14 @@ window.__ModuleLoader__.load({
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else if (step === 3) {
-        var unmapped = workspaces && Array.isArray(workspaces.unmapped) ? workspaces.unmapped : []
         body = [
           h('div', { className: 'dssync-note' }, '远端工作区按 workspaceKey 一次性绑定；未映射的会话不会写入本机。'),
-          unmapped.length === 0
-            ? h('div', { className: 'dssync-note' }, '当前没有待映射的远端工作区，可以继续。')
-            : h('div', { className: 'dssync-maplist' }, unmapped.map(function (item) {
-              var suggested = item.workspaceKey === null ? undefined : candidates.find(function (candidate) { return candidate.workspaceKey === item.workspaceKey })
-              return h(WorkspaceMappingRow, {
-                key: String(item.workspaceKey) + ':' + item.sessions,
-                model: model,
-                workspaceKey: item.workspaceKey,
-                label: item.label,
-                sessions: item.sessions,
-                suggestedPath: suggested ? suggested.path : undefined,
-                options: candidates,
-                boundPaths: (workspaces.bindings || []).map(function (binding) { return binding.localPath }),
-              })
-            })),
+          h(WorkspaceMappingPanel, {
+            model: model,
+            workspaces: workspaces,
+            compact: true,
+            onRetry: function () { model.refreshWorkspaces() },
+          }),
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else {

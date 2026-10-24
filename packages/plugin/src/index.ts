@@ -766,6 +766,31 @@ export function apply(ctx: Context, config: Config): void {
       if (!unmapped.has(key)) unmapped.set(key, 0)
     }
 
+    const remote = new Map<string, { label?: string; sessions: number }>()
+    for (const binding of Object.values(bindings.bindings)) {
+      const current = remote.get(binding.key)
+      remote.set(binding.key, {
+        ...current?.label === undefined ? {} : { label: current.label },
+        ...binding.label === '' ? {} : { label: binding.label },
+        sessions: current?.sessions ?? 0,
+      })
+    }
+    for (const [key, label] of Object.entries(workspaceLabels)) {
+      const current = remote.get(key)
+      remote.set(key, {
+        ...current?.label === undefined ? {} : { label: current.label },
+        label,
+        sessions: current?.sessions ?? 0,
+      })
+    }
+    for (const entry of controller.unmappedSessions()) {
+      const current = remote.get(entry.workspaceKey)
+      remote.set(entry.workspaceKey, {
+        ...current?.label === undefined ? {} : { label: current.label },
+        sessions: (current?.sessions ?? 0) + 1,
+      })
+    }
+
     return {
       workspaces: candidates,
       sessions,
@@ -783,6 +808,13 @@ export function apply(ctx: Context, config: Config): void {
           sessions: count,
           ...workspaceLabels[workspaceKey] === undefined ? {} : { label: workspaceLabels[workspaceKey] },
         })),
+      remoteWorkspaces: [...remote.entries()]
+        .map(([workspaceKey, value]) => ({
+          workspaceKey,
+          sessions: value.sessions,
+          ...value.label === undefined ? {} : { label: value.label },
+        }))
+        .sort((left, right) => (left.label ?? left.workspaceKey).localeCompare(right.label ?? right.workspaceKey)),
     }
   }
 

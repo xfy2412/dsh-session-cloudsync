@@ -315,6 +315,7 @@ test('应用接线：workspaces 汇总工作区、根会话与子代理计数', 
     rootSessions: 1,
     subagentSessions: 1,
   }])
+  assert.deepEqual(body.value.remoteWorkspaces, [])
 })
 
 test('应用接线：token/passphrase 优先取 DSH 凭据库', async () => {

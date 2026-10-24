@@ -285,6 +285,16 @@ export interface SyncUnmappedWorkspace {
   readonly sessions: number
 }
 
+/** 一个远端工作区（用于映射面板的关系判定）。 */
+export interface SyncRemoteWorkspace {
+  /** 远端 workspaceKey；缺失表示 manifest 没带 key。 */
+  readonly workspaceKey: string | null
+  /** 远端 workspace/profile 的 label（若有）。 */
+  readonly label?: string
+  /** 最近一次拉取里属于这个 key 的未映射会话数。 */
+  readonly sessions: number
+}
+
 /** 首启/设置页的同步列表。 */
 export interface SyncWorkspaceList {
   /** 本机注册工作区；映射目标从这里选。 */
@@ -297,4 +307,6 @@ export interface SyncWorkspaceList {
   readonly bindings: readonly SyncWorkspaceBinding[]
   /** 最近一次拉取中未映射的远端工作区。 */
   readonly unmapped: readonly SyncUnmappedWorkspace[]
+  /** 已绑定/已出现在 Vault/最近未映射里的全部远端工作区。 */
+  readonly remoteWorkspaces: readonly SyncRemoteWorkspace[]
 }

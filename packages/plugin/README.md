@@ -8,7 +8,7 @@ DSH 会话云同步插件：自部署服务端、端到端加密，同步根会�
 - 服务端只存密文、manifest 与 blob 去重，不持有明文口令；
 - 开放尾只备份、不直接 apply；拉取带 durable pending journal；
 - 根会话选择：默认同步全部根会话；本地排除的根及其子代理跳过；子代理跟随根会话闭包，fork 是独立根；
-- 工作区映射：未映射会话持久化、映射后按 cursor revision 回填；本地工作区自己的 key 自动解析；已有远端会话沿用原 key；绑定前二次确认；
+- 工作区映射：未映射会话持久化、映射后按 cursor revision 回填；本地工作区自己的 key 自动解析；已有远端会话沿用原 key；设置页/首启显示本机↔远端配对表（已绑定/本机身份/仅本机/待映射）、统计和待映射选择，绑定前二次确认；
 - Plugins 页自定义设置页 + 首启向导 + 顶部同步气泡；
 - 状态 v2：每个会话只有一行（push/pull 作为两个方向子状态），每行带待上传/待下载事件数、已完成/总数与 `statusVersion`，顶层带全局 `deviceLease`；运行中每上传/下载完一帧就更新完成事件数，气泡按事件比例推进；
 - **入口级 open guard**：client 侧包一层 `uiWorkspace.openSession`，覆盖搜索结果、schedule、feedback、workflow-run、subagent 等没有 `data-row-key` 的入口；冷危险会话直接 toast + 不导航，live 会话放行；服务探测/安装失败一律 fail-open，不影响插件加载；
