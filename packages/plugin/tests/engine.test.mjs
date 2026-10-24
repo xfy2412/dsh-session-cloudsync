@@ -18,6 +18,10 @@ const TEST_WORKSPACE_KEY = 'test-workspace-key-0001'
 /** 测试默认给每个推送根会话一个稳定 key；V2 严格模式不再接受无 key。 */
 const syncOnce = (deps) => syncOnceRaw({ workspaceKeyOf: () => TEST_WORKSPACE_KEY, ...deps })
 
+/** 路径边界测试必须使用当前平台的绝对路径；POSIX 上 D:/local 是相对路径。 */
+const localCwd = process.platform === 'win32' ? 'D:/local' : '/local'
+const otherCwd = process.platform === 'win32' ? 'D:/other' : '/other'
+
 /** 发一个 JSON 请求。 */
 async function call(base, path, options = {}) {
   const headers = { ...options.headers }
@@ -137,7 +141,7 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         createdAt: 901,
         isSeeded: false,
         delegationDepth: 0,
-        cwd: 'D:/local',
+        cwd: localCwd,
       }
       const config = {
         serverUrl: base,
@@ -287,7 +291,7 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
         isSeeded: false,
         delegationDepth: 0,
         agentPreset: 'standard',
-        cwd: 'D:/local',
+        cwd: localCwd,
       }
       const state = { events: events(0, 119) }
       const config = {
@@ -354,7 +358,7 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
         createdAt: 900,
         isSeeded: false,
         delegationDepth: 0,
-        cwd: 'D:/local',
+        cwd: localCwd,
       }
       const config = {
         serverUrl: base,
@@ -385,7 +389,7 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
         persistence: fakeStore(header, localDiverged),
         sessions,
         config,
-        workspacePathOf: () => 'D:/local',
+        workspacePathOf: () => localCwd,
       }, { revision: 0 })
       assert.equal(pullDiverged.sessions[0].status, 'error')
       assert.equal(pullDiverged.sessions[0].kind, 'diverged')
@@ -396,7 +400,7 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
         persistence: localAhead,
         sessions,
         config,
-        workspacePathOf: () => 'D:/local',
+        workspacePathOf: () => localCwd,
       }, { revision: 0 })
       assert.equal(pulled.sessions[0].status, 'pulled')
       assert.equal(localAhead.sessions.get(sessionId).events.length, 120)
@@ -434,7 +438,7 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
         createdAt: 1000,
         isSeeded: false,
         delegationDepth: 0,
-        cwd: 'D:/local',
+        cwd: localCwd,
       }
       const config = {
         serverUrl: base,
@@ -442,7 +446,7 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
         passphrase: 'nonportable pass',
         batchEvents: 50,
       }
-      const outside = [...events(0, 2), cwdEvent(3, 'D:/other')]
+      const outside = [...events(0, 2), cwdEvent(3, otherCwd)]
       const pushed = await syncOnce({
         persistence: fakeStore(header, outside),
         sessions,
@@ -458,7 +462,7 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
         persistence: fakeStore(undefined),
         sessions,
         config,
-        workspacePathOf: () => 'D:/local',
+        workspacePathOf: () => localCwd,
         attach: async (id) => { attached.push(id) },
       }, { revision: 0 })
       assert.equal(pulled.sessions[0].status, 'pulled')
@@ -466,7 +470,7 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
       assert.deepEqual(attached, [])
 
       // 后来的 change 回到工作区内，源端 nonPortable 应清除。
-      const backInside = [...outside, cwdEvent(4, 'D:/local/sub')]
+      const backInside = [...outside, cwdEvent(4, `${localCwd}/sub`)]
       const repushed = await syncOnce({
         persistence: fakeStore(header, backInside),
         sessions,
@@ -480,7 +484,7 @@ test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
         persistence: fakeStore(undefined),
         sessions,
         config,
-        workspacePathOf: () => 'D:/local',
+        workspacePathOf: () => localCwd,
       }, { revision: 0 })
       assert.equal(pulledInside.sessions[0].status, 'pulled')
       assert.equal(pulledInside.sessions[0].cwdNonPortable, undefined)
@@ -509,9 +513,9 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
         createdAt: 1100,
         isSeeded: false,
         delegationDepth: 0,
-        cwd: 'D:/local',
+        cwd: localCwd,
       }
-      const outside = [...events(0, 2), cwdEvent(3, 'D:/other')]
+      const outside = [...events(0, 2), cwdEvent(3, otherCwd)]
       const config = {
         serverUrl: base,
         token: device.token,
@@ -530,25 +534,25 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
         persistence: target,
         sessions,
         config,
-        targetPath: 'D:/local',
+        targetPath: localCwd,
       }, sessionId)
       assert.equal(result.ok, true)
       assert.equal(result.status, 'corrected')
       const corrected = target.sessions.get(sessionId)
       assert.equal(corrected.events.length, 5)
       assert.equal(corrected.events[4].type, 'working-directory/change')
-      assert.equal(corrected.events[4].data.cwd, 'D:/local')
+      assert.equal(corrected.events[4].data.cwd, localCwd)
 
       const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.body.value.manifest.lastSeq, 4)
       assert.equal(manifest.body.value.manifest.safeThroughSeq, 4)
 
-      const again = await correctCwd({ persistence: target, sessions, config, targetPath: 'D:/local' }, sessionId)
+      const again = await correctCwd({ persistence: target, sessions, config, targetPath: localCwd }, sessionId)
       assert.equal(again.status, 'already-portable')
 
       // 远端已推进、本地还停在旧边界时不能 append，避免制造分叉。
       const stale = fakeStore(header, outside)
-      const refused = await correctCwd({ persistence: stale, sessions, config, targetPath: 'D:/local' }, sessionId)
+      const refused = await correctCwd({ persistence: stale, sessions, config, targetPath: localCwd }, sessionId)
       assert.equal(refused.ok, false)
       assert.equal(refused.status, 'needs-sync')
       assert.equal(stale.sessions.get(sessionId).events.length, 4)
@@ -666,7 +670,7 @@ test('推送引擎：默认同步子代理闭包，子先父后，被排除的�
         parentSession: root.id,
         origin: 'subagent',
       }
-      const other = { ...root, id: 'session-closure-other', createdAt: 300, cwd: 'D:/other' }
+      const other = { ...root, id: 'session-closure-other', createdAt: 300, cwd: otherCwd }
       const store = fakeStore(root, events(0, 1))
       store.sessions.set(child.id, { header: child, events: events(0, 2) })
       store.sessions.set(other.id, { header: other, events: events(0, 1) })
