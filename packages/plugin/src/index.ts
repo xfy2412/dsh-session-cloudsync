@@ -130,6 +130,12 @@ interface CredentialsLike {
   resolve(ref: string): Promise<{ readonly value: string; readonly source: string } | undefined>
 }
 
+/** `sessionProjectionCache` 的最小结构；未加载该可选服务时跳过。 */
+interface ProjectionCacheLike {
+  coldSnapshot(meta: unknown, inheritedEventCount: number, events: readonly unknown[]): unknown
+  cachedSnapshot(meta: unknown, keys?: readonly string[]): unknown
+}
+
 /** 运行期可被凭据刷新/配置引用改写的引擎配置。 */
 type MutableEngineConfig = { -readonly [K in keyof EngineConfig]: EngineConfig[K] }
 
@@ -546,6 +552,30 @@ export function apply(ctx: Context, config: Config): void {
     return next()
   })
 
+  /**
+   * 新拉取的冷会话没有 projection cache；先做一次 cold snapshot 再 attach，
+   * 让 DSH 列表能从缓存读到标题等投影。失败时只告警，不影响会话落地。
+   * @param sessionId - 已写入本地的会话。
+   */
+  const warmProjectionCache = async (sessionId: string): Promise<void> => {
+    const cache = ctx.get('sessionProjectionCache') as ProjectionCacheLike | undefined
+    if (cache === undefined || typeof cache.coldSnapshot !== 'function') return
+    const handle = await ctx.sessionPersistence.open(sessionId as SessionId, 'read')
+    try {
+      const read = await handle.read()
+      cache.coldSnapshot(handle.header, handle.inheritedEventCount ?? 0, read.events)
+      // coldSnapshot 的落盘是 fire-and-forget；等 title 行可见后再 attach，
+      // 避免列表恰好读到尚未写完的缓存。
+      for (let attempt = 0; attempt < 25; attempt += 1) {
+        if (typeof cache.cachedSnapshot !== 'function') return
+        if (cache.cachedSnapshot(handle.header, ['title']) !== undefined) return
+        await new Promise<void>((resolve) => setTimeout(resolve, 10))
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
   const pullDeps = {
     persistence: {
       stat: (id: string) => ctx.sessionPersistence.stat(id as SessionId),
@@ -561,6 +591,11 @@ export function apply(ctx: Context, config: Config): void {
     attach: async (sessionId: string, mappedPath?: string): Promise<void> => {
       if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
       if (mappedPath === undefined || mappedPath === '') throw new Error('会话没有可用的本地工作区落点')
+      try {
+        await warmProjectionCache(sessionId)
+      } catch (error: unknown) {
+        logger.warn(`dsh-session-cloudsync: 预热会话投影缓存失败：${error instanceof Error ? error.message : String(error)}`)
+      }
       const workspace = (await workspaceRegistry.resolveByPath(mappedPath))
         ?? (await workspaceRegistry.create(mappedPath, 'Session Sync'))
       await workspace.attachSession(sessionId as SessionId)
