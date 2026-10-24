@@ -1314,6 +1314,23 @@ async function resolveRootSessionId(
  * @param preloaded - 已读取的 manifest/会话头；缺省现读。
  * @returns 会话拉取结果。
  */
+/**
+ * 把拉取到的事件分批写入本地。
+ *
+ * DSH 的 session store 在 append 里同步编码/压缩；一次性塞入几万条事件会占住
+ * host 事件循环，表现为本地端口整体卡顿。这里按事件数切片，并在批次之间让出
+ * 事件循环，写入总量不变，但端口/SSE 能持续响应。
+ * @param handle - 本地写句柄。
+ * @param events - 已按 seq 排好序的事件。
+ */
+async function appendPulledEvents(handle: WriteHandleLike, events: readonly SyncEvent[]): Promise<void> {
+  const chunkSize = 500
+  for (let offset = 0; offset < events.length; offset += chunkSize) {
+    await handle.append(events.slice(offset, offset + chunkSize))
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+  }
+}
+
 async function pullSession<Session>(
   deps: PullDeps<Session>,
   fetchImpl: typeof fetch,
@@ -1385,7 +1402,7 @@ async function pullSession<Session>(
       )
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
       await deps.beforeApply?.(sessionId, safe)
-      await handle.append(events)
+      await appendPulledEvents(handle, events)
       await handle.flush()
       const nextCwdNonPortable = cwdNonPortableOf([...read.events, ...events], workspacePath)
       if (!nextCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
@@ -1439,7 +1456,7 @@ async function pullSession<Session>(
   await deps.beforeApply?.(sessionId, safe)
   const handle = await deps.persistence.create(header, options)
   try {
-    if (events.length > 0) await handle.append(events)
+    if (events.length > 0) await appendPulledEvents(handle, events)
     await handle.flush()
   } finally {
     await handle.close()
