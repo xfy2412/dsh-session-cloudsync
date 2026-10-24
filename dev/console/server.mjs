@@ -40,6 +40,9 @@ const credentials = process.env.DEV_CONSOLE_CREDENTIALS === undefined
 
 const syncDataDir = join(tempRoot, 'sync-data')
 const syncCredentialsFile = join(tempRoot, 'sync-credentials.json')
+const benchTracePath = process.env.DEV_CONSOLE_TRACE?.trim()
+  ? resolve(process.env.DEV_CONSOLE_TRACE)
+  : join(repoRoot, 'tests', 'fixtures', 'shapes', 'b0e-69587.trace.json')
 const syncPort = Number(process.env.DEV_CONSOLE_SYNC_PORT ?? '8787')
 const syncUrl = (process.env.DEV_CONSOLE_SYNC_SERVER?.trim() || `http://${bindHost}:${syncPort}`)
   .replace(/\/+$/u, '')
@@ -504,6 +507,7 @@ async function cleanData(request) {
     side.setup = 'unknown'
     side.lastError = null
     side.buffers = { stdout: '', stderr: '' }
+    side.tokenSince = 0
     clearSideLogs(side)
     removed.sides.push(id)
   }
@@ -540,6 +544,48 @@ async function restorePreconfigured(restart = true) {
     restarted.push(side.id)
   }
   return { sync: state().sync, restarted }
+}
+
+/** 把形状轨迹生成的大会话导入选中的临时实例。 */
+async function importLargeSession(request) {
+  if (!existsSync(benchTracePath)) {
+    throw new Error(`找不到大会话形状轨迹：${benchTracePath}（可用 pnpm bench:trace 生成）`)
+  }
+  const selected = Array.isArray(request?.sides)
+    ? request.sides.filter((id) => id === 'a' || id === 'b')
+    : []
+  if (selected.length === 0) throw new Error('没有选择要导入的实例')
+  const trace = JSON.parse(readFileSync(benchTracePath, 'utf8'))
+  const { importBenchSession } = await import('../../tests/tools/import-bench-session.ts')
+  const imported = []
+  for (const id of selected) {
+    const side = sides.get(id)
+    if (side === undefined) continue
+    const wasRunning = side.child !== null && side.child.exitCode === null
+    if (wasRunning) await stopSide(side)
+    try {
+      await prepareSide(side)
+      const cwd = join(side.documents, 'deepseek-harness', 'default-workspace')
+      const result = importBenchSession({
+        trace,
+        home: side.home,
+        cwd,
+        id: 'session-bench-shape',
+      })
+      appendLog(
+        side,
+        'info',
+        `已导入大会话 ${result.sessionId}（${(result.bytes / 1_048_576).toFixed(1)} MB）到 ${cwd}`,
+        'bench',
+      )
+      imported.push({ side: id, sessionId: result.sessionId, bytes: result.bytes, restarted: wasRunning })
+      if (wasRunning) await startSide(side)
+    } catch (error) {
+      if (wasRunning) await startSide(side).catch(() => {})
+      throw error
+    }
+  }
+  return { imported }
 }
 
 /** 追加一个 host 子进程的数据块，按行切分。 */
@@ -693,6 +739,7 @@ async function startSide(side) {
   side.url = null
   side.stopping = false
   appendLog(side, 'info', `启动 DSH ${side.label} :${side.port}`, 'host')
+  side.tokenSince = side.logs.length
 
   const args = ['--port', String(side.port), '--home', side.home, '--documents', side.documents]
   if (credentials !== undefined) args.push('--credentials', credentials)
@@ -730,9 +777,10 @@ async function startSide(side) {
   // 从 host 日志里抓 token URL；抓不到就保持 null，页面会显示等待。
   side.tokenTimer = setInterval(() => {
     if (side.url !== null || side.child === null) return
-    const text = side.logs.slice(-80).map((entry) => entry.message).join('\n')
-    const match = /[?&]token=([A-Za-z0-9_-]+)/u.exec(text)
-    if (match !== null) {
+    const text = side.logs.slice(side.tokenSince).map((entry) => entry.message).join('\n')
+    const matches = [...text.matchAll(/[?&]token=([A-Za-z0-9_-]+)/gu)]
+    const match = matches.at(-1)
+    if (match !== undefined && match[1] !== undefined) {
       side.url = `http://${bindHost}:${side.port}/?token=${match[1]}`
       side.status = 'running'
       appendLog(side, 'info', `页面就绪：${side.url}`, 'host')
@@ -821,6 +869,10 @@ function state() {
       ready: sync.ready,
       error: sync.error,
       ...sync.mode === 'local' ? { dataDir: syncDataDir } : {},
+    },
+    importTrace: {
+      available: existsSync(benchTracePath),
+      path: benchTracePath,
     },
     sides: [...sides.values()].map(sideState),
   }
@@ -949,6 +1001,12 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const removed = await cleanData(body)
       json(res, 200, { ok: true, removed, state: state() })
+      return
+    }
+    if (req.method === 'POST' && pathname === '/api/import-large') {
+      const body = await readBody(req)
+      const result = await importLargeSession(body)
+      json(res, 200, { ok: true, ...result, state: state() })
       return
     }
     if (req.method === 'POST' && pathname === '/api/restore') {

@@ -249,6 +249,7 @@
     <span class="sync-state" id="sync-state" data-tone="">同步服务端：准备中…</span>
     <span class="global-state" id="global-state">连接控制台…</span>
     <button id="restore">恢复预配置</button>
+    <button id="import-open">导入大会话</button>
     <button id="prepare-all" class="primary">准备两套</button>
     <button id="start-all">启动两套</button>
     <button id="stop-all" class="danger">停止两套</button>
@@ -371,12 +372,34 @@
   </form>
 </dialog>
 
+<dialog class="clean-dialog" id="import-dialog">
+  <form class="clean-body" method="dialog">
+    <h2>导入大会话</h2>
+    <p>用形状轨迹生成约 69,587 事件、52 MB 的合成 v4 会话；不含真实内容。运行中的实例会先停止再重启。</p>
+    <div class="clean-list">
+      <label>
+        <input type="checkbox" data-import="a" checked>
+        <span><b>DSH A</b><small>写入 A 的默认工作区，并在侧栏挂载。</small></span>
+      </label>
+      <label>
+        <input type="checkbox" data-import="b">
+        <span><b>DSH B</b><small>写入 B 的默认工作区；两边使用同一会话 id，适合本地对比，不适合制造分叉。</small></span>
+      </label>
+    </div>
+    <p class="hint">测 A 推、B 拉时只勾 A；两边都勾只会各有一份相同副本，不会产生需要同步的差异。</p>
+    <div class="clean-actions">
+      <button value="cancel">取消</button>
+      <button type="button" class="primary" id="import-confirm">生成并导入</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const sideIds = ['a', 'b']
 const logs = { a: [], b: [] }
 const filter = { a: '', b: '' }
 const paused = { a: false, b: false }
-const state = { sides: new Map(), consolePort: 3092, sync: undefined }
+const state = { sides: new Map(), consolePort: 3092, sync: undefined, importTrace: undefined }
 const renderQueued = { a: false, b: false }
 const $ = (id) => document.getElementById(id)
 
@@ -416,7 +439,13 @@ function statusOf(side) {
 function renderState(data) {
   state.consolePort = data.consolePort
   state.sync = data.sync
+  state.importTrace = data.importTrace
   state.sides = new Map(data.sides.map((side) => [side.id, side]))
+  const importButton = $('import-open')
+  importButton.disabled = data.importTrace?.available !== true
+  importButton.title = data.importTrace?.available === true
+    ? `轨迹：${data.importTrace.path}`
+    : '缺少 tests/fixtures/shapes/b0e-69587.trace.json'
   const sync = data.sync
   const syncEl = $('sync-state')
   if (sync === undefined) {
@@ -645,6 +674,38 @@ function bindActions() {
   $('start-all').addEventListener('click', (event) => void action(event.currentTarget, '/api/start'))
   $('stop-all').addEventListener('click', (event) => void action(event.currentTarget, '/api/stop'))
   $('restore').addEventListener('click', (event) => void action(event.currentTarget, '/api/restore'))
+  $('import-open').addEventListener('click', () => {
+    document.querySelectorAll('[data-import]').forEach((input) => {
+      input.checked = input.dataset.import === 'a'
+    })
+    $('import-dialog').showModal()
+  })
+  $('import-confirm').addEventListener('click', async (event) => {
+    const button = event.currentTarget
+    const selected = [...document.querySelectorAll('[data-import]')]
+      .filter((input) => input.checked)
+      .map((input) => input.dataset.import)
+    if (selected.length === 0) {
+      $('global-state').textContent = '请选择要导入的实例'
+      return
+    }
+    const old = button.textContent
+    button.disabled = true
+    button.textContent = '生成并导入…'
+    try {
+      await api('/api/import-large', {
+        method: 'POST',
+        body: JSON.stringify({ sides: selected }),
+      })
+      $('import-dialog').close()
+      await refresh()
+    } catch (error) {
+      $('global-state').textContent = `导入失败：${error.message}`
+    } finally {
+      button.disabled = false
+      button.textContent = old
+    }
+  })
   $('clean-open').addEventListener('click', () => {
     document.querySelectorAll('[data-clean]').forEach((input) => { input.checked = false })
     $('clean-dialog').showModal()

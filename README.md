@@ -80,7 +80,8 @@ pnpm dev:console    # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md
 双实例调试用 `pnpm dev:panel`：起一个本地控制台（默认 <http://127.0.0.1:3092/>），
 上方左右两个 iframe 分别是独立的 DSH A/B，下方左右两个控制台显示各自 host stdout
 与插件 dev sink。首次启动会自动构建并安装本插件、带起本地同步服务端并给 A/B
-预配置 token/口令；面板还提供 **恢复预配置** 和勾选式 **清理数据**。详见
+预配置 token/口令；面板还提供 **导入大会话**（形状轨迹生成，约 69k 事件）、
+**恢复预配置** 和勾选式 **清理数据**。详见
 [dev/console/README.md](dev/console/README.md)。
 
 ## 两条硬约定
