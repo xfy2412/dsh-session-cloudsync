@@ -413,6 +413,10 @@ test('控制器：未映射会话跨轮次持久化，回填成功后移除', as
   fixture.controller.recordBackfill(pullReport([{ sessionId: 's1', status: 'pulled', applied: 3 }], 9))
   assert.deepEqual(fixture.controller.unmappedSessions(), [])
   assert.equal(fixture.persists.at(-1).unmapped, undefined)
+  const afterBackfill = fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's1')
+  assert.equal(afterBackfill.pull.status, 'pulled')
+  assert.equal(afterBackfill.pull.applied, 3)
+  assert.equal(afterBackfill.phase, 'done')
 })
 
 test('控制器：并发触发返回 already-running，上一轮结束后才允许下一轮', async () => {

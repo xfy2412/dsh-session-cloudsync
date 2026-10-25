@@ -68,7 +68,7 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 
 ## 拉取后如何生效
 
-优先走 DSH 原生接缝——`ctx.sessionPersistence.create` / `open(id, 'write')` + `append(events)` 写入，`ctx.workspaceRegistry.resolveByPath` + `Workspace.attachSession` 挂回工作区，避免重启宿主。M0 已验证写入后宿主能发现新会话；已打开的客户端需要 `sessions.refresh()` 才会拉到冷会话。
+优先走 DSH 原生接缝——`ctx.sessionPersistence.create` / `open(id, 'write')` + `append(events)` 写入，`ctx.workspaceRegistry.resolveByPath` + `Workspace.attachSession` 挂回工作区，避免重启宿主。M0 已验证写入后宿主能发现新会话；客户端插件在同步轮结束后（以及回填状态变化时）调用 `ctx.sessions.refresh()`，让已打开的窗口重新拉 `session/list`，更新冷会话、标题和工作区分组，不需要用户手动刷新页面。
 
 会话头（`formatVersion`/`createdAt`/`isSeeded`/`delegationDepth`/`agentPreset`，以及 seeded 会话的 `inheritedEventCount`）作为单独的 **sealed header** 上传，manifest 只记哈希；`cwd` 不进入 manifest 明文。拉取端按 `workspaceKey` 的工作区绑定决定落到哪个本地工作区；绑定/映射的加密存储见 [VAULT.md](VAULT.md)。这样同一会话在不同设备上的链身份不受本地路径影响。
 

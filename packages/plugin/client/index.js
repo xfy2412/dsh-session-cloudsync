@@ -2267,6 +2267,35 @@ window.__ModuleLoader__.load({
       ctx.effect(function () { return function () { model.dispose() } }, 'dsh-session-cloudsync: model')
       model.refreshAll()
 
+      // 同步完成后让 DSH 客户端重新拉一次 session/list：拉取 attach 的会话、
+      // 投影缓存里的标题和工作区分组才会进入已有窗口，而不需要用户手动刷新。
+      var lastFinishedRunId = -1
+      var lastSessionRefreshKey = ''
+      function refreshSessionList() {
+        try {
+          if (!ctx.sessions || typeof ctx.sessions.refresh !== 'function') return
+          var result = ctx.sessions.refresh()
+          if (result && typeof result.catch === 'function') result.catch(function () {})
+        } catch (error) {
+          // 列表刷新失败不能影响同步状态界面。
+        }
+      }
+      model.subscribe(function () {
+        var status = model.getSnapshot().status
+        if (!status || !status.run || status.run.state !== 'finished') return
+        var sessions = Array.isArray(status.sessions) ? status.sessions : []
+        var key = sessions.map(function (session) {
+          var pull = session.pull || {}
+          var push = session.push || {}
+          return [session.sessionId, session.phase, pull.status || '', pull.applied || '', push.status || ''].join(':')
+        }).join('|')
+        if (status.run.id !== lastFinishedRunId || key !== lastSessionRefreshKey) {
+          lastFinishedRunId = status.run.id
+          lastSessionRefreshKey = key
+          refreshSessionList()
+        }
+      })
+
       var credentials = ctx.get('remote.credentials')
       var settings = ctx.get('remote.settings')
       var layout = ctx.get('layout')

@@ -125,6 +125,23 @@ interface WorkspaceRegistryLike {
   list?(): readonly WorkspaceLike[]
 }
 
+/** dsh-settings 的最小接口；设置服务不存在时自动加入上传名单会跳过。 */
+interface SettingsLike {
+  readonly writable?: boolean
+  describe(options?: { readonly redactSecrets?: boolean }): readonly SettingsDescriptorLike[]
+  mutate(ns: string, ops: readonly SettingsPathOpLike[], expectedRevision?: number): Promise<void>
+}
+
+interface SettingsDescriptorLike {
+  readonly ns: string
+  readonly revision: number
+  readonly value?: unknown
+}
+
+type SettingsPathOpLike =
+  | { readonly op: 'set'; readonly path: readonly string[]; readonly value: unknown }
+  | { readonly op: 'unset'; readonly path: readonly string[] }
+
 /** `ctx.connection` 的最小结构（类型包不在本插件依赖里）。 */
 interface ConnectionLike {
   readonly fetch: {
@@ -589,6 +606,73 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   let pullWithDeps: ((state: PullState) => Promise<PullReport>) | undefined
+  // 所有 pull 都必须经过这一把锁：控制器轮次、映射回填、未来任何入口。
+  let pullTail: Promise<unknown> = Promise.resolve()
+  const withPullLock = <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = pullTail.then(operation, operation)
+    pullTail = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  const autoUploadRoots = new Set<string>()
+
+  /** 读取 dsh-settings；不存在时返回 undefined，不把设置页当成硬依赖。 */
+  const settingsService = (): SettingsLike | undefined => {
+    try {
+      const value = (ctx as unknown as { get(name: string): unknown }).get('settings')
+      if (value === null || typeof value !== 'object') return undefined
+      const settings = value as Partial<SettingsLike>
+      if (typeof settings.describe !== 'function' || typeof settings.mutate !== 'function') return undefined
+      return settings as SettingsLike
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 把首次成功拉取的根会话补进上传白名单，并让设置页的勾选反映出来。
+   * 只在首次冷拉取时调用；用户之后手动取消勾选不会被下一轮重新加回。
+   */
+  const flushAutoUpload = async (): Promise<void> => {
+    if (autoUploadRoots.size === 0) return
+    const settings = settingsService()
+    if (settings === undefined || settings.writable === false) return
+    let lastError: unknown
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const descriptor = settings.describe({ redactSecrets: true }).find((entry) => {
+          if (entry.ns.includes('session-cloudsync')) return true
+          const value = entry.value
+          return value !== null && typeof value === 'object'
+            && Array.isArray((value as Record<string, unknown>)['syncSessionIds'])
+            && typeof (value as Record<string, unknown>)['serverUrl'] === 'string'
+        })
+        if (descriptor === undefined) return
+        const raw = descriptor.value
+        if (raw === null || typeof raw !== 'object') return
+        const value = raw as Record<string, unknown>
+        const current = Array.isArray(value['syncSessionIds'])
+          ? value['syncSessionIds'].filter((entry): entry is string => typeof entry === 'string')
+          : []
+        const next = [...new Set([...current, ...autoUploadRoots])]
+        if (next.length !== current.length) {
+          await settings.mutate(descriptor.ns, [{
+            op: 'set',
+            path: ['syncSessionIds'],
+            value: next,
+          }], descriptor.revision)
+          refreshConfig()
+        }
+        autoUploadRoots.clear()
+        return
+      } catch (error: unknown) {
+        lastError = error
+        const message = error instanceof Error ? error.message : String(error)
+        if (!/changed since it was read/u.test(message)) break
+      }
+    }
+    logger.warn(`dsh-session-cloudsync: 自动加入上传名单失败：${lastError instanceof Error ? lastError.message : String(lastError)}`)
+  }
   const controller = new SyncController({
     push: () => syncOnce({
       ...deps,
@@ -597,7 +681,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
     pull: (state) => {
       if (pullWithDeps === undefined) throw new Error('拉取引擎尚未初始化')
-      return pullWithDeps(state)
+      return withPullLock(() => pullWithDeps!(state))
     },
     persist: persistState,
     configuration,
@@ -676,12 +760,14 @@ export function apply(ctx: Context, config: Config): void {
       const read = await handle.read()
       cache.coldSnapshot(handle.header, handle.inheritedEventCount ?? 0, read.events)
       // coldSnapshot 的落盘是 fire-and-forget；等 title 行可见后再 attach，
-      // 避免列表恰好读到尚未写完的缓存。
-      for (let attempt = 0; attempt < 25; attempt += 1) {
+      // 避免列表恰好读到尚未写完的缓存。大会话的 projection checkpoint 可能
+      // 超过旧实现的 250ms 窗口，这里给 2s 并留下诊断。
+      for (let attempt = 0; attempt < 200; attempt += 1) {
         if (typeof cache.cachedSnapshot !== 'function') return
         if (cache.cachedSnapshot(handle.header, ['title']) !== undefined) return
         await new Promise<void>((resolve) => setTimeout(resolve, 10))
       }
+      logger.warn(`dsh-session-cloudsync: 会话 ${sessionId} 的标题投影在 2s 内未就绪，继续挂载`)
     } finally {
       await handle.close()
     }
@@ -711,6 +797,9 @@ export function apply(ctx: Context, config: Config): void {
         ?? (await workspaceRegistry.create(mappedPath, 'Session Sync'))
       await workspace.attachSession(sessionId as SessionId)
     },
+    onFirstPull: (sessionId: string): void => {
+      if (!syncSessionIds.includes(sessionId)) autoUploadRoots.add(sessionId)
+    },
     logger,
     beforeApply: async (sessionId: string, targetSeq: number): Promise<void> => {
       controller.beginApply(sessionId, targetSeq)
@@ -734,19 +823,23 @@ export function apply(ctx: Context, config: Config): void {
    * 不推进主游标。这样即使映射页打开时游标已经越过它们，也能补回来。
    */
   const backfillMappedWorkspaces = async (): Promise<void> => {
-    if (backfilling || controller.snapshot().running) return
+    if (backfilling) return
     const pending = controller.unmappedSessions()
       .filter((entry) => bindings.bindings[entry.workspaceKey] !== undefined)
     if (pending.length === 0) return
     const revision = Math.max(0, Math.min(...pending.map((entry) => entry.revision)) - 1)
     backfilling = true
     try {
-      const snapshot = controller.snapshot()
-      const report = await pullWithDeps({
-        revision,
-        ...snapshot.pending === null ? {} : { pending: snapshot.pending },
+      if (pullWithDeps === undefined) return
+      const report = await withPullLock(() => {
+        const snapshot = controller.snapshot()
+        return pullWithDeps!({
+          revision,
+          ...snapshot.pending === null ? {} : { pending: snapshot.pending },
+        })
       })
       controller.recordBackfill(report)
+      await flushAutoUpload()
       await refreshBindings()
     } catch (error: unknown) {
       logger.warn(`dsh-session-cloudsync: 映射回填失败：${error instanceof Error ? error.message : String(error)}`)
@@ -821,6 +914,7 @@ export function apply(ctx: Context, config: Config): void {
     })
     await autoBindMatchingWorkspaces()
     await backfillMappedWorkspaces()
+    await flushAutoUpload()
     void runVault().catch((error: unknown) => {
       logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
     })

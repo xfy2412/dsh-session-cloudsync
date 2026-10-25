@@ -111,10 +111,26 @@ selection: {
 - **拉取**：不读上传白名单。远端根会话的 `workspaceKey` 能解析到本机路径
   （bindings 或本机 canonical path → key）就拉；未映射则只显示 `unmapped`。
 - 远端会话不需要第二次勾选；上传侧已经过滤过。
+- **首次成功拉取的根会话会自动补进上传白名单**；用户之后手动取消不会被重新加回。
 - 配置字段暂时仍叫 `syncSessionIds`（兼容已提交的配置），但语义已经收窄为“上传白名单”；快照对外暴露为 `selection.uploadRootIds`。
 
 B 的案例：服务端 `session-bench-shape` 的 `workspaceKey=8hFb...`，
 B 绑定 `8hFb...` 后就直接具备拉取资格，不再依赖本地不存在的会话 id 进白名单。
+
+### 拉取写所有权
+
+`ctx.sessions.get(id) === undefined` 只表示“没有已注册的 live Session”，
+不能推导“没有写者”。当前拉取顺序：
+
+```text
+stat(id)
+→ open(id, 'read') 先比较本地/远端
+→ 只有确实落后时才 open(id, 'write')
+→ SessionAlreadyOwnedError 归类为 write-owned/deferred，不当作错误
+```
+
+所有 pull（控制器轮次和映射回填）共享同一把进程内锁；回填结果合并进
+controller 的 pull 视图，回填不再绕过状态机。
 
 ## 4. 远端清单
 

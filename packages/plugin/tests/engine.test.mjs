@@ -246,6 +246,29 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       assert.equal(liveCurrent.sessions[0].status, 'up-to-date')
       assert.equal(liveCurrent.revision, mapped.revision)
 
+      // 本地落后但官方/其他插件已持有 write：先读判断，再探测 write；
+      // 冲突必须归为 write-owned，而不是 error/unknown。
+      const ownedStore = fakeStore(header, events(0, 1))
+      const originalOpen = ownedStore.open
+      ownedStore.open = async (id, access) => {
+        if (access === 'write') {
+          const error = new Error(`session "${id}" is already owned by an active write handle`)
+          error.name = 'SessionAlreadyOwnedError'
+          throw error
+        }
+        return originalOpen(id)
+      }
+      const owned = await pullOnce({
+        persistence: ownedStore,
+        sessions,
+        config,
+        workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
+      }, { revision: 0 })
+      assert.equal(owned.sessions[0].status, 'write-owned')
+      assert.equal(owned.sessions[0].pendingEvents, 4)
+      assert.equal(ownedStore.sessions.get(sessionId).events.length, 2)
+      assert.ok(owned.revision < mapped.revision, 'write-owned 必须把游标停在会话之前')
+
       const unmappedStore = fakeStore(undefined)
       const unmapped = await pullOnce({
         persistence: unmappedStore,

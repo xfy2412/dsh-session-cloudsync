@@ -381,16 +381,20 @@ export class SyncController {
   }
 
   /**
-   * 记录一次映射回填的拉取结果；只更新未映射表，不推进主游标。
+   * 记录一次映射回填的拉取结果：更新未映射表，并把 pull 方向合并进会话视图。
+   * 回填不推进主游标，但必须让设置页/气泡看到真实 pull 状态，不能只留
+   * 上一轮的 push skipped。
    * @param report - 回填拉取结果。
    */
   recordBackfill(report: PullReport): void {
     if (!report.configured) return
-    let changed = false
-    for (const session of report.sessions) changed = this.trackUnmapped(session) || changed
-    if (changed) {
+    const views: SyncDirectionStatus[] = []
+    this.collectPull(report, views, [])
+    if (views.length > 0) {
+      const merged = new Map(this.sessions.map((view) => [`${view.direction}:${view.sessionId}`, view]))
+      for (const view of views) merged.set(`${view.direction}:${view.sessionId}`, view)
+      this.sessions = [...merged.values()]
       this.bump()
-      this.persistNow()
     }
   }
 
@@ -673,7 +677,7 @@ function directionPhaseOf(direction: 'push' | 'pull', status: string): SyncDirec
   if (status === 'pushed' || status === 'pulled') return 'done'
   if (status === 'skipped' || status === 'excluded' || status === 'tombstone') return 'skipped'
   if (status === 'remote-ahead' || status === 'partial'
-    || status === 'local-active' || status === 'local-ahead' || status === 'unmapped') return 'deferred'
+    || status === 'local-active' || status === 'write-owned' || status === 'local-ahead' || status === 'unmapped') return 'deferred'
   if (direction === 'push' ? status === 'pushing' : status === 'pulling') return 'transferring'
   return 'planned'
 }
