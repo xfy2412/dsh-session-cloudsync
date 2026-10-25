@@ -49,7 +49,7 @@ test('控制器：实时阶段进入 live，轮次结束后收敛', async () => 
   let fixture
   fixture = createController({
     push: async () => {
-      fixture.controller.updateProgress({ sessionId: 's1', direction: 'push', phase: 'start', progress: 0 })
+      fixture.controller.updateProgress({ sessionId: 's1', direction: 'push', phase: 'start', stage: 'sealing', progress: 0 })
       return pushReport([])
     },
   })
@@ -60,6 +60,7 @@ test('控制器：实时阶段进入 live，轮次结束后收敛', async () => 
   assert.equal(during[0].sessionId, 's1')
   assert.equal(during[0].phase, 'running')
   assert.equal(during[0].push.status, 'pushing')
+  assert.equal(during[0].push.stage, 'sealing')
   await running
   assert.deepEqual(fixture.controller.snapshot().sessions, [])
 })
@@ -108,6 +109,140 @@ test('控制器：成功一轮更新状态、revision 与逐会话视图', async
   assert.equal(byId.s4.phase, 'done')
   assert.equal(byId.s4.pull.status, 'up-to-date')
   assert.deepEqual(fixture.persists.at(-1), { revision: 7 })
+})
+
+test('控制器：计划列表跨轮保留，未选中的本地会话不进入视图', async () => {
+  const fixture = createController({
+    push: async () => pushReport([
+      { sessionId: 'local-unselected', status: 'skipped', error: '根会话未选中' },
+      { sessionId: 'local-selected', status: 'pushed' },
+    ]),
+    pull: async () => pullReport([], 1),
+  })
+  fixture.controller.seedList([
+    { sessionId: 'remote-planned', direction: 'pull' },
+    { sessionId: 'local-selected', direction: 'push' },
+  ])
+  assert.deepEqual(
+    fixture.controller.snapshot().sessions.map((session) => session.sessionId),
+    ['remote-planned', 'local-selected'],
+  )
+
+  await fixture.controller.run()
+  const after = fixture.controller.snapshot().sessions
+  assert.deepEqual(after.map((session) => session.sessionId), ['remote-planned', 'local-selected'])
+  assert.equal(after.find((session) => session.sessionId === 'remote-planned').pull.status, 'planned')
+  assert.equal(after.some((session) => session.sessionId === 'local-unselected'), false)
+})
+
+test('控制器：新会话只追加到稳定列表尾部', () => {
+  const fixture = createController()
+  fixture.controller.seedList([{ sessionId: 's1', direction: 'push' }])
+  fixture.controller.seedList([{ sessionId: 's2', direction: 'pull' }])
+  const sessions = fixture.controller.snapshot().sessions
+  assert.deepEqual(sessions.map((session) => session.sessionId), ['s1', 's2'])
+})
+
+test('控制器：提交阶段不回退已完成的事件数', async () => {
+  let fixture
+  fixture = createController({
+    push: async () => {
+      fixture.controller.updateProgress({
+        sessionId: 's-commit',
+        direction: 'push',
+        phase: 'progress',
+        stage: 'uploading',
+        progress: 0.85,
+        totalEvents: 100,
+        doneEvents: 85,
+      })
+      const uploading = fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-commit')
+      assert.equal(uploading.push.totalEvents, 100)
+      assert.equal(uploading.push.doneEvents, 85)
+
+      fixture.controller.updateProgress({
+        sessionId: 's-commit',
+        direction: 'push',
+        phase: 'progress',
+        stage: 'committing',
+        progress: 1,
+      })
+      const committing = fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-commit')
+      assert.equal(committing.push.totalEvents, 100)
+      assert.equal(committing.push.doneEvents, 85)
+      return pushReport([])
+    },
+  })
+  await fixture.controller.run()
+})
+
+test('控制器：seed 使用本机/远端记录区分本地领先、远端领先和已同步', () => {
+  const fixture = createController()
+  fixture.controller.seedList([
+    { sessionId: 'local-ahead', direction: 'push', state: 'local-ahead' },
+    { sessionId: 'remote-ahead', direction: 'pull', state: 'remote-ahead' },
+    { sessionId: 'same', direction: 'push', state: 'up-to-date' },
+    { sessionId: 'planned', direction: 'pull' },
+  ])
+  const byId = new Map(fixture.controller.snapshot().sessions.map((session) => [session.sessionId, session]))
+  assert.equal(byId.get('local-ahead').push.status, 'local-ahead')
+  assert.equal(byId.get('local-ahead').phase, 'deferred')
+  assert.equal(byId.get('remote-ahead').pull.status, 'remote-ahead')
+  assert.equal(byId.get('remote-ahead').phase, 'deferred')
+  assert.equal(byId.get('same').phase, 'done')
+  assert.equal(byId.get('planned').phase, 'planned')
+})
+
+test('控制器：本地已有记录时 seed 修复遗留的 pull planned/unmapped', async () => {
+  const fixture = createController({
+    pull: async () => pullReport([{
+      sessionId: 's-local',
+      status: 'unmapped',
+      workspaceKey: 'workspace-local',
+    }], 1),
+  })
+  await fixture.controller.run()
+  assert.equal(
+    fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-local').pull.status,
+    'unmapped',
+  )
+
+  fixture.controller.seedList([{ sessionId: 's-local', direction: 'push', state: 'local-ahead' }])
+  fixture.controller.reconcileLocal(new Set(['s-local']), new Set(['s-local']))
+  const row = fixture.controller.snapshot().sessions.find((session) => session.sessionId === 's-local')
+  assert.equal(row.push.status, 'local-ahead')
+  assert.equal(row.pull.status, 'up-to-date')
+  assert.equal(row.phase, 'deferred')
+})
+
+test('控制器：reconcileLocal 移除未选中的纯本地旧行，保留选中的行', () => {
+  const fixture = createController()
+  fixture.controller.seedList([
+    { sessionId: 'selected', direction: 'push' },
+    { sessionId: 'unselected', direction: 'pull' },
+  ])
+  fixture.controller.reconcileLocal(new Set(['selected', 'unselected']), new Set(['selected']))
+  assert.deepEqual(
+    fixture.controller.snapshot().sessions.map((session) => session.sessionId),
+    ['selected'],
+  )
+})
+
+test('控制器：下一轮 seed 不把已完成的 pull 重置为待拉取', async () => {
+  const fixture = createController({
+    pull: async () => pullReport([{ sessionId: 'remote-done', status: 'up-to-date' }], 1),
+  })
+  fixture.controller.seedList([{ sessionId: 'remote-done', direction: 'pull' }])
+  await fixture.controller.run()
+  assert.equal(
+    fixture.controller.snapshot().sessions.find((session) => session.sessionId === 'remote-done').pull.status,
+    'up-to-date',
+  )
+  fixture.controller.seedList([{ sessionId: 'remote-done', direction: 'pull' }])
+  assert.equal(
+    fixture.controller.snapshot().sessions.find((session) => session.sessionId === 'remote-done').pull.status,
+    'up-to-date',
+  )
 })
 
 test('控制器：cwd 警告保留到用户处理，clear 后消失', async () => {

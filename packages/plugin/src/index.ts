@@ -13,7 +13,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { SyncController } from './controller.ts'
+import { SyncController, type PlannedSyncSession } from './controller.ts'
 import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { prepareReplaceScript } from './replace.ts'
 import {
@@ -413,6 +413,7 @@ export function apply(ctx: Context, config: Config): void {
   let labelsIdentity: string | undefined
   let labelsFetchedAt = 0
   let remoteInventory: { readonly identity: string; readonly at: number; readonly byKey: Map<string, string[]> } | undefined
+  const remoteLastSeq = new Map<string, number>()
   const refreshWorkspaceLabels = async (): Promise<void> => {
     if (statePath === undefined || bindingsDir === undefined) return
     if (engineConfig.token.trim() === '' || engineConfig.passphrase === '') return
@@ -452,6 +453,7 @@ export function apply(ctx: Context, config: Config): void {
     if (remoteInventory !== undefined && remoteInventory.identity === identity && Date.now() - remoteInventory.at < 15_000) {
       return remoteInventory.byKey
     }
+    if (remoteInventory?.identity !== identity) remoteLastSeq.clear()
     const byKey = new Map<string, string[]>()
     try {
       let since = 0
@@ -483,12 +485,16 @@ export function apply(ctx: Context, config: Config): void {
               readonly manifest?: {
                 readonly workspaceKey?: unknown
                 readonly deletedAt?: unknown
+                readonly lastSeq?: unknown
               }
             }
           }
           const manifest = manifestBody.value?.manifest
           if (manifest === undefined || typeof manifest.workspaceKey !== 'string' || manifest.workspaceKey === '') continue
           if (manifest.deletedAt !== undefined) continue
+          if (typeof manifest.lastSeq === 'number' && Number.isFinite(manifest.lastSeq)) {
+            remoteLastSeq.set(sessionId, manifest.lastSeq)
+          }
           const list = byKey.get(manifest.workspaceKey) ?? []
           list.push(sessionId)
           byKey.set(manifest.workspaceKey, list)
@@ -788,11 +794,17 @@ export function apply(ctx: Context, config: Config): void {
     attach: async (sessionId: string, mappedPath?: string): Promise<void> => {
       if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
       if (mappedPath === undefined || mappedPath === '') throw new Error('会话没有可用的本地工作区落点')
+      controller.updateProgress({
+        sessionId, direction: 'pull', phase: 'progress', stage: 'projecting', progress: 1,
+      })
       try {
         await warmProjectionCache(sessionId)
       } catch (error: unknown) {
         logger.warn(`dsh-session-cloudsync: 预热会话投影缓存失败：${error instanceof Error ? error.message : String(error)}`)
       }
+      controller.updateProgress({
+        sessionId, direction: 'pull', phase: 'progress', stage: 'attaching', progress: 1,
+      })
       const workspace = (await workspaceRegistry.resolveByPath(mappedPath))
         ?? (await workspaceRegistry.create(mappedPath, 'Session Sync'))
       await workspace.attachSession(sessionId as SessionId)
@@ -900,6 +912,45 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
+  /**
+   * 在 controller 开始本轮之前建立完整列表：选中的本地根 + 远端未拉取根。
+   * 这样气泡在第一个会话开始传输前就知道整轮有哪些行。
+   */
+  const seedControllerList = async (): Promise<void> => {
+    const snapshots = await ctx.sessionPersistence.list()
+    const tree = buildSessionTree(snapshots)
+    const localById = new Map(snapshots.map((snapshot) => [String(snapshot.header.id), snapshot]))
+    const selected = new Set(syncSessionIds)
+    const inventory = await readRemoteInventory()
+    const remoteIds = new Set<string>()
+    for (const ids of inventory.values()) {
+      for (const sessionId of ids) remoteIds.add(sessionId)
+    }
+    const stateFor = (sessionId: string): 'planned' | 'local-ahead' | 'remote-ahead' | 'up-to-date' => {
+      const local = localById.get(sessionId)
+      if (local === undefined) return 'remote-ahead'
+      if (!remoteIds.has(sessionId)) return 'local-ahead'
+      const remoteLast = remoteLastSeq.get(sessionId)
+      if (remoteLast === undefined) return 'planned'
+      const localLast = Math.max(-1, (local.eventCount ?? 0) - 1)
+      if (localLast === remoteLast) return 'up-to-date'
+      return localLast < remoteLast ? 'remote-ahead' : 'local-ahead'
+    }
+    const entries: PlannedSyncSession[] = []
+    for (const root of tree.roots) {
+      if (!selected.has(String(root.root.header.id))) continue
+      for (const snapshot of [root.root, ...root.descendants.map((entry) => entry.snapshot)]) {
+        const sessionId = String(snapshot.header.id)
+        entries.push({ sessionId, direction: 'push', state: stateFor(sessionId) })
+      }
+    }
+    for (const sessionId of [...remoteIds].sort()) {
+      if (!localById.has(sessionId)) entries.push({ sessionId, direction: 'pull', state: 'remote-ahead' })
+    }
+    controller.seedList(entries)
+    controller.reconcileLocal(new Set(localById.keys()), selected)
+  }
+
   const runSync = async (
     manual = false,
     trigger?: 'startup' | 'auto' | 'manual',
@@ -908,6 +959,8 @@ export function apply(ctx: Context, config: Config): void {
     await refreshSecrets()
     await deviceLease.ensure()
     await refreshBindings()
+    // 已有同步在跑时不要重写列表占位，否则会把刚完成的 pull 状态覆盖成 planned。
+    if (!controller.snapshot().running) await seedControllerList()
     const result = await controller.run({
       manual,
       ...trigger === undefined ? {} : { trigger },

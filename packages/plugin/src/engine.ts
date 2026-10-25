@@ -148,6 +148,26 @@ export interface SyncLogger {
   error(message: string): void
 }
 
+/** 一次同步操作内部的细分阶段。 */
+export type SyncStage =
+  | 'reading'
+  | 'planning'
+  | 'sealing'
+  | 'uploading'
+  | 'committing'
+  | 'downloading'
+  | 'verifying'
+  | 'applying'
+  | 'flushing'
+  | 'projecting'
+  | 'attaching'
+  | 'waiting-write'
+  | 'waiting-live'
+  | 'waiting-cwd'
+  | 'waiting-retry'
+  | 'done'
+  | 'failed'
+
 /** 一轮同步中某个会话的实时阶段。 */
 export interface SyncProgress {
   /** 会话 id。 */
@@ -156,6 +176,8 @@ export interface SyncProgress {
   readonly direction: 'push' | 'pull'
   /** 当前阶段。 */
   readonly phase: 'start' | 'progress' | 'transferred' | 'committed' | 'done' | 'error'
+  /** 当前细分阶段；缺省表示只上报粗粒度进度。 */
+  readonly stage?: SyncStage
   /** 0–1 的粗粒度进度。 */
   readonly progress: number
   /** 本方向计划处理的事件数。 */
@@ -883,11 +905,13 @@ async function syncSession<Session>(
   }
 
   const uploadSteps: Array<{ readonly entry: SealedFrame; readonly events: number }> = []
+  notifyProgress(deps, { sessionId, direction: 'push', phase: 'progress', stage: 'planning', progress: 0 })
   let baseIndex: number
   let baseChainHash: string | null
   let pushedBatches = 0
   let totalEvents = 0
 
+  notifyProgress(deps, { sessionId, direction: 'push', phase: 'progress', stage: 'sealing', progress: 0 })
   if (remote === undefined) {
     const headerEntry = sealHeader(meta, sessionId, sessionKey)
     uploadSteps.push({ entry: headerEntry, events: 0 })
@@ -932,6 +956,7 @@ async function syncSession<Session>(
       sessionId,
       direction: 'push',
       phase: 'progress',
+      stage: 'uploading',
       progress: totalEvents === 0 ? 1 : doneEvents / totalEvents,
       totalEvents,
       doneEvents,
@@ -951,6 +976,19 @@ async function syncSession<Session>(
     }
     notifyUpload()
   }
+  notifyProgress(deps, {
+    sessionId,
+    direction: 'push',
+    phase: 'progress',
+    stage: 'committing',
+    progress: 1,
+    totalEvents,
+    doneEvents: totalEvents,
+    totalBatches: pushedBatches,
+    doneBatches: pushedBatches,
+    bytes: totalBytes,
+    doneBytes: totalBytes,
+  })
   const sealedEntries = uploadSteps.map((step) => step.entry)
 
   await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
@@ -1014,7 +1052,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
 
   for (const entry of plan.planned) {
     const sessionId = String(entry.snapshot.header.id)
-    notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', progress: 0 })
+    notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', stage: 'reading', progress: 0 })
     try {
       const sessionKey = sessionKeyOf(master, sessionId)
       const report = await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot, entry.depth === 0)
@@ -1022,6 +1060,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
       notifyProgress(deps, {
         sessionId, direction: 'push',
         phase: report.status === 'error' ? 'error' : 'done',
+        stage: report.status === 'error' ? 'failed' : 'done',
         progress: report.status === 'error' ? 0 : 1,
         ...report.totalEvents === undefined ? {} : { totalEvents: report.totalEvents },
         ...report.doneEvents === undefined ? {} : { doneEvents: report.doneEvents },
@@ -1044,7 +1083,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
         ...entry.snapshot.header.createdAt === undefined ? {} : { createdAt: entry.snapshot.header.createdAt },
         ...entry.snapshot.header.version === undefined ? {} : { formatVersion: entry.snapshot.header.version },
       })
-      notifyProgress(deps, { sessionId, direction: 'push', phase: 'error', progress: 0, error: classified.message })
+      notifyProgress(deps, { sessionId, direction: 'push', phase: 'error', stage: 'failed', progress: 0, error: classified.message })
     }
   }
 
@@ -1472,13 +1511,17 @@ async function pullSession<Session>(
         })
       }
       notifyDownload(0)
+      notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0 })
       const events = await downloadSafeEvents(
         fetchImpl, base, deps.config.token, sessionId, remote.frames, observed.last, safe, sessionKey,
         (doneEvents) => { notifyDownload(doneEvents) },
       )
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
+      notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'verifying', progress: 0.9 })
       await deps.beforeApply?.(sessionId, safe)
+      notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'applying', progress: 0.95 })
       await appendPulledEvents(handle, events)
+      notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'flushing', progress: 0.99 })
       await handle.flush()
       const nextCwdNonPortable = cwdNonPortableOf([...observed.events, ...events], workspacePath)
       if (!nextCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
@@ -1512,6 +1555,7 @@ async function pullSession<Session>(
     })
   }
   notifyDownload(0)
+  notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0 })
   const events = await downloadSafeEvents(
     fetchImpl, base, deps.config.token, sessionId, remote.frames, -1, safe, sessionKey,
     (doneEvents) => { notifyDownload(doneEvents) },
@@ -1528,10 +1572,13 @@ async function pullSession<Session>(
     ...meta.origin === undefined ? {} : { origin: meta.origin },
   }
   const options = meta.isSeeded ? { inheritedEventCount: meta.inheritedEventCount ?? 0 } : undefined
+  notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'verifying', progress: 0.9 })
   await deps.beforeApply?.(sessionId, safe)
+  notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'applying', progress: 0.95 })
   const handle = await deps.persistence.create(header, options)
   try {
     if (events.length > 0) await appendPulledEvents(handle, events)
+    notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'flushing', progress: 0.99 })
     await handle.flush()
   } finally {
     await handle.close()
@@ -1771,7 +1818,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         reports.push({ sessionId: item.sessionId, status: 'tombstone' })
         continue
       }
-      notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', progress: 0 })
+      notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', stage: 'reading', progress: 0 })
       applyStarted = undefined
       try {
         const workspaceKey = await resolveWorkspaceKey(
@@ -1795,7 +1842,8 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
             },
           })
           notifyProgress(deps, {
-            sessionId: item.sessionId, direction: 'pull', phase: 'done', progress: 1,
+            sessionId: item.sessionId, direction: 'pull', phase: 'done',
+            stage: 'waiting-cwd', progress: 1,
             error: '未映射工作区：unmapped',
           })
           continue
@@ -1815,6 +1863,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         notifyProgress(deps, {
           sessionId: item.sessionId, direction: 'pull',
           phase: report.status === 'error' ? 'error' : 'done',
+          stage: report.status === 'error' ? 'failed' : 'done',
           progress: report.status === 'error' ? 0 : 1,
           ...report.totalEvents === undefined ? {} : { totalEvents: report.totalEvents },
           ...report.applied === undefined ? {} : { doneEvents: report.applied },
@@ -1833,7 +1882,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
             formatVersion: item.loaded.meta.formatVersion,
           },
         })
-        notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'error', progress: 0, error: classified.message })
+        notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'error', stage: 'failed', progress: 0, error: classified.message })
         // 已经调用 beforeApply 的失败会留下 pending；此时必须停下，不能
         // 让下一个会话覆盖唯一一条恢复记录。只读阶段的分叉/格式错误没有
         // pending，可以跳过该会话，继续处理其他安全会话。

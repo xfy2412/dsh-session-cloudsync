@@ -180,8 +180,15 @@ window.__ModuleLoader__.load({
       '.dssync-cloud:hover{background:rgba(86,134,254,.14)}',
       '.dssync-cloud svg{width:20px;height:20px}',
       '.dssync-bubble.collapsed .dssync-cloud{width:28px;height:28px}',
-      '.dssync-dot{position:absolute;right:1px;bottom:1px;width:6px;height:6px;border-radius:50%;background:var(--dssync-faint);border:1.5px solid #232324}',
+      '.dssync-dot{position:absolute;right:1px;bottom:1px;width:6px;height:6px;border-radius:50%;background:var(--dssync-faint);border:1.5px solid #232324;overflow:visible}',
       '.dssync-dot.syncing{background:#f0b64a}.dssync-dot.bad{background:#ef4444}.dssync-dot.ok{background:#22c55e}.dssync-dot.warn{background:#f59e0b}',
+      '.dssync-dot.syncing::before,.dssync-st.run::before{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid transparent;border-top-color:#f0b64a;border-right-color:rgba(240,182,74,.35);animation:dssync-orbit 1.15s linear infinite;pointer-events:none}',
+      '.dssync-dot.syncing::after,.dssync-st.run::after{content:"";position:absolute;inset:-3px;border-radius:50%;animation:dssync-halo 1.6s ease-in-out infinite;pointer-events:none}',
+      '.dssync-dot.waiting{background:#f59e0b}.dssync-dot.waiting::after,.dssync-st.waiting::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid rgba(245,158,11,.65);animation:dssync-ripple 2.4s ease-out infinite;pointer-events:none}',
+      '@keyframes dssync-orbit{to{transform:rotate(360deg)}}',
+      '@keyframes dssync-halo{0%,100%{box-shadow:0 0 0 0 rgba(240,182,74,.25)}50%{box-shadow:0 0 0 4px rgba(240,182,74,0)}}',
+      '@keyframes dssync-ripple{0%{opacity:.65;transform:scale(.75)}70%,100%{opacity:0;transform:scale(1.45)}}',
+      '@media(prefers-reduced-motion:reduce){.dssync-dot::before,.dssync-dot::after,.dssync-st::before,.dssync-st::after{animation:none!important}}',
       '.dssync-label{min-width:0;flex:1 1 auto;max-width:100%;overflow:hidden;transition:max-width .34s,opacity .18s}',
       '.dssync-label b{display:block;font-size:12px;font-weight:500;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dssync-label span{display:block;color:var(--dssync-faint);font-size:10.5px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -205,11 +212,12 @@ window.__ModuleLoader__.load({
       '.dssync-bubble.open .dssync-collapse-in{opacity:1;transform:none}',
       '.dssync-panel{padding:2px 10px 4px;max-height:250px;overflow:auto}',
       '.dssync-rowline{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:6px;font-size:11.5px}',
+      '.dssync-rowline.focus{background:rgba(240,182,74,.08);box-shadow:inset 2px 0 0 rgba(240,182,74,.65)}',
       '.dssync-rowline .name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dssync-muted)}',
       '.dssync-rowline .name.child{padding-left:12px;color:var(--dssync-faint)}',
       '.dssync-rowline .tag{margin-left:auto;color:var(--dssync-faint);font-size:10px;white-space:nowrap}',
-      '.dssync-st{width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:var(--dssync-faint)}',
-      '.dssync-st.ok{background:#22c55e}.dssync-st.bad{background:#ef4444}.dssync-st.run{background:#f0b64a}',
+      '.dssync-st{position:relative;width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:var(--dssync-faint);overflow:visible}',
+      '.dssync-st.ok{background:#22c55e}.dssync-st.bad{background:#ef4444}.dssync-st.run{background:#f0b64a}.dssync-st.waiting{background:#f59e0b}',
       '.dssync-error{margin:0 8px 8px;padding:8px 9px;border:1px solid rgba(239,68,68,.24);border-radius:8px;background:rgba(239,68,68,.09);color:#ffb1b1;font-size:11px;line-height:1.5}',
       '.dssync-foot{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--dssync-line);color:var(--dssync-faint);font-size:10.5px}',
       '.dssync-foot .spacer{flex:1 1 auto}',
@@ -675,13 +683,63 @@ window.__ModuleLoader__.load({
       }, toast ? toast.text : '')
     }
 
+    var STAGE_LABELS = {
+      reading: '读取中',
+      planning: '计算中',
+      sealing: '加密中',
+      uploading: '上传中',
+      committing: '提交中',
+      downloading: '下载中',
+      verifying: '校验中',
+      applying: '写入中',
+      flushing: '落盘中',
+      projecting: '预热标题',
+      attaching: '挂载中',
+      'waiting-write': '等待官方写入',
+      'waiting-live': '等待会话关闭',
+      'waiting-cwd': '等待 cwd 处理',
+      'waiting-retry': '等待重试',
+      done: '已完成',
+      failed: '失败',
+    }
+
+    function isWaitingStage(stage) {
+      return stage === 'waiting-write' || stage === 'waiting-live'
+        || stage === 'waiting-cwd' || stage === 'waiting-retry'
+    }
+
+    function isActiveStage(stage) {
+      return stage !== undefined && stage !== null && !isWaitingStage(stage)
+        && stage !== 'done' && stage !== 'failed'
+    }
+
+    function sessionStage(session) {
+      if (session && session.stage) return session.stage
+      if (session && session.pull && session.pull.stage) return session.pull.stage
+      if (session && session.push && session.push.stage) return session.push.stage
+      return undefined
+    }
+
+    function stageLabel(stage) {
+      return STAGE_LABELS[stage] || ''
+    }
+
+    function sessionOngoing(session) {
+      if (!session) return false
+      if (session.phase === 'running') return true
+      var stage = sessionStage(session)
+      return isActiveStage(stage) || isWaitingStage(stage)
+    }
+
     function statusDot(status) {
       if (status === null) return 'warn'
+      var sessions = Array.isArray(status.sessions) ? status.sessions : []
+      if (sessions.some(function (session) { return isActiveStage(sessionStage(session)) })) return 'syncing'
+      if (sessions.some(function (session) { return isWaitingStage(sessionStage(session)) })) return 'waiting'
       if (status.running) return 'syncing'
       if (status.lastError !== null) return 'bad'
       var lease = status.deviceLease
       if (lease && (lease.state === 'foreign' || lease.state === 'lost')) return 'warn'
-      var sessions = Array.isArray(status.sessions) ? status.sessions : []
       if (sessions.some(function (session) { return session.phase === 'failed' || session.phase === 'blocked' })) return 'bad'
       if (sessions.some(function (session) {
         return session.phase === 'deferred' || session.cwdPending === true
@@ -1880,32 +1938,83 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
+      var panelRef = useRef(null)
+      var focusRef = useRef(null)
+      var followState = useState(true)
+      var follow = followState[0]
+      var setFollow = followState[1]
+      var focusSessions = status && Array.isArray(status.sessions) ? status.sessions : []
+      var currentFocus = focusSessions.find(function (session) {
+        return session.sessionId === focusRef.current && sessionOngoing(session)
+      })
+      var focusSession = currentFocus || focusSessions.find(sessionOngoing)
+      var focusSessionId = focusSession ? focusSession.sessionId : null
+
+      useEffect(function () {
+        focusRef.current = focusSessionId
+        if (!visible || !open || !follow || focusSessionId === null || panelRef.current === null) return
+        var panel = panelRef.current
+        var rows = panel.querySelectorAll('[data-session-id]')
+        var target = null
+        for (var index = 0; index < rows.length; index += 1) {
+          if (rows[index].getAttribute('data-session-id') === focusSessionId) {
+            target = rows[index]
+            break
+          }
+        }
+        if (target === null) return
+        var panelRect = panel.getBoundingClientRect()
+        var rowRect = target.getBoundingClientRect()
+        if (rowRect.top >= panelRect.top && rowRect.bottom <= panelRect.bottom) return
+        if (typeof target.scrollIntoView === 'function') {
+          target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        }
+      }, [focusSessionId, follow, open, visible, status && status.statusVersion])
+
+      function pauseFollowOnUserScroll() {
+        if (!follow || focusSessionId === null) return
+        setFollow(false)
+      }
+
+      function resumeFollow() {
+        setFollow(true)
+      }
+
       if (setup === null || !setup.configured) return h(Toast, { model: model })
 
       var sessions = status && Array.isArray(status.sessions) ? status.sessions.slice() : []
       var total = sessions.length
       var done = sessions.filter(function (session) { return session.phase === 'done' }).length
-      var skipped = sessions.filter(function (session) { return session.phase === 'skipped' }).length
+      var planned = sessions.filter(function (session) { return session.phase === 'planned' }).length
       var deferred = sessions.filter(function (session) { return session.phase === 'deferred' }).length
       var blockedCount = sessions.filter(function (session) { return session.phase === 'blocked' }).length
       var failed = sessions.some(function (session) { return session.phase === 'failed' })
       var running = status && status.running
+      var activeStage = sessions.map(sessionStage).find(isActiveStage)
+      var waitingStage = sessions.map(sessionStage).find(isWaitingStage)
+      var activeCount = sessions.filter(sessionOngoing).length
+      var headerStageLabel = stageLabel(activeStage) || stageLabel(waitingStage)
       var lease = status && status.deviceLease
       var leaseBlocked = lease && (lease.state === 'foreign' || lease.state === 'lost')
       var title = failed ? '同步失败'
         : blockedCount > 0 ? '需要处理'
           : leaseBlocked ? '只读同步'
             : running ? '正在同步'
-              : deferred > 0 ? '部分待处理' : '同步完成'
+              : waitingStage ? '等待处理'
+                : deferred > 0 ? '部分待处理' : '同步完成'
       var subtitle = failed ? '有会话未完成，已暂停'
         : blockedCount > 0 ? blockedCount + ' 个会话历史分叉，已阻止继续写入'
           : leaseBlocked ? (lease.state === 'foreign'
             ? '另一台设备持有全局同步锁；本机只拉取'
             : '全局同步租约丢失；本机只拉取并重试')
-            : running ? (total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
-              : deferred > 0 ? deferred + ' 个会话等待拉取/关闭/cwd 处理'
-                : total === 0 ? '还没有同步记录'
-                  : (done + skipped) + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
+            : running ? (headerStageLabel !== ''
+              ? headerStageLabel + ' · ' + activeCount + ' 个会话'
+              : total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
+              : waitingStage ? (headerStageLabel + ' · ' + activeCount + ' 个会话')
+                : deferred > 0 ? deferred + ' 个会话等待拉取/关闭/cwd 处理'
+                  : planned > 0 ? planned + ' 个会话待开始'
+                    : total === 0 ? '还没有同步记录'
+                      : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
       var dot = statusDot(status)
       var segments = sessions.map(function (session) {
         var bad = session.phase === 'failed' || session.phase === 'blocked'
@@ -2101,19 +2210,30 @@ window.__ModuleLoader__.load({
         var isBlocked = blockedEntry !== null
         var isResolved = decisionEntry !== null
         var decisionTag = isResolved ? (decisionEntry.action === 'ignore' ? '已忽略' : '已强行写入') : ''
+        var stage = sessionStage(session)
+        var waitingStage = isWaitingStage(stage)
+        var stageText = stage === 'done' || stage === 'failed' ? '' : stageLabel(stage)
         var tag = isBlocked ? '分叉'
           : isResolved ? decisionTag
             : session.phase === 'failed' ? '失败'
               : session.phase === 'blocked' ? '分叉'
-                : session.phase === 'skipped' ? '已跳过'
-                  : session.phase === 'done' ? '已完成'
-                    : session.phase === 'running' ? '同步中'
-                      : session.phase === 'deferred'
-                        ? (session.live ? '已加载'
-                          : session.remoteAhead ? '远端领先'
-                            : session.unmapped ? '待映射'
-                              : session.cwdPending ? 'cwd 外' : '等待')
-                        : '等待'
+                : waitingStage ? (stageText || '等待')
+                  : session.push && session.push.status === 'local-ahead' ? '本地领先'
+                    : session.push && session.push.status === 'remote-ahead' ? '远端领先'
+                      : session.pull && session.pull.status === 'remote-ahead' ? '远端领先'
+                        : session.phase === 'planned'
+                          ? (session.pull && session.pull.status === 'planned' ? '待拉取'
+                            : session.push && session.push.status === 'planned' ? '待上传' : '待开始')
+                          : stageText !== '' && session.phase !== 'done' && session.phase !== 'skipped' ? stageText
+                            : session.phase === 'skipped' ? '未选上传'
+                              : session.phase === 'done' ? '已同步'
+                                : session.phase === 'running' ? '同步中'
+                                  : session.phase === 'deferred'
+                                    ? (session.live ? '已加载'
+                                      : session.remoteAhead ? '远端领先'
+                                        : session.unmapped ? '待映射'
+                                          : session.cwdPending ? 'cwd 外' : '等待')
+                                    : '等待'
         var counts = []
         var liveRunning = session.phase === 'running'
         if (session.push && session.push.totalEvents > 0 && (liveRunning || session.push.doneEvents > 0)) {
@@ -2131,10 +2251,16 @@ window.__ModuleLoader__.load({
           counts.push('↓ ' + session.pending.download)
         }
         var attention = tag === '远端领先' || tag === '已加载' || tag === '待映射' || tag === 'cwd 外'
+        var queued = tag === '本地领先' || tag === '远端领先' || tag === '待拉取' || tag === '待上传'
         var stateClass = isBlocked || session.phase === 'failed' ? 'bad'
           : session.phase === 'done' || session.phase === 'skipped' ? 'ok'
-            : session.phase === 'running' || attention || isResolved ? 'run' : ''
-        return h('div', { className: 'dssync-rowline', key: session.sessionId },
+            : waitingStage || queued ? 'waiting'
+              : session.phase === 'running' || attention || isResolved ? 'run' : ''
+        return h('div', {
+          className: 'dssync-rowline' + (focusSessionId === session.sessionId ? ' focus' : ''),
+          key: session.sessionId,
+          'data-session-id': session.sessionId,
+        },
           h('span', { className: 'dssync-st ' + stateClass }),
           h('span', { className: 'name' }, sessionLabel(session.sessionId)),
           counts.length > 0 ? h('span', { className: 'dssync-events' }, counts.join(' · ')) : null,
@@ -2167,7 +2293,7 @@ window.__ModuleLoader__.load({
       h('div', { className: 'dssync-label' },
         h('b', null, title),
         h('span', null, subtitle)),
-      h('span', { className: 'dssync-count' }, (done + skipped) + '/' + total),
+      h('span', { className: 'dssync-count' }, done + '/' + total),
       h('button', {
         className: 'dssync-chev', type: 'button', 'aria-label': open ? '收起同步会话列表' : '展开同步会话列表',
         'aria-expanded': open, onClick: onListToggle,
@@ -2175,7 +2301,12 @@ window.__ModuleLoader__.load({
 
       var panel = h('div', { className: 'dssync-collapse' },
         h('div', { className: 'dssync-collapse-in' },
-          h('div', { className: 'dssync-panel' }, rows.length > 0
+          h('div', {
+            className: 'dssync-panel',
+            ref: panelRef,
+            onWheel: pauseFollowOnUserScroll,
+            onTouchMove: pauseFollowOnUserScroll,
+          }, rows.length > 0
             ? rows
             : h('div', { className: 'dssync-note' }, '暂无会话记录')),
           leaseBlocked ? h('div', { className: 'dssync-error' }, lease.state === 'foreign'
@@ -2183,8 +2314,11 @@ window.__ModuleLoader__.load({
             : '全局同步租约丢失；本机暂停上传并重试') : null,
           status && status.lastError ? h('div', { className: 'dssync-error' }, status.lastError.message + (status.retryCount > 0 ? ' · 已重试 ' + status.retryCount + ' 次' : '')) : null,
           h('div', { className: 'dssync-foot' },
-            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blockedCount > 0 ? '有分叉待处理' : deferred > 0 ? '有会话待处理' : '全部完成'),
+            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blockedCount > 0 ? '有分叉待处理' : deferred > 0 ? '有会话待处理' : planned > 0 ? '等待开始' : '全部完成'),
             h('span', { className: 'spacer' }),
+            !follow && focusSessionId !== null
+              ? h('button', { className: 'dssync-mini', type: 'button', onClick: resumeFollow }, '回到当前同步')
+              : null,
             h('button', { className: 'dssync-mini', type: 'button', disabled: syncing || running, 'aria-busy': syncing, onClick: triggerSync }, syncing || running ? '同步中…' : '立即同步'),
             h('button', { className: 'dssync-mini', type: 'button', onClick: props.openSettings }, '设置'))))
 

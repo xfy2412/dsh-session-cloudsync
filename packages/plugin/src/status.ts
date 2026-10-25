@@ -6,7 +6,7 @@
  *
  * @module dsh-session-cloudsync/status
  */
-import type { PendingApply, SyncErrorKind } from './engine.ts'
+import type { PendingApply, SyncErrorKind, SyncStage } from './engine.ts'
 
 /** 一个方向的稳定阶段。 */
 export type SyncDirectionPhase =
@@ -28,6 +28,8 @@ export interface SyncDirectionStatus {
   readonly direction: 'push' | 'pull'
   /** 稳定阶段。 */
   readonly phase: SyncDirectionPhase
+  /** 当前细分阶段（若有）。 */
+  readonly stage?: SyncStage
   /** 引擎原始状态，保留给诊断和精确标签。 */
   readonly status: string
   /** 本方向计划处理的事件数。 */
@@ -70,6 +72,8 @@ export interface SyncSessionStatus {
   readonly sessionId: string
   /** 聚合阶段。 */
   readonly phase: SyncSessionPhase
+  /** 当前优先展示的细分阶段。 */
+  readonly stage?: SyncStage
   /** 推送方向。 */
   readonly push?: SyncDirectionStatus
   /** 拉取方向。 */
