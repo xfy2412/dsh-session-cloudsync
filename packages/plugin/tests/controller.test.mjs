@@ -245,6 +245,51 @@ test('控制器：下一轮 seed 不把已完成的 pull 重置为待拉取', as
   )
 })
 
+test('控制器：逐批进度不丢下载/上传阶段', () => {
+  const fixture = createController()
+  fixture.controller.seedList([{ sessionId: 'bench', direction: 'pull', state: 'remote-ahead' }])
+  assert.equal(fixture.controller.beginBackfill(), true)
+  fixture.controller.updateProgress({
+    sessionId: 'bench', direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0, totalEvents: 10,
+  })
+  fixture.controller.updateProgress({
+    sessionId: 'bench', direction: 'pull', phase: 'progress', progress: 0.4, totalEvents: 10, doneEvents: 4,
+  })
+  const row = fixture.controller.snapshot().sessions[0]
+  assert.equal(row.stage, 'downloading')
+  assert.equal(row.pull.doneEvents, 4)
+})
+
+test('控制器：映射回填 pull 期间显示运行阶段，结束后合并结果', () => {
+  const fixture = createController()
+  fixture.controller.seedList([{ sessionId: 'bench', direction: 'pull', state: 'remote-ahead' }])
+  assert.equal(fixture.controller.beginBackfill(), true)
+  fixture.controller.updateProgress({
+    sessionId: 'bench',
+    direction: 'pull',
+    phase: 'progress',
+    stage: 'downloading',
+    progress: 0.4,
+    totalEvents: 10,
+    doneEvents: 4,
+  })
+  const during = fixture.controller.snapshot()
+  assert.equal(during.running, true)
+  assert.equal(during.sessions[0].stage, 'downloading')
+  assert.equal(during.sessions[0].phase, 'running')
+  assert.equal(during.sessions[0].pull.doneEvents, 4)
+
+  fixture.controller.endBackfill(pullReport([{
+    sessionId: 'bench',
+    status: 'up-to-date',
+    totalEvents: 0,
+  }], 3))
+  const after = fixture.controller.snapshot()
+  assert.equal(after.running, false)
+  assert.equal(after.sessions[0].phase, 'done')
+  assert.equal(after.sessions[0].pull.status, 'up-to-date')
+})
+
 test('控制器：cwd 警告保留到用户处理，clear 后消失', async () => {
   let report = pullReport([{ sessionId: 's-cwd', status: 'pulled', cwdNonPortable: true }], 1)
   const fixture = createController({ pull: async () => report })

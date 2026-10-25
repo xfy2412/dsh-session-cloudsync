@@ -374,9 +374,12 @@ export class SyncController {
       : progress.phase === 'done'
         ? progress.direction === 'push' ? 'pushed' : 'pulled'
         : progress.direction === 'push' ? 'pushing' : 'pulling'
-    const viewStage = progress.stage ?? stageOfStatus(progress.direction, status)
     const previous = this.live.find((item) =>
       item.sessionId === progress.sessionId && item.direction === progress.direction)
+    const mappedStage = progress.stage ?? stageOfStatus(progress.direction, status)
+    // 逐批进度回调（下载/上传）不带 stage；沿用上一条 live 视图，避免
+    // 下载期间阶段被清空、界面只剩“同步中”。
+    const viewStage = mappedStage ?? (progress.phase === 'progress' ? previous?.stage : undefined)
     const totalEvents = progress.totalEvents ?? previous?.totalEvents ?? 0
     const doneEvents = progress.doneEvents ?? previous?.doneEvents ?? 0
     const batches = progress.batches ?? progress.doneBatches ?? previous?.batches
@@ -538,6 +541,47 @@ export class SyncController {
       changed = true
     }
     if (changed) this.bump()
+  }
+
+  /**
+   * 开始一次由宿主映射回填触发的 pull。它不推进主 cursor，也不走 scheduler 的
+   * 退避，但必须让气泡看到正在拉取的状态。
+   * @returns 已有同步在跑时返回 false。
+   */
+  beginBackfill(): boolean {
+    if (this.running) return false
+    this.running = true
+    this.live = []
+    this.runView = {
+      id: this.runView.id + 1,
+      trigger: 'auto',
+      state: 'running',
+      startedAt: this.now(),
+      finishedAt: null,
+    }
+    this.bump()
+    return true
+  }
+
+  /**
+   * 结束映射回填，并把 pull 结果合并进稳定视图。
+   * @param report - 拉取结果；缺失时只结束运行状态。
+   */
+  endBackfill(report?: PullReport): void {
+    if (!this.running) return
+    if (report !== undefined && report.configured) {
+      const views: SyncDirectionStatus[] = []
+      this.collectPull(report, views, [])
+      this.sessions = views
+    }
+    this.running = false
+    this.live = []
+    this.runView = {
+      ...this.runView,
+      state: 'finished',
+      finishedAt: this.now(),
+    }
+    this.bump()
   }
 
   /**

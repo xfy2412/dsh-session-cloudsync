@@ -836,24 +836,30 @@ export function apply(ctx: Context, config: Config): void {
    */
   const backfillMappedWorkspaces = async (): Promise<void> => {
     if (backfilling) return
+    if (controller.snapshot().running) return
     const pending = controller.unmappedSessions()
       .filter((entry) => bindings.bindings[entry.workspaceKey] !== undefined)
     if (pending.length === 0) return
-    const revision = Math.max(0, Math.min(...pending.map((entry) => entry.revision)) - 1)
+    if (pullWithDeps === undefined) return
     backfilling = true
+    if (!controller.beginBackfill()) {
+      backfilling = false
+      return
+    }
     try {
-      if (pullWithDeps === undefined) return
       const report = await withPullLock(() => {
         const snapshot = controller.snapshot()
+        const revision = Math.max(0, Math.min(...pending.map((entry) => entry.revision)) - 1)
         return pullWithDeps!({
           revision,
           ...snapshot.pending === null ? {} : { pending: snapshot.pending },
         })
       })
-      controller.recordBackfill(report)
+      controller.endBackfill(report)
       await flushAutoUpload()
       await refreshBindings()
     } catch (error: unknown) {
+      controller.endBackfill()
       logger.warn(`dsh-session-cloudsync: 映射回填失败：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       backfilling = false
