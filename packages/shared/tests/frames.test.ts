@@ -22,6 +22,13 @@ test('这里写出的帧链能解回完全相同的行', () => {
   assert.deepEqual(splitRows(decoded), splitRows(text))
 })
 
+test('CRLF JSONL 与 LF 拆出相同的行', () => {
+  assert.deepEqual(
+    splitRows('{"a":1}\r\n{"b":2}\r\n'),
+    splitRows('{"a":1}\n{"b":2}\n'),
+  )
+})
+
 test('只看 header 帧就能拿到会话头', () => {
   const frames = encodeLog(fixture('v4-minimal.jsonl'))
   const header = readHeader(frames[0]!)

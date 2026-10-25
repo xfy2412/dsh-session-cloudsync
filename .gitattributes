@@ -1,0 +1,3 @@
+# JSONL 夹具的规范内容是 LF；不要让 Windows 的 autocrlf 改写工作树。
+tests/fixtures/**/*.jsonl text eol=lf
+packages/**/fixtures/**/*.jsonl text eol=lf

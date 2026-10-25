@@ -95,11 +95,16 @@ export function decodeLog(buffer: Buffer): string {
 
 /**
  * 把 JSONL 文本拆成非空行。
+ *
+ * Windows 工作树/日志可能是 CRLF；行尾 `\r` 不参与 JSONL 内容，统一剥掉，
+ * 避免同一份夹具在 LF 与 CRLF 下给出不同的行。
  * @param text - 日志文本。
  * @returns 按顺序的、已去空白判断的空行被剔除的行。
  */
 export function splitRows(text: string): string[] {
-  return text.split('\n').filter((row) => row.trim() !== '')
+  return text.split('\n')
+    .map((row) => row.endsWith('\r') ? row.slice(0, -1) : row)
+    .filter((row) => row.trim() !== '')
 }
 
 /**
