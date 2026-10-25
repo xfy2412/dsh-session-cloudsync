@@ -310,9 +310,10 @@ window.__ModuleLoader__.load({
       }
       var listeners = new Set()
       var pollTimer = null
-      var streamTimer = null
       var streamAbort = null
       var streamFailedUntil = 0
+      var streamLastAt = 0
+      var watchdogTimer = null
       var lastVersion = -1
       var hidden = false
       var toastTimer = null
@@ -363,28 +364,21 @@ window.__ModuleLoader__.load({
         return text
       }
 
+      function clearWatchdog() {
+        if (watchdogTimer !== null) {
+          clearInterval(watchdogTimer)
+          watchdogTimer = null
+        }
+      }
+
       function handleStreamStatus(status) {
         if (disposed) return
-        if (!acceptStatus(status)) return
-        if (statusActive(status)) {
-          if (streamTimer !== null) {
-            clearTimeout(streamTimer)
-            streamTimer = null
-          }
-          return
-        }
-        if (streamTimer !== null) clearTimeout(streamTimer)
-        streamTimer = setTimeout(function () {
-          streamTimer = null
-          closeStream()
-        }, 2500)
+        streamLastAt = Date.now()
+        acceptStatus(status)
       }
 
       function closeStream() {
-        if (streamTimer !== null) {
-          clearTimeout(streamTimer)
-          streamTimer = null
-        }
+        clearWatchdog()
         if (streamAbort !== null) {
           var controller = streamAbort
           streamAbort = null
@@ -397,13 +391,18 @@ window.__ModuleLoader__.load({
         if (disposed || streamAbort !== null) return
         var controller = new AbortController()
         streamAbort = controller
+        streamLastAt = Date.now()
         function fail(error) {
           if (streamAbort !== controller) return
+          clearWatchdog()
           streamAbort = null
           streamFailedUntil = Date.now() + 3000
           schedule()
         }
-        fetch(API + '/events?until=idle', {
+        // 不使用 until=idle：空闲时也保持一条长连接。后台自动同步可能在任何
+        // 时刻启动，客户端不能等到“发现 running”才去连接 SSE，否则会错过
+        // 前几秒甚至大半进度。连接建立时服务端会立即发一帧全量快照。
+        fetch(API + '/events', {
           credentials: 'same-origin',
           headers: { accept: 'text/event-stream' },
           signal: controller.signal,
@@ -413,6 +412,17 @@ window.__ModuleLoader__.load({
             throw new Error('SSE 不可用')
           }
           streamFailedUntil = 0
+          streamLastAt = Date.now()
+          clearWatchdog()
+          watchdogTimer = setInterval(function () {
+            if (streamAbort !== controller) return
+            if (Date.now() - streamLastAt <= 40_000) return
+            clearWatchdog()
+            streamAbort = null
+            controller.abort()
+            streamFailedUntil = Date.now() + 1000
+            schedule()
+          }, 10_000)
           var reader = response.body.getReader()
           var decoder = new TextDecoder()
           var buffer = ''
@@ -420,12 +430,14 @@ window.__ModuleLoader__.load({
             return reader.read().then(function (result) {
               if (streamAbort !== controller) return
               if (result.done) {
+                clearWatchdog()
                 streamAbort = null
-                if (statusActive(snapshot.status)) streamFailedUntil = Date.now() + 3000
+                streamFailedUntil = Date.now() + 1000
                 schedule()
                 return
               }
               buffer += decoder.decode(result.value, { stream: true })
+              streamLastAt = Date.now()
               buffer = consumeSse(buffer)
               return pump()
             }, function (error) {
@@ -443,36 +455,13 @@ window.__ModuleLoader__.load({
         if (pollTimer !== null) clearTimeout(pollTimer)
         pollTimer = null
         if (disposed || hidden) return
-        var status = snapshot.status
-        if (status === null) return
-        if (statusActive(status)) {
-          if (streamAbort === null) {
-            if (Date.now() < streamFailedUntil) {
-              pollTimer = setTimeout(function () { refreshStatus() }, 1000)
-            } else {
-              openStream()
-            }
-          }
+        if (streamAbort !== null) return
+        if (Date.now() < streamFailedUntil) {
+          // SSE 短暂失败时用 /status 兜底，恢复后重新挂长连接。
+          pollTimer = setTimeout(function () { refreshStatus() }, 1000)
           return
         }
-        if (streamAbort !== null) {
-          if (streamTimer === null) {
-            streamTimer = setTimeout(function () {
-              streamTimer = null
-              closeStream()
-            }, 1000)
-          }
-          return
-        }
-        var scheduler = status.scheduler || {}
-        if (scheduler.autoSync !== true) return
-        var interval = typeof scheduler.intervalMs === 'number' ? scheduler.intervalMs : 60000
-        var now = Date.now()
-        var next = typeof scheduler.nextRunAt === 'number' ? scheduler.nextRunAt : now + interval
-        var delay = Math.max(1000, Math.min(next - 1500 - now, interval - 5000))
-        pollTimer = setTimeout(function () {
-          refreshStatus()
-        }, delay)
+        openStream()
       }
 
       async function refreshStatus() {
@@ -631,7 +620,7 @@ window.__ModuleLoader__.load({
       function dispose() {
         disposed = true
         if (pollTimer !== null) clearTimeout(pollTimer)
-        if (streamTimer !== null) clearTimeout(streamTimer)
+        clearWatchdog()
         if (streamAbort !== null) {
           var controller = streamAbort
           streamAbort = null
@@ -2068,11 +2057,11 @@ window.__ModuleLoader__.load({
 
       function onIcon() {
         if (visible) collapse()
-        else expand(true)
+        else { expand(true); model.refreshStatus() }
       }
 
       function onHead() {
-        if (!visible) { expand(true); return }
+        if (!visible) { expand(true); model.refreshStatus(); return }
         setOpen(function (value) { return !value })
       }
 
@@ -2094,7 +2083,7 @@ window.__ModuleLoader__.load({
 
       function onListToggle(event) {
         event.stopPropagation()
-        if (!visible) expand(true)
+        if (!visible) { expand(true); model.refreshStatus() }
         else setOpen(function (value) { return !value })
       }
 
