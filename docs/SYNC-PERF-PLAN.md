@@ -1,6 +1,7 @@
 # 同步性能重构计划
 
 > 状态：草案，供 review；本文档不改代码。P0 已有真实基线，官方 Discussions 已核对（§4.7）。  
+> 实施进度：P1（线性规划 + 预序列化封帧）与 P2（异步 scrypt + masterKey 缓存）已落地；P3 及之后未开始。
 > 基线：`229a3df`。当前工作树还有 URL 校验/会话标题的未提交改动，与本计划分开。  
 > 官方 API：已按 DSH `0.2.1-rc.2` / `0.2.1-rc.3` 源码核对；官方前端首屏行为与真实大会话实测见 §4.5、§4.6。  
 > 范围：本机同步阻塞、首次同步、本地/远端差量校验、请求数、后续协议优化，以及公益服需要的服务端背压。  
@@ -459,6 +460,17 @@ Discussions      enabled
 - 不再出现“封帧前先构造 1,509 个 sealed entry”的峰值内存；
 - P1 只消掉 O(n²) 和重复序列化，**不承诺**把 1s 规划变成无长任务；分片由 P3 负责。
 
+实施记录（形状轨迹生成会话，69,587 事件 / 267MB canonical）：
+
+```text
+planEventBatches        1.5–1.7s（旧实现 42.4s）
+实际 push 规划+封帧     2.7s
+批次                    1,509
+sealed 明文             267MB（P7.0 前不变）
+```
+
+仍未消除 `uploadSteps` 全数组常驻和封帧后的上传阶段停顿，归 P3。
+
 ### P2：异步 scrypt 与 masterKey 缓存
 
 - 同步 `scryptSync` 改成异步 `crypto.scrypt`；
@@ -471,6 +483,9 @@ Discussions      enabled
 - scrypt 不再出现在事件循环长任务里；
 - 同一配置连续同步不会重复派生；
 - 失败/凭据变化后能正确重算。
+
+实施记录：push / pull / 接收端 cwd 修正已改为异步 `deriveMasterKeyAsync` + 进程内缓存；
+Vault 的 `vaultKeyForConfig` 仍走同步派生，后续单独处理。
 
 ### P3：读取后流水线
 

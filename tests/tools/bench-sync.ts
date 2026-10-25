@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { decodeLog, splitRows } from '../../packages/shared/src/frames.ts'
-import { planEventBatches, sealEventBatch, type BatchOptions } from '../../packages/shared/src/batches.ts'
+import { iterateEventBatches, planEventBatches, sealEventBatch, sealEventBatchFromText, type BatchOptions } from '../../packages/shared/src/batches.ts'
 import { stableStringify } from '../../packages/shared/src/chain.ts'
 import { generateSession } from './make-bench-session.ts'
 import type { SessionShapeTrace } from './session-trace.ts'
@@ -27,6 +27,7 @@ interface Result {
   readonly parseMs: number
   readonly planMs: number
   readonly sealMs: number
+  readonly pipelineMs: number
   readonly sealedBytes: number
   readonly batches: number
   readonly maxRssMb: number
@@ -65,6 +66,14 @@ function runPhases(
     sealedBytes += sealEventBatch(batch.events, 'session-bench-shape', index + 1, key).bytes.length
   }
   const sealMs = performance.now() - startSeal
+  // 实际 push 路径：惰性规划 + 直接使用批次文本封帧，避免再次序列化。
+  const startPipeline = performance.now()
+  let pipelineBatches = 0
+  for (const batch of iterateEventBatches(events, -1, options)) {
+    sealEventBatchFromText(batch.text, 'session-bench-shape', pipelineBatches + 1, batch.seqFrom, batch.seqTo, key)
+    pipelineBatches += 1
+  }
+  const pipelineMs = performance.now() - startPipeline
   return {
     label,
     events: events.length,
@@ -73,6 +82,7 @@ function runPhases(
     parseMs,
     planMs,
     sealMs,
+    pipelineMs,
     sealedBytes,
     batches: batches.length,
     maxRssMb: Math.round(process.resourceUsage().maxRSS / 1024),

@@ -16,15 +16,16 @@ import {
   headerMetaOf,
   openEventBatch,
   openHeader,
-  planEventBatches,
+  iterateEventBatches,
   sealEventBatch,
+  sealEventBatchFromText,
   sealHeader,
   type SessionHeaderLike,
   type SessionHeaderMeta,
   type SyncEvent,
 } from '../../shared/src/batches.ts'
 import { stableStringify } from '../../shared/src/chain.ts'
-import { deriveMasterKey, sha256 } from '../../shared/src/crypto.ts'
+import { deriveMasterKeyAsync, sha256 } from '../../shared/src/crypto.ts'
 import {
   sessionKeyOf,
   type SealedFrame,
@@ -477,6 +478,28 @@ function resolveSalt(config: EngineConfig, base: string): Buffer {
   return salt
 }
 
+const MASTER_KEY_CACHE_LIMIT = 8
+const masterKeyCache = new Map<string, Buffer>()
+
+/**
+ * 异步派生并缓存主密钥；缓存键不保存口令明文。
+ * @param passphrase - 同步口令。
+ * @param salt - keybox 盐。
+ * @returns 32 字节主密钥。
+ */
+async function deriveMasterKeyCached(passphrase: string, salt: Buffer): Promise<Buffer> {
+  const cacheKey = sha256(Buffer.concat([Buffer.from('v1\0', 'utf8'), Buffer.from(passphrase, 'utf8'), Buffer.from([0]), salt]))
+  const cached = masterKeyCache.get(cacheKey)
+  if (cached !== undefined) return cached
+  const derived = await deriveMasterKeyAsync(passphrase, salt)
+  if (masterKeyCache.size >= MASTER_KEY_CACHE_LIMIT) {
+    const oldest = masterKeyCache.keys().next().value
+    if (oldest !== undefined) masterKeyCache.delete(oldest)
+  }
+  masterKeyCache.set(cacheKey, derived)
+  return derived
+}
+
 /**
  * 发一个请求并解析 JSON。
  * @param fetchImpl - fetch 实现。
@@ -866,30 +889,34 @@ async function syncSession<Session>(
   if (remote === undefined) {
     const headerEntry = sealHeader(meta, sessionId, sessionKey)
     uploadSteps.push({ entry: headerEntry, events: 0 })
-    const batches = planEventBatches(events, -1, batchOptions(deps.config))
-    batches.forEach((batch, offset) => {
+    let index = 1
+    for (const batch of iterateEventBatches(events, -1, batchOptions(deps.config))) {
       totalEvents += batch.events.length
       uploadSteps.push({
-        entry: sealEventBatch(batch.events, sessionId, offset + 1, sessionKey),
+        entry: sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey),
         events: batch.events.length,
       })
-    })
-    pushedBatches = batches.length
+      index += 1
+    }
+    pushedBatches = index - 1
     baseIndex = -1
     baseChainHash = null
   } else {
-    const batches = planEventBatches(events, remote.lastSeq, batchOptions(deps.config))
-    if (batches.length === 0) {
-      return { sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
-    }
-    batches.forEach((batch, offset) => {
+    let index = remote.frames.length
+    let count = 0
+    for (const batch of iterateEventBatches(events, remote.lastSeq, batchOptions(deps.config))) {
       totalEvents += batch.events.length
       uploadSteps.push({
-        entry: sealEventBatch(batch.events, sessionId, remote.frames.length + offset, sessionKey),
+        entry: sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey),
         events: batch.events.length,
       })
-    })
-    pushedBatches = batches.length
+      index += 1
+      count += 1
+    }
+    if (count === 0) {
+      return { sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
+    }
+    pushedBatches = count
     baseIndex = remote.frames.length - 1
     baseChainHash = remote.frames[remote.frames.length - 1]!.chainHash
   }
@@ -969,7 +996,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [] }
   const salt = resolveSalt(config, base)
-  const master = deriveMasterKey(config.passphrase, salt)
+  const master = await deriveMasterKeyCached(config.passphrase, salt)
   const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
   const snapshots = await deps.persistence.list()
   const selection = sessionSelection(config)
@@ -1498,7 +1525,7 @@ export async function correctCwd<Session>(
 
   const base = normalizeBase(deps.config.serverUrl)
   if (base === '') return { ok: false, status: 'error', message: 'serverUrl 非法' }
-  const master = deriveMasterKey(deps.config.passphrase, resolveSalt(deps.config, base))
+  const master = await deriveMasterKeyCached(deps.config.passphrase, resolveSalt(deps.config, base))
   const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
   const handle = await deps.persistence.open(sessionId, 'write')
   try {
@@ -1593,7 +1620,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [], revision: state.revision }
   const salt = resolveSalt(config, base)
-  const master = deriveMasterKey(config.passphrase, salt)
+  const master = await deriveMasterKeyCached(config.passphrase, salt)
   const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
 
   const reports: PullSessionReport[] = []

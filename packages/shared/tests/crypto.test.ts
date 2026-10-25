@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { deriveMasterKey, deriveSubkey, newSalt, open, randomId, seal, sha256 } from '../src/crypto.ts'
+import { deriveMasterKey, deriveMasterKeyAsync, deriveSubkey, newSalt, open, randomId, seal, sha256 } from '../src/crypto.ts'
 
 const passphrase = 'correct horse battery staple'
 const salt = newSalt()
@@ -8,6 +8,10 @@ const salt = newSalt()
 test('同一口令与盐派生出同一主密钥', () => {
   assert.deepEqual(deriveMasterKey(passphrase, salt), deriveMasterKey(passphrase, salt))
   assert.notDeepEqual(deriveMasterKey(passphrase, newSalt()), deriveMasterKey(passphrase, salt))
+})
+
+test('异步派生与同步派生结果一致', async () => {
+  assert.deepEqual(await deriveMasterKeyAsync(passphrase, salt), deriveMasterKey(passphrase, salt))
 })
 
 test('子密钥按用途分隔', () => {
