@@ -3,7 +3,7 @@
 > 状态：**设计稿，未实现**（2026-10-21）。
 > 目标：减少 agent 主动把会话 cwd 切到工作区外，降低 `nonPortable` 会话数量；
 > **不是**限制 agent 访问工作区外文件，也**不是**安全边界。
-> 相关：[CWD.md](CWD.md)、[RECONCILE.md](RECONCILE.md)、[GLOSSARY.md](GLOSSARY.md)。
+> 相关：[CWD.md](../architecture/CWD.md)、[RECONCILE.md](../sync/RECONCILE.md)、[GLOSSARY.md](GLOSSARY.md)。
 
 ## 1. 为什么要提示
 

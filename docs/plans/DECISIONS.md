@@ -2,7 +2,7 @@
 
 > 状态：**已定**（2026-10-21）。
 > 本文记录为 cwd 可移植性反复讨论后锁定的结论，避免后续重新纠结。
-> 相关：[CWD.md](CWD.md)、[RECONCILE.md](RECONCILE.md)、[USAGE-AGREEMENT.md](USAGE-AGREEMENT.md)。
+> 相关：[CWD.md](../architecture/CWD.md)、[RECONCILE.md](../sync/RECONCILE.md)、[USAGE-AGREEMENT.md](../guides/USAGE-AGREEMENT.md)。
 
 ## 1. 问题背景
 
@@ -102,11 +102,11 @@
 
 ## 5. 对文档的影响
 
-- [CWD.md](CWD.md)：删除 cwd canonical/localize 方案，改为 raw + 接收端修正；
-- [RECONCILE.md](RECONCILE.md)：身份前缀使用 raw 事件哈希；`nonPortable` 改为本地警告；
-- [GLOSSARY.md](GLOSSARY.md)：移除 `@workspace` / `@external` 的 active 定义；
-- [USAGE-AGREEMENT.md](USAGE-AGREEMENT.md)：2.1 只声明 header 本地化和接收端追加修正；
-- [PROMPT-GUIDANCE.md](PROMPT-GUIDANCE.md)：保留“尽量别把 cwd 切到工作区外”的提示。
+- [CWD.md](../architecture/CWD.md)：删除 cwd canonical/localize 方案，改为 raw + 接收端修正；
+- [RECONCILE.md](../sync/RECONCILE.md)：身份前缀使用 raw 事件哈希；`nonPortable` 改为本地警告；
+- [GLOSSARY.md](../guides/GLOSSARY.md)：移除 `@workspace` / `@external` 的 active 定义；
+- [USAGE-AGREEMENT.md](../guides/USAGE-AGREEMENT.md)：2.1 只声明 header 本地化和接收端追加修正；
+- [PROMPT-GUIDANCE.md](../guides/PROMPT-GUIDANCE.md)：保留“尽量别把 cwd 切到工作区外”的提示。
 
 ## 6. 复活条件
 

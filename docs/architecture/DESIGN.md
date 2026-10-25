@@ -1,9 +1,9 @@
 # 设计
 
 > 状态：M1/M2 已落地；M3 传输模型已定为事件批次并已实现；M4 客户端防护做收口。
-> L2/L3 的加密附加数据层与多工作区映射见 [VAULT.md](VAULT.md)（设计稿）。
-> cwd 处理见 [CWD.md](CWD.md)；会话身份与启动对账见 [RECONCILE.md](RECONCILE.md)；
-> 最终决策过程见 [DECISIONS.md](DECISIONS.md)；术语见 [GLOSSARY.md](GLOSSARY.md)。
+> L2/L3 的加密附加数据层与多工作区映射见 [VAULT.md](../sync/VAULT.md)（设计稿）。
+> cwd 处理见 [CWD.md](CWD.md)；会话身份与启动对账见 [RECONCILE.md](../sync/RECONCILE.md)；
+> 最终决策过程见 [DECISIONS.md](../plans/DECISIONS.md)；术语见 [GLOSSARY.md](../guides/GLOSSARY.md)。
 
 ## 目标
 
@@ -20,7 +20,7 @@
 L2 同时是**兼容性闸门**：服务端只返回各设备的加密台账，客户端解密后拿到 `sessionFormatVersion`，
 在同步前拒绝代际不匹配的会话。
 L2 的工具链条目分 `auto`（自动采集）与 `authored`（agent 或用户维护）两个来源，自动采集**不覆盖** `authored`。
-L2/L3 的加密存储、工作区 key 与绑定、插件版本匹配见 [VAULT.md](VAULT.md)。
+L2/L3 的加密存储、工作区 key 与绑定、插件版本匹配见 [VAULT.md](../sync/VAULT.md)。
 
 ## 传输单位：事件批次
 
@@ -70,9 +70,9 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 
 优先走 DSH 原生接缝——`ctx.sessionPersistence.create` / `open(id, 'write')` + `append(events)` 写入，`ctx.workspaceRegistry.resolveByPath` + `Workspace.attachSession` 挂回工作区，避免重启宿主。M0 已验证写入后宿主能发现新会话；客户端插件在同步轮结束后（以及回填状态变化时）调用 `ctx.sessions.refresh()`，让已打开的窗口重新拉 `session/list`，更新冷会话、标题和工作区分组，不需要用户手动刷新页面。
 
-会话头（`formatVersion`/`createdAt`/`isSeeded`/`delegationDepth`/`agentPreset`，以及 seeded 会话的 `inheritedEventCount`）作为单独的 **sealed header** 上传，manifest 只记哈希；`cwd` 不进入 manifest 明文。拉取端按 `workspaceKey` 的工作区绑定决定落到哪个本地工作区；绑定/映射的加密存储见 [VAULT.md](VAULT.md)。这样同一会话在不同设备上的链身份不受本地路径影响。
+会话头（`formatVersion`/`createdAt`/`isSeeded`/`delegationDepth`/`agentPreset`，以及 seeded 会话的 `inheritedEventCount`）作为单独的 **sealed header** 上传，manifest 只记哈希；`cwd` 不进入 manifest 明文。拉取端按 `workspaceKey` 的工作区绑定决定落到哪个本地工作区；绑定/映射的加密存储见 [VAULT.md](../sync/VAULT.md)。这样同一会话在不同设备上的链身份不受本地路径影响。
 
-开放尾（`tailOpen`/`safeThroughSeq`）、拉取崩溃恢复（apply journal / 启动 reconcile）与客户端防误操作（composer block / 列表拦截）见 [SYNC-SAFETY.md](./SYNC-SAFETY.md)。
+开放尾（`tailOpen`/`safeThroughSeq`）、拉取崩溃恢复（apply journal / 启动 reconcile）与客户端防误操作（composer block / 列表拦截）见 [SYNC-SAFETY.md](../sync/SYNC-SAFETY.md)。
 
 ## 删除、修复与分叉
 
@@ -95,7 +95,7 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 
 默认端到端：口令派生主密钥，按会话派生子密钥，AES-256-GCM 封装每个批次。服务端只知道账户、设备、加密后的会话键、大小与时间。提供一个显式开关"允许服务器解密"（上传包裹后的主密钥），默认关闭；关闭时必须配套密钥轮换，否则旧密文仍可被解开。
 
-封装的字节布局、密钥层次、AAD 与版本规则见 [SEALED-FRAME.md](./SEALED-FRAME.md)（v1 已实现；M3 用它封装事件批次）。
+封装的字节布局、密钥层次、AAD 与版本规则见 [SEALED-FRAME.md](SEALED-FRAME.md)（v1 已实现；M3 用它封装事件批次）。
 
 ## 服务器形态
 

@@ -2,9 +2,9 @@
 
 > 状态：**设计稿，未实现**（2026-10-21）。
 > 插件未公开发布，不考虑历史数据迁移。相关文档：
-> [CWD.md](CWD.md)（cwd 可移植性）、[VAULT.md](VAULT.md)（工作区 key 与本地绑定）、
-> [USAGE-AGREEMENT.md](USAGE-AGREEMENT.md)（修改边界）、[GLOSSARY.md](GLOSSARY.md)（术语）、
-> [PROMPT-GUIDANCE.md](PROMPT-GUIDANCE.md)（agent cwd 提示词）。
+> [CWD.md](../architecture/CWD.md)（cwd 可移植性）、[VAULT.md](VAULT.md)（工作区 key 与本地绑定）、
+> [USAGE-AGREEMENT.md](../guides/USAGE-AGREEMENT.md)（修改边界）、[GLOSSARY.md](../guides/GLOSSARY.md)（术语）、
+> [PROMPT-GUIDANCE.md](../guides/PROMPT-GUIDANCE.md)（agent cwd 提示词）。
 >
 > 本文定两件事：
 > 1. 怎样判断本地会话和远端会话是不是**同一个会话**；

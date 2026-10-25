@@ -1,8 +1,8 @@
 # 术语表
 
 > 状态：约定文档（2026-10-21）。
-> 本文只解释词义，不是协议规范；冲突时以 [RECONCILE.md](RECONCILE.md)、
-> [CWD.md](CWD.md)、[VAULT.md](VAULT.md)、[PROTOCOL.md](PROTOCOL.md) 为准。
+> 本文只解释词义，不是协议规范；冲突时以 [RECONCILE.md](../sync/RECONCILE.md)、
+> [CWD.md](../architecture/CWD.md)、[VAULT.md](../sync/VAULT.md)、[PROTOCOL.md](../architecture/PROTOCOL.md) 为准。
 
 ## 1. 先说最重要的几个
 

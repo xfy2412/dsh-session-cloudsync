@@ -853,10 +853,10 @@ P7.0 后 sealed 总字节 ≤ 60MB（当前 267MB；DSH 压缩日志 50MB）
 
 ## 12. 参考
 
-- [SEALED-FRAME.md](SEALED-FRAME.md)
-- [DESIGN.md](DESIGN.md)
+- [SEALED-FRAME.md](../architecture/SEALED-FRAME.md)
+- [DESIGN.md](../architecture/DESIGN.md)
 - [SYNC-SAFETY.md](SYNC-SAFETY.md)
-- [PROTOCOL.md](PROTOCOL.md)
+- [PROTOCOL.md](../architecture/PROTOCOL.md)
 - 代码：`packages/plugin/src/engine.ts`、`packages/shared/src/batches.ts`、`packages/shared/src/sealed-frame.ts`、`packages/server/src/http.ts`
 - DSH `0.2.1-rc.2` / `0.2.1-rc.3` 官方 API：`@deepseek-ai/dsh-session-persistence` 的 `handle.ts` / `storage-contract.ts`，`dsh-session-persistence-jsonl` 的 `storage.ts` / `index.ts` / `migration-verifier.ts`，`dsh-session-query` 的 `observation.ts`
 - DSH 官方前端：`@deepseek-ai/dsh-api-session-controller` 的 `src/client/sessions/session.ts`（初始页参数/loadOlder）、`src/history.ts`（paginate）、`src/client/transport.ts`（follow 首帧）

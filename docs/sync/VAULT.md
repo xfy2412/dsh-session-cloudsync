@@ -1,11 +1,11 @@
 # 加密附加数据层（Vault）与工作区映射
 
 > 状态：**V2 已完成，V3+ 设计稿**（2026-10-22）。
-> 本文件承接 [DESIGN.md](DESIGN.md) 的 L2 设备台账 / L3 agent 笔记；M4 的单一
+> 本文件承接 [DESIGN.md](../architecture/DESIGN.md) 的 L2 设备台账 / L3 agent 笔记；M4 的单一
 > `workspacePath` 已由本文的工作区绑定替换。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
-> 会话内部的 cwd 处理另见 [CWD.md](CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
-> 会话身份与启动对账流程见 [RECONCILE.md](RECONCILE.md)，术语见 [GLOSSARY.md](GLOSSARY.md)。
-> 使用协议见 [USAGE-AGREEMENT.md](USAGE-AGREEMENT.md)：只改 DSH 必需的 cwd 元数据，
+> 会话内部的 cwd 处理另见 [CWD.md](../architecture/CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
+> 会话身份与启动对账流程见 [RECONCILE.md](RECONCILE.md)，术语见 [GLOSSARY.md](../guides/GLOSSARY.md)。
+> 使用协议见 [USAGE-AGREEMENT.md](../guides/USAGE-AGREEMENT.md)：只改 DSH 必需的 cwd 元数据，
 > 不改消息与工具调用。
 
 ## 1. 范围
@@ -555,4 +555,4 @@ V2 已完成工作区落点替换，不需要迁移分支。
 - 2026-10-22 起先做 Vault V0 → V1 → V2；M4 的 C5/D5/E3 顺延；
 - V2 已删除单一 `workspacePath`，不保留兼容文案或迁移路径；
 - 本设计的 Vault 失败不阻塞会话同步；
-- 会话内部的 cwd 处理见 [CWD.md](CWD.md)（raw 事件 + 接收端修正）。
+- 会话内部的 cwd 处理见 [CWD.md](../architecture/CWD.md)（raw 事件 + 接收端修正）。
