@@ -761,6 +761,14 @@ function notifyProgress(
 }
 
 /**
+ * 让出一个事件循环 turn，使状态/SSE 能在规划、封帧、上传之间发送。
+ * @returns 下一 tick 后 resolve。
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => { setImmediate(resolve) })
+}
+
+/**
  * 按远端批次边界收集本地连续事件；缺 seq 视为分叉。
  * @param bySeq - 本地事件索引。
  * @param seqFrom - 起始 seq。
@@ -912,53 +920,35 @@ async function syncSession<Session>(
     if (remote.safeThroughSeq !== undefined) safeThroughSeq = Math.max(safeThroughSeq, remote.safeThroughSeq)
   }
 
-  const uploadSteps: Array<{ readonly entry: SealedFrame; readonly events: number }> = []
-  notifyProgress(deps, { sessionId, direction: 'push', phase: 'progress', stage: 'planning', progress: 0 })
-  let baseIndex: number
-  let baseChainHash: string | null
-  let pushedBatches = 0
-  let totalEvents = 0
-
-  notifyProgress(deps, { sessionId, direction: 'push', phase: 'progress', stage: 'sealing', progress: 0 })
-  if (remote === undefined) {
-    const headerEntry = sealHeader(meta, sessionId, sessionKey)
-    uploadSteps.push({ entry: headerEntry, events: 0 })
-    let index = 1
-    for (const batch of iterateEventBatches(events, -1, batchOptions(deps.config))) {
-      totalEvents += batch.events.length
-      uploadSteps.push({
-        entry: sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey),
-        events: batch.events.length,
-      })
-      index += 1
-    }
-    pushedBatches = index - 1
-    baseIndex = -1
-    baseChainHash = null
-  } else {
-    let index = remote.frames.length
-    let count = 0
-    for (const batch of iterateEventBatches(events, remote.lastSeq, batchOptions(deps.config))) {
-      totalEvents += batch.events.length
-      uploadSteps.push({
-        entry: sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey),
-        events: batch.events.length,
-      })
-      index += 1
-      count += 1
-    }
-    if (count === 0) {
-      return { sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
-    }
-    pushedBatches = count
-    baseIndex = remote.frames.length - 1
-    baseChainHash = remote.frames[remote.frames.length - 1]!.chainHash
+  const startAfterSeq = remote?.lastSeq ?? -1
+  const totalEvents = Math.max(0, events.length - (startAfterSeq + 1))
+  if (remote !== undefined && totalEvents === 0) {
+    return { sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
   }
 
-  const totalBytes = uploadSteps.reduce((total, step) => total + step.entry.ref.bytes, 0)
+  notifyProgress(deps, {
+    sessionId,
+    direction: 'push',
+    phase: 'progress',
+    stage: 'planning',
+    progress: 0,
+    totalEvents,
+    doneEvents: 0,
+  })
+  await yieldToEventLoop()
+
+  let index = remote === undefined ? 1 : remote.frames.length
+  const baseIndex = remote === undefined ? -1 : remote.frames.length - 1
+  const baseChainHash = remote === undefined
+    ? null
+    : remote.frames[remote.frames.length - 1]!.chainHash
+  const frames: SealedFrameRef[] = []
+  let pushedBatches = 0
   let doneEvents = 0
   let doneBatches = 0
+  let totalBytes = 0
   let doneBytes = 0
+
   const notifyUpload = (): void => {
     notifyProgress(deps, {
       sessionId,
@@ -968,22 +958,54 @@ async function syncSession<Session>(
       progress: totalEvents === 0 ? 1 : doneEvents / totalEvents,
       totalEvents,
       doneEvents,
-      totalBatches: pushedBatches,
       doneBatches,
       bytes: totalBytes,
       doneBytes,
     })
   }
-  notifyUpload()
-  for (const step of uploadSteps) {
-    await uploadBlob(fetchImpl, base, deps.config.token, step.entry)
-    doneBytes += step.entry.ref.bytes
-    if (step.events > 0) {
-      doneEvents += step.events
+
+  const upload = async (entry: SealedFrame, eventsInBatch: number): Promise<void> => {
+    await uploadBlob(fetchImpl, base, deps.config.token, entry)
+    frames.push(entry.ref)
+    totalBytes += entry.ref.bytes
+    doneBytes += entry.ref.bytes
+    if (eventsInBatch > 0) {
+      doneEvents += eventsInBatch
       doneBatches += 1
     }
     notifyUpload()
   }
+
+  notifyProgress(deps, {
+    sessionId,
+    direction: 'push',
+    phase: 'progress',
+    stage: 'sealing',
+    progress: 0,
+    totalEvents,
+    doneEvents: 0,
+  })
+  await yieldToEventLoop()
+
+  if (remote === undefined) {
+    await upload(sealHeader(meta, sessionId, sessionKey), 0)
+  }
+
+  let lastYieldAt = Date.now()
+  for (const batch of iterateEventBatches(events, startAfterSeq, batchOptions(deps.config))) {
+    const entry = sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey)
+    await upload(entry, batch.events.length)
+    index += 1
+    pushedBatches += 1
+    if (Date.now() - lastYieldAt >= 8) {
+      await yieldToEventLoop()
+      lastYieldAt = Date.now()
+    }
+  }
+  if (doneEvents !== totalEvents) {
+    throw new Error(`推送规划只覆盖 ${doneEvents}/${totalEvents} 个事件`)
+  }
+
   notifyProgress(deps, {
     sessionId,
     direction: 'push',
@@ -997,14 +1019,13 @@ async function syncSession<Session>(
     bytes: totalBytes,
     doneBytes: totalBytes,
   })
-  const sealedEntries = uploadSteps.map((step) => step.entry)
 
   await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
     baseIndex,
     baseChainHash,
     createdAt: meta.createdAt,
     formatVersion: meta.formatVersion,
-    frames: sealedEntries.map((entry) => entry.ref),
+    frames,
     ...workspaceKey === undefined ? {} : { workspaceKey },
     tailOpen,
     safeThroughSeq,
@@ -1061,6 +1082,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   for (const entry of plan.planned) {
     const sessionId = String(entry.snapshot.header.id)
     notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', stage: 'reading', progress: 0 })
+    await yieldToEventLoop()
     try {
       const sessionKey = sessionKeyOf(master, sessionId)
       const report = await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot, entry.depth === 0)

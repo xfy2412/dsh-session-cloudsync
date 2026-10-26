@@ -52,6 +52,7 @@ export function createEventStreamResponse(request: Request, options: EventStream
       let idleTimer: ReturnType<typeof setTimeout> | undefined
       let heartbeatTimer: ReturnType<typeof setInterval> | undefined
       let lifetimeTimer: ReturnType<typeof setTimeout> | undefined
+      let lastStageKey: string | undefined
 
       const cleanup = (): void => {
         if (closed) return
@@ -91,15 +92,20 @@ export function createEventStreamResponse(request: Request, options: EventStream
         ;(idleTimer as { unref?: () => void }).unref?.()
       }
 
-      const sendStatus = (): void => {
+      const stageKeyOf = (status: SyncStatus): string =>
+        status.sessions.map((session) =>
+          `${session.sessionId}:${session.phase}:${session.stage ?? ''}`).join('|')
+
+      const sendStatus = (provided?: SyncStatus): void => {
         if (closed) return
         let status: SyncStatus
         try {
-          status = options.status()
+          status = provided ?? options.status()
         } catch {
           cleanup()
           return
         }
+        lastStageKey = stageKeyOf(status)
         write(`id: ${status.statusVersion}\nevent: status\ndata: ${JSON.stringify(status)}\n\n`)
         if (status.running || status.pending !== null) {
           if (idleTimer !== undefined) {
@@ -112,7 +118,25 @@ export function createEventStreamResponse(request: Request, options: EventStream
       }
 
       const scheduleSend = (): void => {
-        if (closed || coalesceTimer !== undefined) return
+        if (closed) return
+        let status: SyncStatus
+        try {
+          status = options.status()
+        } catch {
+          cleanup()
+          return
+        }
+        // 规划/封帧等阶段变化立即发送；逐批进度仍走合并窗口，避免
+        // 大会话每批都推一帧。
+        if (stageKeyOf(status) !== lastStageKey) {
+          if (coalesceTimer !== undefined) {
+            clearTimeout(coalesceTimer)
+            coalesceTimer = undefined
+          }
+          sendStatus(status)
+          return
+        }
+        if (coalesceTimer !== undefined) return
         coalesceTimer = setTimeout(() => {
           coalesceTimer = undefined
           sendStatus()

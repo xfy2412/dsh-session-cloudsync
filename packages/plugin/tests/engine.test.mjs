@@ -169,6 +169,14 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         && progress.phase === 'progress' && progress.doneEvents === 4))
       assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
         && progress.phase === 'done' && progress.doneEvents === 6))
+      const stages = [...new Set(pushedProgress
+        .filter((progress) => progress.direction === 'push')
+        .map((progress) => progress.stage)
+        .filter((stage) => stage !== undefined))]
+      assert.deepEqual(stages, ['reading', 'planning', 'sealing', 'uploading', 'committing', 'done'])
+      const planning = pushedProgress.find((progress) => progress.stage === 'planning')
+      assert.equal(planning.totalEvents, 6)
+      assert.equal(planning.doneEvents, 0)
       const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.body.value.manifest.workspaceKey, workspaceKey)
 

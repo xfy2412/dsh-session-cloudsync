@@ -123,6 +123,41 @@ test('SSE：不带 until=idle 时空闲连接保持打开', async () => {
   await reader.cancel()
 })
 
+test('SSE：stage 变化立即发送，不受合并窗口影响', async () => {
+  let current = {
+    ...makeStatus(1, true),
+    sessions: [{ sessionId: 's1', phase: 'running', stage: 'reading' }],
+  }
+  const listeners = new Set()
+  const response = createEventStreamResponse(
+    new Request('http://host/api/session-cloudsync/events'),
+    {
+      status: () => current,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      heartbeatMs: 10_000,
+      coalesceMs: 1000,
+      maxLifetimeMs: 30_000,
+    },
+  )
+  const reader = response.body.getReader()
+  await readUntil(reader, '\n\n')
+
+  current = {
+    ...current,
+    statusVersion: 2,
+    sessions: [{ sessionId: 's1', phase: 'running', stage: 'planning' }],
+  }
+  const started = Date.now()
+  for (const listener of [...listeners]) listener()
+  const next = await readUntil(reader, '\n\n')
+  assert.match(next.text, /"stage":"planning"/)
+  assert.ok(Date.now() - started < 500, 'stage 变化应立即发送')
+  await reader.cancel()
+})
+
 test('SSE：客户端 abort 会取消订阅', async () => {
   const abort = new AbortController()
   const listeners = new Set()
