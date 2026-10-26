@@ -436,14 +436,17 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
       assert.equal(pulled.sessions[0].status, 'pulled')
       assert.equal(localAhead.sessions.get(sessionId).events.length, 120)
 
-      // 本地和远端完全一致：up-to-date。
+      // 本地和远端完全一致：up-to-date，但仍会校验共享前缀。
+      const sameProgress = []
       const same = await syncOnce({
         persistence: fakeStore(header, events(0, 119)),
         sessions,
         config,
         isTailOpen: () => false,
+        onProgress: (progress) => { sameProgress.push(progress) },
       })
       assert.equal(same.sessions[0].status, 'up-to-date')
+      assert.ok(sameProgress.some((progress) => progress.direction === 'push' && progress.stage === 'verifying'))
     } finally {
       await close()
       db.close()

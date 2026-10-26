@@ -968,6 +968,13 @@ async function syncSession<Session>(
     if (remote.workspaceKey !== workspaceKey) throw new Error('远端会话的 workspaceKey 与本地不一致（diverged）')
     const head = remote.frames[0]
     if (head === undefined || head.chainHash !== headerChainHash(meta)) throw new Error('远端会话头与本地不一致（diverged）')
+    notifyProgress(deps, {
+      sessionId,
+      direction: 'push',
+      phase: 'progress',
+      stage: 'verifying',
+      progress: 0,
+    })
     const verifyStarted = performance.now()
     notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'verify' })
     await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, events)
@@ -1587,6 +1594,13 @@ async function pullSession<Session>(
       })
       const localMeta = headerMetaOf(handle.header, handle.inheritedEventCount)
       if (headerChainHash(localMeta) !== headerRef.chainHash) throw new Error('本地会话头与远端不一致（diverged）')
+      notifyProgress(deps, {
+        sessionId,
+        direction: 'pull',
+        phase: 'progress',
+        stage: 'verifying',
+        progress: 0,
+      })
       const verifyStarted = performance.now()
       notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'verify' })
       await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events)

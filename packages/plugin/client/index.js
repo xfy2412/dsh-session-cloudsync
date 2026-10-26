@@ -791,6 +791,7 @@ window.__ModuleLoader__.load({
       reading: '读取中',
       planning: '计算中',
       sealing: '加密中',
+      verifying: '校验中',
       uploading: '上传中',
       committing: '提交中',
       downloading: '下载中',

@@ -156,6 +156,7 @@ interface SyncLaneState {
 
 ```text
 reading      读取会话
+verifying    校验共享前缀
 planning     计算批次
 sealing      加密封帧
 uploading    上传中
