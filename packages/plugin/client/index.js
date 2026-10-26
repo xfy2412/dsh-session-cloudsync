@@ -685,6 +685,27 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 拒绝把 https;//host 这类地址写进配置，避免同步阶段才出现 fetch 解析错误。 */
+    function assertServerUrl(value) {
+      var url = String(value || '').trim()
+      if (url === '') return
+      var parsed
+      try {
+        parsed = new URL(url)
+      } catch (error) {
+        throw new Error('服务端地址不合法，应形如 https://host:port')
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error('服务端地址必须以 http:// 或 https:// 开头')
+      }
+    }
+
+    /** 首启与设置页共用的连接探测；只测当前输入，不落盘、不带 token。 */
+    async function probeServer(model, serverUrl) {
+      assertServerUrl(serverUrl)
+      return await model.testConnection(String(serverUrl || '').trim())
+    }
+
     /** 取一个会话的聚合视图。 */
     function findSession(status, sessionId) {
       if (status === null || !Array.isArray(status.sessions)) return null
@@ -1103,6 +1124,12 @@ window.__ModuleLoader__.load({
           setMessage({ bad: true, text: '设置当前不可写，请稍后再试' })
           return false
         }
+        try {
+          assertServerUrl(fields.serverUrl)
+        } catch (error) {
+          setMessage({ bad: true, text: errorText(error) })
+          return false
+        }
         var ops = [
           { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
           { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
@@ -1155,7 +1182,7 @@ window.__ModuleLoader__.load({
         setMessage(null)
         try {
           // 只测当前输入的服务端地址：不落盘、不带 token，也不必等配置热更新。
-          var result = await model.testConnection(serverUrl)
+          var result = await probeServer(model, serverUrl)
           if (result && result.ok) {
             setMessage({ bad: false, text: '服务端可达' })
             model.toast('服务端可达')
@@ -1457,6 +1484,7 @@ window.__ModuleLoader__.load({
       }
 
       async function saveFields() {
+        assertServerUrl(fields.serverUrl)
         var ops = [
           { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
           { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
@@ -1480,7 +1508,7 @@ window.__ModuleLoader__.load({
         setMessage(null)
         try {
           // 首启第 1 步还不该有 token：直接用当前输入测可达性，不落盘也不看配置。
-          var result = await model.testConnection(serverUrl)
+          var result = await probeServer(model, serverUrl)
           if (result && result.ok) {
             setMessage({ bad: false, text: '服务端可达' })
           } else {

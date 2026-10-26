@@ -812,6 +812,11 @@ test('连接测试：只探测公开的 /v1/health，不读配置也不带 token
         kind: 'config',
         message: 'serverUrl 非法',
       })
+      assert.deepEqual(await testConnection('https;//hgss.example.com:7879'), {
+        ok: false,
+        kind: 'config',
+        message: 'serverUrl 非法',
+      })
     } finally {
       await close()
       db.close()

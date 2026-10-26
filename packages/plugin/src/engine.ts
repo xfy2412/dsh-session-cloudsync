@@ -390,12 +390,20 @@ export class SyncHttpError extends Error {
 }
 
 /**
- * 规范化服务端地址。
+ * 规范化服务端地址；非法地址返回空串，避免把 `https;//...` 这类输入直接交给 fetch。
  * @param url - 配置里的地址。
- * @returns 去掉末尾斜杠的地址。
+ * @returns 去掉末尾斜杠的地址；空串表示地址非法。
  */
 function normalizeBase(url: string): string {
-  return url.trim().replace(/\/+$/u, '')
+  const trimmed = url.trim().replace(/\/+$/u, '')
+  if (trimmed === '') return ''
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+  } catch {
+    return ''
+  }
+  return trimmed
 }
 
 /** 同步错误的粗分类，供退避与 UI 文案使用。 */
@@ -1042,8 +1050,10 @@ export async function testConnection(
   fetchImpl: typeof fetch = fetch,
   requestTimeoutMs?: number,
 ): Promise<SyncTestResult> {
-  const base = normalizeBase(serverUrl)
-  if (base === '') return { ok: false, kind: 'config', message: 'serverUrl 未配置' }
+  const raw = serverUrl.trim()
+  if (raw === '') return { ok: false, kind: 'config', message: 'serverUrl 未配置' }
+  const base = normalizeBase(raw)
+  if (base === '') return { ok: false, kind: 'config', message: 'serverUrl 非法' }
   let target: URL
   try {
     target = new URL(base)
