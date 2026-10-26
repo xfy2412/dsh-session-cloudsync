@@ -198,13 +198,20 @@ window.__ModuleLoader__.load({
       '.dssync-bubble.open .dssync-chev{transform:rotate(180deg)}',
       '.dssync-bubble.collapsed .dssync-label{max-width:0;opacity:0}',
       '.dssync-bubble.collapsed .dssync-count,.dssync-bubble.collapsed .dssync-chev{max-width:0;opacity:0}',
-      '.dssync-segbar{display:flex;height:6px;margin:0 11px 9px;background:rgba(255,255,255,.08);border-radius:999px;overflow:hidden;transition:opacity .18s}',
+      '.dssync-segbar{display:flex;align-items:center;gap:6px;margin:0 8px 9px;background:transparent;overflow:visible;transition:opacity .18s}',
       '.dssync-bubble.collapsed .dssync-segbar{opacity:0}',
+      '.dssync-seg-end{width:13px;height:13px;flex:0 0 auto;display:grid;place-items:center;color:var(--dssync-faint);opacity:.8}',
+      '.dssync-seg-end.remote{color:#8db7ff}',
+      '.dssync-seg-track{display:flex;flex:1 1 auto;min-width:0;height:8px;background:rgba(255,255,255,.08);border-radius:999px;overflow:hidden}',
       '.dssync-seg{position:relative;flex:1 1 0;min-width:0;overflow:hidden;background:rgba(255,255,255,.06)}',
-      '.dssync-seg i{position:absolute;inset:0 auto 0 0;width:0;background:#f0b64a;transition:width .2s linear}',
-      '.dssync-seg.run i{background:linear-gradient(90deg,#f0b64a,#ffd27a,#f0b64a);background-size:200% 100%;animation:dssync-flow 1.2s linear infinite}',
-      '.dssync-seg.done i{width:100%!important;background:#22c55e}',
-      '.dssync-seg.bad i{width:100%!important;background:#ef4444}',
+      '.dssync-seg .push,.dssync-seg .pull{position:absolute;width:0;height:4px;transition:width .2s linear,background-color .18s}',
+      '.dssync-seg .push{left:0;bottom:0;background:#f0b64a}',
+      '.dssync-seg .pull{right:0;top:0;background:#5b9cff;opacity:.92}',
+      '.dssync-seg.run .push{background:linear-gradient(90deg,#f0b64a,#ffd27a,#f0b64a);background-size:200% 100%;animation:dssync-flow 1.2s linear infinite}',
+      '.dssync-seg.push-done .push{background:#22c55e;animation:none}',
+      '.dssync-seg.done .push,.dssync-seg.done .pull{background:#22c55e}',
+      '.dssync-seg.bad .push,.dssync-seg.bad .pull{background:#ef4444}',
+      '.dssync-seg.wait .push,.dssync-seg.wait .pull{width:0!important}',
       '@keyframes dssync-flow{to{background-position:-200% 0}}',
       '.dssync-collapse{display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s cubic-bezier(.2,.8,.2,1)}',
       '.dssync-bubble.open .dssync-collapse{grid-template-rows:1fr}',
@@ -257,6 +264,25 @@ window.__ModuleLoader__.load({
       if (error === null || error === undefined) return ''
       if (typeof error === 'string') return error
       return error.message || String(error)
+    }
+
+    function computerIcon() {
+      return h('svg', {
+        width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+        strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true',
+      },
+      h('rect', { x: 3, y: 4, width: 18, height: 12, rx: 2 }),
+      h('path', { d: 'M8 20h8M12 16v4' }))
+    }
+
+    function serverIcon() {
+      return h('svg', {
+        width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+        strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true',
+      },
+      h('rect', { x: 3, y: 4, width: 18, height: 6, rx: 1.5 }),
+      h('rect', { x: 3, y: 14, width: 18, height: 6, rx: 1.5 }),
+      h('path', { d: 'M7 7h.01M7 17h.01' }))
     }
 
     function cloudIcon() {
@@ -1897,6 +1923,20 @@ window.__ModuleLoader__.load({
       var hideTimer = useRef(null)
       var touched = useRef(false)
       var previousRunning = useRef(false)
+      var pinnedRef = useRef(false)
+      var hoveringRef = useRef(false)
+      var focusWithinRef = useRef(false)
+      var activeRef = useRef(false)
+      var laneRunRef = useRef(null)
+      var laneHighRef = useRef({})
+
+      useEffect(function () { pinnedRef.current = pinned }, [pinned])
+      activeRef.current = !!(status && (status.running || status.pending !== null))
+      var laneRunId = status && status.run ? status.run.id : 0
+      if (laneRunRef.current !== laneRunId) {
+        laneRunRef.current = laneRunId
+        laneHighRef.current = {}
+      }
 
       useEffect(function () { model.refreshAll() }, [model])
       useEffect(function () {
@@ -1918,14 +1958,19 @@ window.__ModuleLoader__.load({
       useEffect(function () {
         var was = previousRunning.current
         previousRunning.current = !!(status && status.running)
-        if (!was || (status && status.running) || !visible || pinned) return
+        if (hideTimer.current !== null) {
+          clearTimeout(hideTimer.current)
+          hideTimer.current = null
+        }
+        if (!was || activeRef.current || !visible || pinned) return
         if (status && status.lastError !== null && status.lastError !== undefined) return
-        if (hideTimer.current !== null) clearTimeout(hideTimer.current)
         hideTimer.current = setTimeout(function () {
           hideTimer.current = null
-          if (!pinned) { setVisible(false); setOpen(false) }
-        }, 1000)
-      }, [status && status.running, status && status.lastError, visible, pinned])
+          if (!visible || activeRef.current || pinnedRef.current || hoveringRef.current || focusWithinRef.current) return
+          setVisible(false)
+          setOpen(false)
+        }, 3000)
+      }, [status && status.running, status && status.pending, status && status.lastError, visible, pinned])
 
       useEffect(function () {
         function outside(event) {
@@ -2033,35 +2078,65 @@ window.__ModuleLoader__.load({
                     : total === 0 ? '还没有同步记录'
                       : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
       var dot = statusDot(status)
+      function lanePercent(session, direction) {
+        if (session.phase === 'done' || session.phase === 'skipped') return 100
+        if (direction === undefined || direction === null) return 0
+        var terminal = direction.status === 'pushed' || direction.status === 'pulled'
+          || direction.status === 'up-to-date' || direction.status === 'skipped'
+        var pct = terminal || direction.phase === 'done'
+          ? 100
+          : direction.totalEvents > 0
+            ? Math.max(0, Math.min(100, Math.round(direction.doneEvents / direction.totalEvents * 100)))
+            : 0
+        var key = session.sessionId + ':' + direction.direction
+        var previous = laneHighRef.current[key] || 0
+        pct = Math.max(previous, pct)
+        laneHighRef.current[key] = pct
+        return pct
+      }
       var segments = sessions.map(function (session) {
         var bad = session.phase === 'failed' || session.phase === 'blocked'
         var active = session.phase === 'running'
-        var attention = session.phase === 'deferred'
         var terminal = session.phase === 'done' || session.phase === 'skipped'
-        var ratio = session.totalEvents > 0 ? session.doneEvents / session.totalEvents : (terminal ? 1 : 0)
-        var pct = bad ? 100 : terminal ? 100 : attention ? 55 : active ? Math.max(10, Math.min(95, Math.round(ratio * 100))) : 0
+        var push = lanePercent(session, session.push)
+        var pull = lanePercent(session, session.pull)
+        var pushDone = push >= 100
+        var className = 'dssync-seg'
+          + (bad ? ' bad' : terminal ? ' done' : active ? ' run' : '')
+          + (pushDone && !terminal ? ' push-done' : '')
         return h('span', {
-          className: 'dssync-seg' + (bad ? ' bad' : active || attention ? ' run' : pct >= 100 ? ' done' : ''),
+          className: className,
           key: session.sessionId,
-          title: sessionLabel(session.sessionId),
-        }, h('i', { style: { width: pct + '%' } }))
+          title: sessionLabel(session.sessionId) + ' · 上传 ' + push + '% · 拉取 ' + pull + '%',
+        },
+        h('i', { className: 'push', style: { width: push + '%' } }),
+        h('i', { className: 'pull', style: { width: pull + '%' } }))
       })
       if (segments.length === 0) {
-        segments = [h('span', { className: 'dssync-seg' + (running ? ' run' : ''), key: 'empty' }, h('i', { style: { width: running ? '35%' : '0%' } }))]
+        segments = [h('span', { className: 'dssync-seg' + (running ? ' run' : ''), key: 'empty' },
+          h('i', { className: 'push', style: { width: running ? '35%' : '0%' } }),
+          h('i', { className: 'pull', style: { width: '0%' } }))]
       }
 
       function clearBlur() {
         if (blurTimer.current !== null) { clearTimeout(blurTimer.current); blurTimer.current = null }
       }
 
+      function clearHide() {
+        if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
+      }
+
       function scheduleBlur() {
         if (!visible || !pinned) return
+        // 同步期间不自动收起；阶段/列表可能正被查看。
+        if (activeRef.current) return
         clearBlur()
         blurTimer.current = setTimeout(function () {
           blurTimer.current = null
-          if (!visible) return
+          if (!visible || activeRef.current || pinnedRef.current || hoveringRef.current || focusWithinRef.current) return
           if (document.hasFocus() && document.activeElement && document.querySelector('.dssync-bubble') &&
             document.querySelector('.dssync-bubble').contains(document.activeElement)) return
+          pinnedRef.current = false
           setPinned(false)
           setVisible(false)
           setOpen(false)
@@ -2070,17 +2145,22 @@ window.__ModuleLoader__.load({
 
       function expand(pin) {
         touched.current = true
-        if (pin !== false) setPinned(true)
-        if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
+        if (pin !== false) {
+          pinnedRef.current = true
+          setPinned(true)
+        }
+        clearHide()
         clearBlur()
         setVisible(true)
       }
 
       function collapse() {
+        pinnedRef.current = false
         setPinned(false)
         setVisible(false)
         setOpen(false)
         clearBlur()
+        clearHide()
       }
 
       function onIcon() {
@@ -2096,6 +2176,9 @@ window.__ModuleLoader__.load({
       function triggerSync() {
         if (syncing) return
         setSyncing(true)
+        pinnedRef.current = true
+        setPinned(true)
+        clearHide()
         setOpen(true)
         setVisible(true)
         model.syncNow().then(function (result) {
@@ -2117,8 +2200,9 @@ window.__ModuleLoader__.load({
 
       function onPointerDown(event) {
         if (event.target.closest && event.target.closest('.dssync-cloud')) return
-        if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
+        clearHide()
         clearBlur()
+        pinnedRef.current = true
         setPinned(true)
       }
 
@@ -2341,15 +2425,32 @@ window.__ModuleLoader__.load({
 
       var bubble = h('div', { className: 'dssync-bubble' + openClass + collapsedClass + badClass, 'aria-live': 'polite' },
         head,
-        h('div', { className: 'dssync-segbar', 'aria-hidden': 'true' }, segments),
+        h('div', { className: 'dssync-segbar', 'aria-hidden': 'true' },
+          h('span', { className: 'dssync-seg-end', title: '本机' }, computerIcon()),
+          h('span', { className: 'dssync-seg-track' }, segments),
+          h('span', { className: 'dssync-seg-end remote', title: '服务端' }, serverIcon())),
         panel)
 
       var wrap = h('div', {
         className: 'dssync-bubble-wrap' + collapsedClass,
-        onPointerEnter: function () { clearBlur() },
-        onPointerLeave: function () { scheduleBlur() },
-        onFocus: function () { clearBlur() },
-        onBlur: function (event) { if (!event.currentTarget.contains(event.relatedTarget)) scheduleBlur() },
+        onPointerEnter: function () {
+          hoveringRef.current = true
+          clearBlur()
+          clearHide()
+        },
+        onPointerLeave: function () {
+          hoveringRef.current = false
+          scheduleBlur()
+        },
+        onFocus: function () {
+          focusWithinRef.current = true
+          clearBlur()
+          clearHide()
+        },
+        onBlur: function (event) {
+          focusWithinRef.current = !!(event.currentTarget.contains && event.currentTarget.contains(event.relatedTarget))
+          if (!focusWithinRef.current) scheduleBlur()
+        },
         onPointerDown: onPointerDown,
       }, bubble)
 

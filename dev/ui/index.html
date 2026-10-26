@@ -543,21 +543,37 @@
 
   /* 一根完整的分段进度条：外观上没有分隔，只有每段自己的填充。 */
   .segbar {
-    display: flex; width: auto; height: 6px; margin: 0 11px 9px;
-    background: rgba(255, 255, 255, .08); border-radius: 999px; overflow: hidden;
+    display: flex; align-items: center; gap: 6px; width: auto; margin: 0 8px 9px;
+    background: transparent; overflow: visible;
     transition: opacity var(--t-fade);
   }
-  .seg { flex: 1 1 0; min-width: 0; background: transparent; position: relative; overflow: hidden; }
-  .seg > i {
-    display: block; height: 100%; width: 0;
-    background: #f0b64a;
-    transition: width .22s linear;
+  .seg-end {
+    width: 13px; height: 13px; flex: 0 0 auto; display: grid; place-items: center;
+    color: var(--faint); opacity: .8;
   }
-  .seg.done > i { background: #34c77b; }
-  .seg.bad > i { background: #ef4444; }
-  .seg.wait > i { width: 0 !important; }
-  .bubble.bad .seg > i:not(.done) { background: #ef4444; }
-  .bubble.complete .segbar { background: rgba(52, 199, 123, .16); }
+  .seg-end.remote { color: #8db7ff; }
+  .seg-track {
+    display: flex; flex: 1 1 auto; min-width: 0; height: 8px;
+    background: rgba(255, 255, 255, .08); border-radius: 999px; overflow: hidden;
+  }
+  .seg { flex: 1 1 0; min-width: 0; background: transparent; position: relative; overflow: hidden; }
+  .seg .push,
+  .seg .pull {
+    position: absolute; width: 0; height: 4px;
+    transition: width .22s linear, background-color var(--t-fade);
+  }
+  .seg .push { left: 0; bottom: 0; background: #f0b64a; }
+  .seg .pull { right: 0; top: 0; background: #5b9cff; opacity: .92; }
+  .seg.push-done .push { background: #34c77b; }
+  .seg.done .push,
+  .seg.done .pull { background: #34c77b; }
+  .seg.bad .push,
+  .seg.bad .pull { background: #ef4444; }
+  .seg.wait .push,
+  .seg.wait .pull { width: 0 !important; }
+  .bubble.bad .seg .push,
+  .bubble.bad .seg .pull { background: #ef4444; }
+  .bubble.complete .seg-track { background: rgba(52, 199, 123, .16); }
 
   .bubble-panel { border-top: 1px solid var(--border); padding: 4px 6px 6px; max-height: 232px; overflow: auto; }
   .bubble-panel::-webkit-scrollbar { width: 6px; }
@@ -729,7 +745,7 @@
     bubbleVisible: true,
     bubblePinned: false,
     autoHide: false,
-    sessions: SESSIONS.map((session) => ({ ...session, progress: 1, state: 'done' })),
+    sessions: SESSIONS.map((session) => ({ ...session, progress: 1, pushProgress: 1, pullProgress: 1, state: 'done' })),
     syncStartedAt: 0,
     syncError: '连接被拒绝（127.0.0.1:8787）',
     testResult: null,
@@ -779,6 +795,8 @@
   }
 
   const icons = {
+    computer: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+    server: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>',
     cloud: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 .4-9A6.5 6.5 0 0 0 5.6 9.4 4.3 4.3 0 0 0 6 19h11.5Z"/><path d="M12 12v5"/><path d="m9.8 14.2 2.2-2.2 2.2 2.2"/></svg>',
     lock: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>',
     check: '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 6 2.5 2.5L10 3.5"/></svg>',
@@ -1321,23 +1339,33 @@
   function setSessionMode(mode) {
     state.sessions = SESSIONS.map((session, index) => {
       let progress = 1;
+      let pushProgress = 1;
+      let pullProgress = 1;
       let sessionState = 'done';
       if (mode === 'syncing') {
         progress = 0;
+        pushProgress = 0;
+        pullProgress = 0;
         sessionState = 'wait';
       } else if (mode === 'error') {
         if (index < 3) {
           progress = 1;
+          pushProgress = 1;
+          pullProgress = 1;
           sessionState = 'done';
         } else if (index < 5) {
           progress = index === 3 ? .58 : .32;
+          pushProgress = progress;
+          pullProgress = 0;
           sessionState = 'bad';
         } else {
           progress = 0;
+          pushProgress = 0;
+          pullProgress = 0;
           sessionState = 'wait';
         }
       }
-      return { ...session, progress, state: sessionState };
+      return { ...session, progress, pushProgress, pullProgress, state: sessionState };
     });
   }
 
@@ -1366,9 +1394,11 @@
   /** 用户操作过气泡后，失焦 5 秒再自动收回；焦点/鼠标回到气泡会取消。 */
   function scheduleBlurCollapse() {
     if (!state.bubbleVisible || !state.bubblePinned) return;
+    // 同步过程中不收起：用户可能正在观察阶段/进度。
+    if (state.status === 'syncing') return;
     clearTimeout(blurTimer);
     blurTimer = setTimeout(() => {
-      if (!state.bubbleVisible) return;
+      if (!state.bubbleVisible || state.status === 'syncing') return;
       const widget = document.querySelector('#sync-widget-root .bubble');
       if (widget === null) return;
       if (document.hasFocus() && widget.contains(document.activeElement)) return;
@@ -1376,6 +1406,21 @@
       state.bubblePinned = false;
       collapseBubble(false);
     }, 5000);
+  }
+
+  /** 完成后的自动收起：不在同步中，且用户没有 pin/hover/focus 时才收。 */
+  function scheduleFinishCollapse() {
+    if (!state.autoHide || state.bubblePinned) return;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      hideTimer = undefined;
+      if (!state.bubbleVisible || state.status === 'syncing') return;
+      if (!state.autoHide || state.bubblePinned) return;
+      const widget = document.querySelector('#sync-widget-root .bubble');
+      if (widget === null) return;
+      if (widget.matches(':hover') || widget.contains(document.activeElement)) return;
+      collapseBubble(false);
+    }, 3000);
   }
 
   function expandBubble(pin = true) {
@@ -1501,14 +1546,18 @@
     const openClass = state.bubbleOpen && !collapsed ? 'open' : '';
     const collapsedClass = collapsed ? ' collapsed' : '';
     const segments = state.sessions.map((session) => {
-      const pct = Math.round(session.progress * 100);
-      return `<span class="seg ${session.state}" title="${esc(session.name)} · ${pct}%"><i style="width:${pct}%"></i></span>`;
+      const push = Math.round((session.pushProgress ?? session.progress) * 100);
+      const pull = Math.round((session.pullProgress ?? 0) * 100);
+      const pushDone = session.state === 'done' || push >= 100;
+      return `<span class="seg ${session.state}${pushDone ? ' push-done' : ''}" title="${esc(session.name)} · 上传 ${push}% · 拉取 ${pull}%"><i class="push" style="width:${push}%"></i><i class="pull" style="width:${pull}%"></i></span>`;
     }).join('');
     const rows = state.sessions.map((session, index) => {
       const dot = session.state === 'done' ? 'ok' : session.state === 'bad' ? 'bad' : session.state === 'run' ? 'run' : '';
+      const push = Math.round((session.pushProgress ?? session.progress) * 100);
+      const pull = Math.round((session.pullProgress ?? 0) * 100);
       const tag = session.state === 'done' ? '已完成'
         : session.state === 'bad' ? '失败'
-          : session.state === 'run' ? `${Math.round(session.progress * 100)}%`
+          : session.state === 'run' ? `↑ ${push}% · ↓ ${pull}%`
             : '等待';
       return `<div class="bubble-row" data-index="${index}">
         <span class="state ${dot}"></span>
@@ -1554,7 +1603,11 @@
           aria-label="${state.bubbleOpen ? '收起同步会话' : '展开同步会话'}"
           aria-expanded="${state.bubbleOpen}" aria-controls="bubble-body">${icons.chevron}</button>
       </div>
-      <div class="segbar" aria-hidden="true">${segments}</div>
+      <div class="segbar" aria-hidden="true">
+        <span class="seg-end" title="本地">${icons.computer}</span>
+        <span class="seg-track">${segments}</span>
+        <span class="seg-end remote" title="服务端">${icons.server}</span>
+      </div>
       <div class="bubble-collapse" id="bubble-body" ${state.bubbleOpen && !collapsed ? '' : 'inert'}>
         <div class="bubble-collapse-inner">
           <div class="bubble-panel" id="bubble-rows">${rows}</div>
@@ -1595,17 +1648,22 @@
     state.sessions.forEach((session, index) => {
       const segment = segments[index];
       if (segment === undefined) return;
-      segment.className = `seg ${session.state}`;
-      segment.title = `${session.name} · ${Math.round(session.progress * 100)}%`;
-      const fill = segment.querySelector('i');
-      if (fill !== null) fill.style.width = `${Math.round(session.progress * 100)}%`;
+      const push = Math.round((session.pushProgress ?? session.progress) * 100);
+      const pull = Math.round((session.pullProgress ?? 0) * 100);
+      const pushDone = session.state === 'done' || push >= 100;
+      segment.className = `seg ${session.state}${pushDone ? ' push-done' : ''}`;
+      segment.title = `${session.name} · 上传 ${push}% · 拉取 ${pull}%`;
+      const pushFill = segment.querySelector('.push');
+      const pullFill = segment.querySelector('.pull');
+      if (pushFill !== null) pushFill.style.width = `${push}%`;
+      if (pullFill !== null) pullFill.style.width = `${pull}%`;
       const row = bubble.querySelector(`.bubble-row[data-index="${index}"]`);
       if (row !== null) {
         const dot = row.querySelector('.state');
         dot.className = `state ${session.state === 'done' ? 'ok' : session.state === 'bad' ? 'bad' : session.state === 'run' ? 'run' : ''}`;
         row.querySelector('.tag').textContent = session.state === 'done' ? '已完成'
           : session.state === 'bad' ? '失败'
-            : session.state === 'run' ? `${Math.round(session.progress * 100)}%`
+            : session.state === 'run' ? `↑ ${push}% · ↓ ${pull}%`
               : '等待';
       }
     });
@@ -1638,6 +1696,7 @@
   function startMockSync() {
     clearInterval(syncTimer);
     clearTimeout(hideTimer);
+    clearTimeout(blurTimer);
     state.status = 'syncing';
     if (!state.bubblePinned) state.bubbleOpen = false;
     state.autoHide = !state.bubblePinned;
@@ -1666,6 +1725,9 @@
     state.sessions.forEach((session) => {
       const progress = Math.max(0, Math.min(1, (elapsed - session.delay) / session.duration));
       session.progress = progress;
+      // 先完成本地→远端，再演示远端→本地；两层进度独立推进，便于观察双条。
+      session.pushProgress = Math.min(1, progress / .68);
+      session.pullProgress = progress <= .68 ? 0 : (progress - .68) / .32;
       session.state = progress >= 1 ? 'done' : progress > 0 ? 'run' : 'wait';
       if (progress < 1) allDone = false;
     });
@@ -1676,13 +1738,17 @@
   function finishSync() {
     clearInterval(syncTimer);
     state.status = 'ready';
-    state.sessions.forEach((session) => { session.progress = 1; session.state = 'done'; });
+    state.sessions.forEach((session) => {
+      session.progress = 1;
+      session.pushProgress = 1;
+      session.pullProgress = 1;
+      session.state = 'done';
+    });
     updateBubbleProgress();
     syncToolbar();
     updateIconDot();
     if (state.view === 'settings' || state.view === 'onboarding') render();
-    if (!state.autoHide || state.bubblePinned) return;
-    hideTimer = setTimeout(() => { collapseBubble(false); }, 1000);
+    scheduleFinishCollapse();
   }
 
   function syncToolbar() {
