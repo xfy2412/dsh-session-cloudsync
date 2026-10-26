@@ -8,6 +8,7 @@
  * @module dsh-session-cloudsync/engine
  */
 import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import {
   DEFAULT_BATCH_BYTES,
   DEFAULT_BATCH_EVENTS,
@@ -168,6 +169,20 @@ export type SyncStage =
   | 'done'
   | 'failed'
 
+/** 单个同步操作的墙钟样本；用于性能采集，不参与同步语义。 */
+export interface SyncPerfSample {
+  readonly direction: 'push' | 'pull'
+  readonly sessionId: string
+  readonly stage: 'read' | 'seal' | 'upload' | 'append' | 'download' | 'apply' | 'flush' | 'verify'
+  readonly ms: number
+  readonly bytes?: number
+  /** 该操作本身同步占用主线程；histogram 来不及在 metric 前采样。 */
+  readonly blocking?: boolean
+}
+
+/** 操作开始标记；采集器据此把事件循环延迟归因到具体操作。 */
+export type SyncPerfStart = Pick<SyncPerfSample, 'direction' | 'sessionId' | 'stage'>
+
 /** 一轮同步中某个会话的实时阶段。 */
 export interface SyncProgress {
   /** 会话 id。 */
@@ -213,6 +228,10 @@ export interface SyncDeps<Session> {
   readonly isTailOpen?: (events: readonly SyncEvent[]) => boolean
   /** 实时阶段回调；不抛异常，调用方负责容错。 */
   readonly onProgress?: (progress: SyncProgress) => void
+  /** 操作级墙钟样本；只在调试性能采集时提供。 */
+  readonly onPerf?: (sample: SyncPerfSample) => void
+  /** 操作开始标记；用于事件循环延迟归因。 */
+  readonly onPerfStart?: (sample: SyncPerfStart) => void
   /** 由根会话的本机 cwd 解析 workspaceKey；V2 推送必需。 */
   readonly workspaceKeyOf: (sessionId: string, cwd: string) => string | undefined
 }
@@ -269,6 +288,10 @@ export interface PullDeps<Session> {
   readonly afterApply?: (sessionId: string) => Promise<void>
   /** 实时阶段回调；不抛异常，调用方负责容错。 */
   readonly onProgress?: (progress: SyncProgress) => void
+  /** 操作级墙钟样本；只在调试性能采集时提供。 */
+  readonly onPerf?: (sample: SyncPerfSample) => void
+  /** 操作开始标记；用于事件循环延迟归因。 */
+  readonly onPerfStart?: (sample: SyncPerfStart) => void
 }
 
 /** 接收端 cwd 修正的依赖。 */
@@ -768,6 +791,28 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => { setImmediate(resolve) })
 }
 
+function notifyPerf(
+  deps: { readonly onPerf?: (sample: SyncPerfSample) => void },
+  sample: SyncPerfSample,
+): void {
+  try {
+    deps.onPerf?.(sample)
+  } catch {
+    // 性能采集不能影响同步。
+  }
+}
+
+function notifyPerfStart(
+  deps: { readonly onPerfStart?: (sample: SyncPerfStart) => void },
+  sample: SyncPerfStart,
+): void {
+  try {
+    deps.onPerfStart?.(sample)
+  } catch {
+    // 性能采集不能影响同步。
+  }
+}
+
 /**
  * 按远端批次边界收集本地连续事件；缺 seq 视为分叉。
  * @param bySeq - 本地事件索引。
@@ -815,18 +860,26 @@ async function verifySharedPrefix(
   if (localLast < 0) return
 
   const bySeq = new Map<number, SyncEvent>()
+  let scanned = 0
   for (const event of localEvents) {
     if (bySeq.has(event.seq)) throw new Error(`本地事件 seq ${event.seq} 重复（diverged）`)
     bySeq.set(event.seq, event)
+    scanned += 1
+    if (scanned % 4096 === 0) await yieldToEventLoop()
   }
 
   // 第 0 个引用是会话头，不是事件批次。
+  let lastYieldAt = performance.now()
   for (const frame of remote.frames.slice(1)) {
     if (frame.seqFrom > localLast) break
     if (frame.seqTo <= localLast) {
       const local = localEventRange(bySeq, frame.seqFrom, frame.seqTo)
       if (eventBatchHash(local) !== frame.chainHash) {
         throw new Error(`共享前缀批次 ${frame.index} 不一致（diverged）`)
+      }
+      if (performance.now() - lastYieldAt >= 8) {
+        await yieldToEventLoop()
+        lastYieldAt = performance.now()
       }
       continue
     }
@@ -842,6 +895,8 @@ async function verifySharedPrefix(
         throw new Error(`共享前缀事件 seq ${remoteEvent.seq} 不一致（diverged）`)
       }
     }
+    await yieldToEventLoop()
+    lastYieldAt = performance.now()
   }
 }
 
@@ -869,6 +924,8 @@ async function syncSession<Session>(
   const live = deps.sessions.get(sessionId)
   if (live !== undefined) await deps.sessions.flush(live)
 
+  const readStarted = performance.now()
+  notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'read' })
   const handle = await deps.persistence.open(sessionId, 'read')
   let events: readonly SyncEvent[]
   try {
@@ -877,6 +934,12 @@ async function syncSession<Session>(
     if (!Array.isArray(events)) throw new Error('持久化返回的事件不是数组')
   } finally {
     await handle.close()
+    notifyPerf(deps, {
+      direction: 'push',
+      sessionId,
+      stage: 'read',
+      ms: performance.now() - readStarted,
+    })
   }
 
   const meta = headerMetaOf(handle.header, handle.inheritedEventCount)
@@ -905,7 +968,15 @@ async function syncSession<Session>(
     if (remote.workspaceKey !== workspaceKey) throw new Error('远端会话的 workspaceKey 与本地不一致（diverged）')
     const head = remote.frames[0]
     if (head === undefined || head.chainHash !== headerChainHash(meta)) throw new Error('远端会话头与本地不一致（diverged）')
+    const verifyStarted = performance.now()
+    notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'verify' })
     await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, events)
+    notifyPerf(deps, {
+      direction: 'push',
+      sessionId,
+      stage: 'verify',
+      ms: performance.now() - verifyStarted,
+    })
     if (localLast < remote.lastSeq) {
       return {
         sessionId,
@@ -965,7 +1036,16 @@ async function syncSession<Session>(
   }
 
   const upload = async (entry: SealedFrame, eventsInBatch: number): Promise<void> => {
+    const uploadStarted = performance.now()
+    notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'upload' })
     await uploadBlob(fetchImpl, base, deps.config.token, entry)
+    notifyPerf(deps, {
+      direction: 'push',
+      sessionId,
+      stage: 'upload',
+      ms: performance.now() - uploadStarted,
+      bytes: entry.ref.bytes,
+    })
     frames.push(entry.ref)
     totalBytes += entry.ref.bytes
     doneBytes += entry.ref.bytes
@@ -988,12 +1068,32 @@ async function syncSession<Session>(
   await yieldToEventLoop()
 
   if (remote === undefined) {
-    await upload(sealHeader(meta, sessionId, sessionKey), 0)
+    const sealStarted = performance.now()
+    notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'seal' })
+    const headerEntry = sealHeader(meta, sessionId, sessionKey)
+    notifyPerf(deps, {
+      direction: 'push',
+      sessionId,
+      stage: 'seal',
+      ms: performance.now() - sealStarted,
+      blocking: true,
+    })
+    await upload(headerEntry, 0)
   }
 
   let lastYieldAt = Date.now()
   for (const batch of iterateEventBatches(events, startAfterSeq, batchOptions(deps.config))) {
+    const sealStarted = performance.now()
+    notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'seal' })
     const entry = sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey)
+    notifyPerf(deps, {
+      direction: 'push',
+      sessionId,
+      stage: 'seal',
+      ms: performance.now() - sealStarted,
+      bytes: entry.ref.bytes,
+      blocking: true,
+    })
     await upload(entry, batch.events.length)
     index += 1
     pushedBatches += 1
@@ -1020,6 +1120,8 @@ async function syncSession<Session>(
     doneBytes: totalBytes,
   })
 
+  const appendStarted = performance.now()
+  notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'append' })
   await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
     baseIndex,
     baseChainHash,
@@ -1029,6 +1131,12 @@ async function syncSession<Session>(
     ...workspaceKey === undefined ? {} : { workspaceKey },
     tailOpen,
     safeThroughSeq,
+  })
+  notifyPerf(deps, {
+    direction: 'push',
+    sessionId,
+    stage: 'append',
+    ms: performance.now() - appendStarted,
   })
 
   return {
@@ -1468,10 +1576,26 @@ async function pullSession<Session>(
       readonly last: number
       readonly cwdNonPortable: boolean
     }> => {
+      const readStarted = performance.now()
+      notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'read' })
       const read = await handle.read()
+      notifyPerf(deps, {
+        direction: 'pull',
+        sessionId,
+        stage: 'read',
+        ms: performance.now() - readStarted,
+      })
       const localMeta = headerMetaOf(handle.header, handle.inheritedEventCount)
       if (headerChainHash(localMeta) !== headerRef.chainHash) throw new Error('本地会话头与远端不一致（diverged）')
+      const verifyStarted = performance.now()
+      notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'verify' })
       await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events)
+      notifyPerf(deps, {
+        direction: 'pull',
+        sessionId,
+        stage: 'verify',
+        ms: performance.now() - verifyStarted,
+      })
       return {
         events: read.events,
         last: read.events.length === 0 ? -1 : read.events[read.events.length - 1]!.seq,
@@ -1544,17 +1668,41 @@ async function pullSession<Session>(
       }
       notifyDownload(0)
       notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0 })
+      const downloadStarted = performance.now()
+      notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'download' })
       const events = await downloadSafeEvents(
         fetchImpl, base, deps.config.token, sessionId, remote.frames, observed.last, safe, sessionKey,
         (doneEvents) => { notifyDownload(doneEvents) },
       )
+      notifyPerf(deps, {
+        direction: 'pull',
+        sessionId,
+        stage: 'download',
+        ms: performance.now() - downloadStarted,
+      })
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
       notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'verifying', progress: 0.9 })
+      const applyStarted = performance.now()
+      notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'apply' })
       await deps.beforeApply?.(sessionId, safe)
       notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'applying', progress: 0.95 })
       await appendPulledEvents(handle, events)
+      notifyPerf(deps, {
+        direction: 'pull',
+        sessionId,
+        stage: 'apply',
+        ms: performance.now() - applyStarted,
+      })
       notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'flushing', progress: 0.99 })
+      const flushStarted = performance.now()
+      notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'flush' })
       await handle.flush()
+      notifyPerf(deps, {
+        direction: 'pull',
+        sessionId,
+        stage: 'flush',
+        ms: performance.now() - flushStarted,
+      })
       const nextCwdNonPortable = cwdNonPortableOf([...observed.events, ...events], workspacePath)
       if (!nextCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
       return {
@@ -1588,10 +1736,18 @@ async function pullSession<Session>(
   }
   notifyDownload(0)
   notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0 })
+  const downloadStarted = performance.now()
+  notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'download' })
   const events = await downloadSafeEvents(
     fetchImpl, base, deps.config.token, sessionId, remote.frames, -1, safe, sessionKey,
     (doneEvents) => { notifyDownload(doneEvents) },
   )
+  notifyPerf(deps, {
+    direction: 'pull',
+    sessionId,
+    stage: 'download',
+    ms: performance.now() - downloadStarted,
+  })
   const header: CreateHeaderLike = {
     version: meta.formatVersion,
     id: sessionId,
@@ -1607,11 +1763,27 @@ async function pullSession<Session>(
   notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'verifying', progress: 0.9 })
   await deps.beforeApply?.(sessionId, safe)
   notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'applying', progress: 0.95 })
+  const applyStarted = performance.now()
+  notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'apply' })
   const handle = await deps.persistence.create(header, options)
   try {
     if (events.length > 0) await appendPulledEvents(handle, events)
+    notifyPerf(deps, {
+      direction: 'pull',
+      sessionId,
+      stage: 'apply',
+      ms: performance.now() - applyStarted,
+    })
     notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'flushing', progress: 0.99 })
+    const flushStarted = performance.now()
+    notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'flush' })
     await handle.flush()
+    notifyPerf(deps, {
+      direction: 'pull',
+      sessionId,
+      stage: 'flush',
+      ms: performance.now() - flushStarted,
+    })
   } finally {
     await handle.close()
   }

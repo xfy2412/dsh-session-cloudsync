@@ -10,12 +10,15 @@ import { classifySyncError } from './engine.ts'
 import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
+import type { PerfSnapshot } from './perf.ts'
 import type { SetupInfo, SyncConfigSnapshot, SyncStatus, SyncWorkspaceList } from './status.ts'
 
 /** 宿主注入的控制面。 */
 export interface SyncControl {
   /** 当前状态快照。 */
   status(): SyncStatus
+  /** 进程内最近若干次性能采集快照。 */
+  perf(): PerfSnapshot
   /** 所有设置/向导/气泡共用的单一快照。 */
   config(): Promise<SyncConfigSnapshot>
   /** 打开一个状态 SSE 流。 */
@@ -74,6 +77,12 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async () => json({ ok: true, value: control.status() }),
+    },
+    {
+      path: '/api/session-cloudsync/perf',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => json({ ok: true, value: control.perf() }),
     },
     {
       path: '/api/session-cloudsync/config',

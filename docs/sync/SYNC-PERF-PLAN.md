@@ -411,10 +411,16 @@ Discussions      enabled
 
 只需补齐：
 
-- 事件循环延迟采样（`monitorEventLoopDelay` 或等价）；
 - Gateway WebSocket 断连次数/时间戳（用于验证 4s 心跳规则，而不是猜“被掐死”）；
 - 每轮请求数、字节数、批次数的持久化诊断；
 - 把临时脚本固化成可重复基准（只使用事件形状/计数，不把真实会话内容带进仓库）。
+
+实施记录（2026-10-26）：
+
+- 插件增加进程内 `PerfCollector`，记录 run 墙钟、各 stage 累计、event loop max/p99、按 read/seal/upload/append/verify 归因的 event loop 峰值、RSS、会话数、字节数，以及 push/pull/list/seed 外层阶段；
+- 新增 `GET /api/session-cloudsync/perf`，返回最近 30 次 run，不写会话日志、不上传外部服务；
+- 前端增加 SSE 连接/重连/帧间隔、按当前 run 的帧间隔、longtask 采样，设置页提供“性能诊断”面板和 JSON 复制；复制同时支持 Clipboard API 与 textarea 兜底；
+- Gateway WebSocket 自身断连仍无法从插件服务访问，实际以 event-loop 延迟 + 客户端 SSE 重连/长任务作为代理指标。
 
 验收：
 

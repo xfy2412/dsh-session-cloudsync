@@ -28,8 +28,10 @@ import {
   type PullState,
   type SyncLogger,
 } from './engine.ts'
+import { performance } from 'node:perf_hooks'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
 import { createEventStreamResponse } from './event-stream.ts'
+import { PerfCollector } from './perf.ts'
 import { DevLogSink, withDevLog } from './dev-log.ts'
 import { DeviceLeaseKeeper } from './device-lease.ts'
 import { SyncScheduler } from './scheduler.ts'
@@ -679,15 +681,26 @@ export function apply(ctx: Context, config: Config): void {
     }
     logger.warn(`dsh-session-cloudsync: 自动加入上传名单失败：${lastError instanceof Error ? lastError.message : String(lastError)}`)
   }
+  const perf = new PerfCollector()
   const controller = new SyncController({
-    push: () => syncOnce({
-      ...deps,
-      workspaceKeyOf: workspaceKeyForCwd,
-      onProgress: (progress) => controller.updateProgress(progress),
-    }),
+    push: () => {
+      const started = performance.now()
+      return syncOnce({
+        ...deps,
+        workspaceKeyOf: workspaceKeyForCwd,
+        onProgress: (progress) => {
+          controller.updateProgress(progress)
+          perf.progress(progress)
+        },
+        onPerf: (sample) => perf.metric(sample),
+        onPerfStart: (sample) => perf.beginOperation(sample),
+      }).finally(() => perf.phase('push', performance.now() - started))
+    },
     pull: (state) => {
       if (pullWithDeps === undefined) throw new Error('拉取引擎尚未初始化')
+      const started = performance.now()
       return withPullLock(() => pullWithDeps!(state))
+        .finally(() => perf.phase('pull', performance.now() - started))
     },
     persist: persistState,
     configuration,
@@ -825,7 +838,12 @@ export function apply(ctx: Context, config: Config): void {
     return pullOnce({
       ...pullDeps,
       workspacePathOf: resolveWorkspacePath,
-      onProgress: (progress) => controller.updateProgress(progress),
+      onProgress: (progress) => {
+        controller.updateProgress(progress)
+        perf.progress(progress)
+      },
+      onPerf: (sample) => perf.metric(sample),
+      onPerfStart: (sample) => perf.beginOperation(sample),
     }, state)
   }
 
@@ -846,6 +864,7 @@ export function apply(ctx: Context, config: Config): void {
       backfilling = false
       return
     }
+    perf.begin('backfill')
     try {
       const report = await withPullLock(() => {
         const snapshot = controller.snapshot()
@@ -856,10 +875,12 @@ export function apply(ctx: Context, config: Config): void {
         })
       })
       controller.endBackfill(report)
+      perf.finish(controller.snapshot())
       await flushAutoUpload()
       await refreshBindings()
     } catch (error: unknown) {
       controller.endBackfill()
+      perf.finish(controller.snapshot())
       logger.warn(`dsh-session-cloudsync: 映射回填失败：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       backfilling = false
@@ -923,7 +944,9 @@ export function apply(ctx: Context, config: Config): void {
    * 这样气泡在第一个会话开始传输前就知道整轮有哪些行。
    */
   const seedControllerList = async (): Promise<void> => {
+    const listStarted = performance.now()
     const snapshots = await ctx.sessionPersistence.list()
+    perf.phase('list', performance.now() - listStarted)
     const tree = buildSessionTree(snapshots)
     const localById = new Map(snapshots.map((snapshot) => [String(snapshot.header.id), snapshot]))
     const selected = new Set(syncSessionIds)
@@ -965,19 +988,31 @@ export function apply(ctx: Context, config: Config): void {
     await refreshSecrets()
     await deviceLease.ensure()
     await refreshBindings()
-    // 已有同步在跑时不要重写列表占位，否则会把刚完成的 pull 状态覆盖成 planned。
-    if (!controller.snapshot().running) await seedControllerList()
-    const result = await controller.run({
-      manual,
-      ...trigger === undefined ? {} : { trigger },
-    })
-    await autoBindMatchingWorkspaces()
-    await backfillMappedWorkspaces()
-    await flushAutoUpload()
-    void runVault().catch((error: unknown) => {
-      logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
-    })
-    return result
+    const activeRun = controller.snapshot().running
+    if (!activeRun) perf.begin(trigger ?? (manual ? 'manual' : 'auto'))
+    try {
+      // 已有同步在跑时不要重写列表占位，否则会把刚完成的 pull 状态覆盖成 planned。
+      if (!controller.snapshot().running) {
+        const seedStarted = performance.now()
+        await seedControllerList()
+        perf.phase('seed', performance.now() - seedStarted)
+      }
+      const result = await controller.run({
+        manual,
+        ...trigger === undefined ? {} : { trigger },
+      })
+      if (!activeRun) perf.finish(result.status)
+      await autoBindMatchingWorkspaces()
+      await backfillMappedWorkspaces()
+      await flushAutoUpload()
+      void runVault().catch((error: unknown) => {
+        logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
+      })
+      return result
+    } catch (error: unknown) {
+      if (!activeRun) perf.finish(controller.snapshot())
+      throw error
+    }
   }
 
   scheduler = new SyncScheduler({
@@ -1152,6 +1187,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const control: SyncControl = {
     status: () => controller.snapshot(),
+    perf: () => perf.snapshot(),
     config: async (): Promise<SyncConfigSnapshot> => {
       const setupInfo = await setup()
       const workspaceList = await workspaces()

@@ -67,6 +67,7 @@ window.__ModuleLoader__.load({
       '.dssync-note{color:var(--dssync-faint);font-size:12px}',
       '.dssync-note.warn{color:var(--dsw-alias-state-warn-primary,#f0b64a)}',
       '.dssync-note.bad{color:var(--dsw-alias-state-error-primary,#ffb1b1)}',
+      '.dssync-perf-pre{margin:0;padding:9px 10px;max-height:180px;overflow:auto;border:1px solid var(--dssync-line);border-radius:8px;background:rgba(127,127,127,.07);color:var(--dssync-muted);font:10.5px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}',
       '.dssync-wslist{display:flex;flex-direction:column;gap:7px}',
       '.dssync-bindlist,.dssync-maplist{display:flex;flex-direction:column;gap:7px;margin-top:8px}',
       '.dssync-bindrow,.dssync-maprow{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--dssync-line);border-radius:9px;flex-wrap:wrap}',
@@ -308,6 +309,42 @@ window.__ModuleLoader__.load({
       }, h('path', { d: 'M12 3 5 6v5c0 4.6 2.9 8.2 7 10 4.1-1.8 7-5.4 7-10V6l-7-3Z' }), h('path', { d: 'm9 12 2 2 4-4' }))
     }
 
+    /** 单调时钟；测试环境的假 DOM 没有 performance 时退回 Date.now。 */
+    function monotonicNow() {
+      return typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now()
+    }
+
+    /** 复制文本；Clipboard API 被权限/焦点拒绝时退回隐藏 textarea。 */
+    function writeClipboard(text) {
+      return new Promise(function (resolve, reject) {
+        function legacy() {
+          try {
+            var area = document.createElement('textarea')
+            area.value = text
+            area.setAttribute('readonly', '')
+            area.style.position = 'fixed'
+            area.style.top = '-1000px'
+            area.style.opacity = '0'
+            document.body.appendChild(area)
+            area.select()
+            var copied = typeof document.execCommand === 'function' && document.execCommand('copy')
+            document.body.removeChild(area)
+            if (copied) resolve()
+            else reject(new Error('浏览器拒绝了复制'))
+          } catch (error) {
+            reject(error)
+          }
+        }
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(text).then(resolve, legacy)
+        } else {
+          legacy()
+        }
+      })
+    }
+
     function fetchJson(path, options) {
       var init = Object.assign({ credentials: 'same-origin' }, options || {})
       if (init.body !== undefined && init.headers === undefined) init.headers = { 'content-type': 'application/json' }
@@ -343,6 +380,28 @@ window.__ModuleLoader__.load({
       var lastVersion = -1
       var hidden = false
       var toastTimer = null
+      var streamConnectStartedAt = 0
+      var streamEverConnected = false
+      var lastStreamFrameAt = 0
+      var longTaskObserver = null
+      var clientPerf = {
+        sse: { connects: 0, reconnects: 0, connectMs: 0, frames: 0, maxGapMs: 0 },
+        run: { runId: null, frames: 0, maxGapMs: 0 },
+        longTasks: { count: 0, maxMs: 0 },
+      }
+      if (typeof PerformanceObserver === 'function') {
+        try {
+          longTaskObserver = new PerformanceObserver(function (list) {
+            list.getEntries().forEach(function (entry) {
+              clientPerf.longTasks.count += 1
+              clientPerf.longTasks.maxMs = Math.max(clientPerf.longTasks.maxMs, Math.round(entry.duration))
+            })
+          })
+          longTaskObserver.observe({ entryTypes: ['longtask'] })
+        } catch {
+          longTaskObserver = null
+        }
+      }
       var inflight = null
       var disposed = false
 
@@ -399,6 +458,21 @@ window.__ModuleLoader__.load({
 
       function handleStreamStatus(status) {
         if (disposed) return
+        var now = monotonicNow()
+        var runChanged = status && status.run && status.run.id !== clientPerf.run.runId
+        if (runChanged) {
+          clientPerf.run = { runId: status.run.id, frames: 0, maxGapMs: 0 }
+          // 跨 run 的空闲/隐藏时间不算进本轮首帧间隔。
+          lastStreamFrameAt = 0
+        }
+        clientPerf.sse.frames += 1
+        clientPerf.run.frames += 1
+        if (!runChanged && lastStreamFrameAt > 0 && !hidden) {
+          var gap = Math.round(now - lastStreamFrameAt)
+          clientPerf.sse.maxGapMs = Math.max(clientPerf.sse.maxGapMs, gap)
+          clientPerf.run.maxGapMs = Math.max(clientPerf.run.maxGapMs, gap)
+        }
+        lastStreamFrameAt = now
         streamLastAt = Date.now()
         acceptStatus(status)
       }
@@ -418,6 +492,7 @@ window.__ModuleLoader__.load({
         var controller = new AbortController()
         streamAbort = controller
         streamLastAt = Date.now()
+        streamConnectStartedAt = monotonicNow()
         function fail(error) {
           if (streamAbort !== controller) return
           clearWatchdog()
@@ -439,6 +514,10 @@ window.__ModuleLoader__.load({
           }
           streamFailedUntil = 0
           streamLastAt = Date.now()
+          clientPerf.sse.connects += 1
+          if (streamEverConnected) clientPerf.sse.reconnects += 1
+          streamEverConnected = true
+          clientPerf.sse.connectMs = Math.round(monotonicNow() - streamConnectStartedAt)
           clearWatchdog()
           watchdogTimer = setInterval(function () {
             if (streamAbort !== controller) return
@@ -514,6 +593,7 @@ window.__ModuleLoader__.load({
           return
         }
         hidden = false
+        lastStreamFrameAt = 0
         refreshStatus()
       }
 
@@ -643,6 +723,10 @@ window.__ModuleLoader__.load({
         toastTimer = setTimeout(function () { patch({ toast: null }) }, 4200)
       }
 
+      function perfSnapshot() {
+        return JSON.parse(JSON.stringify(clientPerf))
+      }
+
       function dispose() {
         disposed = true
         if (pollTimer !== null) clearTimeout(pollTimer)
@@ -653,6 +737,10 @@ window.__ModuleLoader__.load({
           controller.abort()
         }
         if (toastTimer !== null) clearTimeout(toastTimer)
+        if (longTaskObserver !== null) {
+          try { longTaskObserver.disconnect() } catch (ignored) { /* 已断开 */ }
+          longTaskObserver = null
+        }
         listeners.clear()
       }
 
@@ -673,6 +761,7 @@ window.__ModuleLoader__.load({
         dismissReplace: dismissReplace,
         bindWorkspace: bindWorkspace,
         toast: toast,
+        perfSnapshot: perfSnapshot,
         dispose: dispose,
       }
     }
@@ -1162,6 +1251,87 @@ window.__ModuleLoader__.load({
             : '绑定是每设备本地的，一次确认后不能改绑；未映射会话不会 apply，也不影响其他工作区同步。'))
     }
 
+    function PerfPanel(props) {
+      var model = props.model
+      var appState = useModel(model)
+      var statePair = useState({ loading: true, error: null, host: null })
+      var view = statePair[0]
+      var setView = statePair[1]
+      var copiedPair = useState(false)
+      var copied = copiedPair[0]
+      var setCopied = copiedPair[1]
+
+      function load() {
+        fetchJson('/perf').then(function (host) {
+          setView({ loading: false, error: null, host: host })
+        }).catch(function (error) {
+          setView({ loading: false, error: errorText(error), host: null })
+        })
+      }
+
+      useEffect(function () { load() }, [
+        appState.status && appState.status.run && appState.status.run.id,
+        appState.status && appState.status.run && appState.status.run.state,
+      ])
+
+      var client = model.perfSnapshot()
+      var latest = view.host && view.host.latest
+      var ops = latest && latest.operations ? latest.operations : {}
+      var blocks = latest && latest.eventLoopByStage ? latest.eventLoopByStage : {}
+      var phases = latest && latest.phases ? latest.phases : {}
+      var summary = latest
+        ? [
+            '墙钟 ' + latest.wallMs + 'ms',
+            '读取 ' + Math.round(ops.read || 0) + 'ms',
+            '封帧 ' + Math.round(ops.seal || 0) + 'ms',
+            '上传 ' + Math.round(ops.upload || 0) + 'ms',
+            '校验 ' + Math.round(ops.verify || 0) + 'ms',
+            '提交 ' + Math.round(ops.append || 0) + 'ms',
+            '事件循环 max ' + latest.eventLoop.maxMs + 'ms / p99 ' + latest.eventLoop.p99Ms + 'ms',
+            'RSS ' + latest.rss.peakMb + 'MB',
+          ].join(' · ')
+        : '还没有完成的 run'
+      var blockSummary = latest
+        ? '阻塞归因：读取 ' + (blocks.read || 0) + 'ms · 封帧 ' + (blocks.seal || 0)
+          + 'ms · 校验 ' + (blocks.verify || 0) + 'ms · 上传 ' + (blocks.upload || 0) + 'ms · 提交 ' + (blocks.append || 0) + 'ms'
+        : ''
+      var phaseSummary = latest
+        ? '外层阶段：推送 ' + Math.round(phases.push || 0) + 'ms · 拉取 ' + Math.round(phases.pull || 0)
+          + 'ms · 列表 ' + Math.round(phases.list || 0) + 'ms · seed ' + Math.round(phases.seed || 0) + 'ms'
+        : ''
+
+      function copy() {
+        var text = JSON.stringify({ host: view.host, client: client }, null, 2)
+        writeClipboard(text).then(function () {
+          setCopied(true)
+          setTimeout(function () { setCopied(false) }, 1800)
+        }).catch(function () {
+          model.toast('复制失败；请手动选择 JSON', true)
+        })
+      }
+
+      return h('section', { className: 'dssync-sec dssync-perf' },
+        h('div', { className: 'dssync-sechead' },
+          h('h3', null, '性能诊断'),
+          h('span', null, '仅保存在本机，不上传')),
+        h('div', { className: 'dssync-row' },
+          h('div', { className: 'dssync-rowtext' },
+            h('b', null, latest ? '最近一次同步' : '等待同步'),
+            h('span', null, summary),
+            latest ? h('span', null, blockSummary) : null,
+            latest && phaseSummary !== '' ? h('span', null, phaseSummary) : null),
+          h('button', { className: 'dssync-mini', type: 'button', onClick: load }, '刷新')),
+        h('div', { className: 'dssync-row' },
+          h('div', { className: 'dssync-rowtext' },
+            h('b', null, '浏览器侧'),
+            h('span', null, 'SSE 连接 ' + client.sse.connects + ' 次 · 重连 ' + client.sse.reconnects
+              + ' 次 · 帧 ' + client.sse.frames + ' · 本轮最大间隔 ' + client.run.maxGapMs + 'ms'
+              + ' · 长任务 ' + client.longTasks.count + ' 次 / max ' + client.longTasks.maxMs + 'ms')),
+          h('button', { className: 'dssync-mini', type: 'button', onClick: copy }, copied ? '已复制' : '复制 JSON')),
+        view.error ? h('div', { className: 'dssync-note bad' }, view.error) : null,
+        h('pre', { className: 'dssync-perf-pre' }, JSON.stringify({ host: view.host, client: client }, null, 2)))
+    }
+
     function SyncSettingsPage(props) {
       var model = props.model
       var state = useModel(model)
@@ -1500,6 +1670,8 @@ window.__ModuleLoader__.load({
               h('b', null, '同步子代理会话'),
               h('span', null, '随根会话一起同步全部后代；关闭后只同步根会话')),
             h(Switch, { checked: fields.includeSubagents, disabled: disabled, label: '同步子代理会话', onChange: function (value) { set('includeSubagents', value) } }))),
+
+        h(PerfPanel, { model: model }),
 
         h('div', { className: 'dssync-btnrow' },
           h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || busy === 'sync', onClick: syncNow }, busy === 'sync' ? '同步中…' : '立即同步'),
@@ -1847,14 +2019,12 @@ window.__ModuleLoader__.load({
       }
 
       function copyCommand() {
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-          navigator.clipboard.writeText(plan.command).then(function () {
-            setCopied(true)
-            setTimeout(function () { setCopied(false) }, 1800)
-          }, function () { model.toast('复制失败，请手动选择命令', true) })
-          return
-        }
-        model.toast('当前环境不能直接复制，请手动选择命令', true)
+        writeClipboard(plan.command).then(function () {
+          setCopied(true)
+          setTimeout(function () { setCopied(false) }, 1800)
+        }).catch(function () {
+          model.toast('复制失败，请手动选择命令', true)
+        })
       }
 
       return h('div', { className: 'dssync dssync-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': '接受远端丢弃本地' },

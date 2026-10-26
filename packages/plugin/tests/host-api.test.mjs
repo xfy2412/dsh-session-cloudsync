@@ -24,6 +24,13 @@ function control(overrides = {}) {
       revision: 3,
       sessions: [],
     },
+    perf: () => overrides.perf ?? {
+      schemaVersion: 1,
+      active: false,
+      latest: null,
+      recent: [],
+      environment: { plugin: 'dsh-session-cloudsync', node: process.version, platform: process.platform, arch: process.arch, cpuCount: 1 },
+    },
     config: overrides.config ?? (async () => ({ schemaVersion: 2, generatedAt: 1, selection: { uploadRootIds: [], pull: { mode: 'bound-workspaces' } } })),
     events: overrides.events ?? (async () => new Response('event: status\ndata: {}\n\n', {
       headers: { 'content-type': 'text/event-stream' },
@@ -100,10 +107,11 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/config/events/setup/workspaces/test/sync/cwd/blocked/replace/bind 十一条精确路由', () => {
+test('宿主 API：注册 status/perf/config/events/setup/workspaces/test/sync/cwd/blocked/replace/bind 十二条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-cloudsync/status', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/perf', ['GET'], 'buffered'],
     ['/api/session-cloudsync/config', ['GET'], 'buffered'],
     ['/api/session-cloudsync/events', ['GET'], 'buffered'],
     ['/api/session-cloudsync/setup', ['GET'], 'buffered'],
@@ -136,6 +144,24 @@ test('宿主 API：status 返回快照且禁止缓存', async () => {
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('cache-control'), 'no-store')
   assert.equal((await bodyOf(response)).value.revision, 3)
+})
+
+test('宿主 API：perf 返回本机聚合快照', async () => {
+  const routes = createHostApi(control({
+    perf: {
+      schemaVersion: 1,
+      active: false,
+      latest: { wallMs: 12 },
+      recent: [],
+      environment: { plugin: 'dsh-session-cloudsync' },
+    },
+  }))
+  const response = await route(routes, '/api/session-cloudsync/perf').fetch(
+    new Request('http://host/api/session-cloudsync/perf'),
+  )
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  assert.equal((await bodyOf(response)).value.latest.wallMs, 12)
 })
 
 test('宿主 API：events 返回 text/event-stream', async () => {
