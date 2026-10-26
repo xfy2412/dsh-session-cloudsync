@@ -2,37 +2,39 @@
 /**
  * 起一个隔离的 DSH 开发实例（web profile）。
  *
- * 三件事都关在 <仓库>/.tmp/dev-dsh/ 里，缺一不可：
- *   1. DSH_HOME 指向临时 home；
+ * 所有实例目录都关在 <仓库>/.tmp/ 里：
+ *   1. DSH_HOME 指向临时 home（默认 .tmp/dev-dsh/home，可用 --home 覆盖）；
  *   2. 默认工作区（Documents/deepseek-harness/default-workspace）指到临时目录，
  *      通过 --patch 覆盖 workspace-controller 的 documentsDirectory；
  *   3. 清掉从当前会话继承的 DSH_* 环境变量，避免新实例以为自己在嵌套运行。
  *
  * 用法：
  *   node scripts/dev-dsh.mjs [--port 3090] [--credentials <path>]
+ *     [--home <tmp-home>] [--documents <tmp-documents>] [--patch <path>]
  *
  * `--credentials` 用于把已有 home 的 `.credentials.yaml` 拷进新 home（保留登录态）。
+ * `--home` / `--documents` 供 dev/console 同时起 A/B 两套实例；overlay 写在
+ * home 的父目录，避免两边互相覆盖。
  */
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const tmpRoot = join(repoRoot, '.tmp')
 const base = join(tmpRoot, 'dev-dsh')
-const home = join(base, 'home')
-const documents = join(base, 'documents')
-const overlay = join(base, 'overlay.yml')
 
 /**
  * 解析 `--key value` 参数。
  * @param {readonly string[]} argv - 参数列表。
- * @returns {{ port: number, credentials?: string, patches: string[] }}
+ * @returns {{ port: number, credentials?: string, patches: string[], home?: string, documents?: string }}
  */
 function parseArgs(argv) {
   let port = 3090
   let credentials
+  let home
+  let documents
   const patches = []
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
@@ -42,13 +44,25 @@ function parseArgs(argv) {
     } else if (argument === '--credentials') {
       credentials = argv[index + 1]
       index += 1
+    } else if (argument === '--home') {
+      home = argv[index + 1]
+      index += 1
+    } else if (argument === '--documents') {
+      documents = argv[index + 1]
+      index += 1
     } else if (argument === '--patch') {
       patches.push(argv[index + 1])
       index += 1
     }
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`端口非法：${String(port)}`)
-  return { port, patches, ...credentials === undefined ? {} : { credentials } }
+  return {
+    port,
+    patches,
+    ...credentials === undefined ? {} : { credentials },
+    ...home === undefined ? {} : { home },
+    ...documents === undefined ? {} : { documents },
+  }
 }
 
 /**
@@ -63,9 +77,14 @@ function assertInsideTmp(path) {
   }
 }
 
-const { port, credentials, patches } = parseArgs(process.argv.slice(2))
+const { port, credentials, patches, home: homeOption, documents: documentsOption } = parseArgs(process.argv.slice(2))
+const home = resolve(homeOption ?? join(base, 'home'))
+const documents = resolve(documentsOption ?? join(base, 'documents'))
+const overlay = join(dirname(home), 'overlay.yml')
 
 assertInsideTmp(base)
+assertInsideTmp(home)
+assertInsideTmp(documents)
 mkdirSync(home, { recursive: true })
 mkdirSync(documents, { recursive: true })
 

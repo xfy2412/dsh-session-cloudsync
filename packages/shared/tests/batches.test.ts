@@ -10,7 +10,9 @@ import {
   openHeader,
   planEventBatches,
   sealEventBatch,
+  sealEventBatchFromText,
   sealHeader,
+  serializeEventBatch,
   type SyncEvent,
 } from '../src/batches.ts'
 import { sessionKeyOf } from '../src/sealed-frame.ts'
@@ -84,6 +86,99 @@ test('批次：字节上限与单条超限', () => {
   const single = planEventBatches(huge, -1, { maxBytes: 100 })
   assert.equal(single.length, 1)
   assert.equal(single[0]!.events.length, 1)
+})
+
+test('批次：线性规划的字节数与规范 JSON 完全一致', () => {
+  const samples = [
+    events(0),
+    events(1),
+    events(2),
+    events(7),
+    events(120),
+    [
+      { type: 'test/event', seq: 0, time: 1, data: { text: 'x'.repeat(500) } },
+      { type: 'test/event', seq: 1, time: 2, data: { text: '中'.repeat(50) } },
+    ] as unknown as SyncEvent[],
+  ]
+  for (const sample of samples) {
+    for (const options of [{}, { maxEvents: 1 }, { maxBytes: 120 }, { maxEvents: 3, maxBytes: 300 }]) {
+      const plan = planEventBatches(sample, -1, options)
+      for (const batch of plan) {
+        assert.equal(batch.bytes, Buffer.byteLength(serializeEventBatch(batch.events), 'utf8'))
+        assert.equal(eventBatchHash(batch.events), eventBatchHash([...batch.events]))
+      }
+    }
+  }
+})
+
+test('批次：线性规划与旧实现的边界/bytes 完全一致', () => {
+  // 旧实现的逐事件候选重序列化；只用于小样本对照。
+  function oldPlan(sample: readonly SyncEvent[], options: { maxEvents?: number; maxBytes?: number } = {}) {
+    const maxEvents = options.maxEvents ?? DEFAULT_BATCH_EVENTS
+    const maxBytes = options.maxBytes ?? DEFAULT_BATCH_BYTES
+    const result: { seqFrom: number; seqTo: number; bytes: number; events: SyncEvent[] }[] = []
+    let current: SyncEvent[] = []
+    for (const event of sample) {
+      const candidate = [...current, event]
+      const candidateBytes = Buffer.byteLength(serializeEventBatch(candidate), 'utf8')
+      if (current.length > 0 && (candidate.length > maxEvents || candidateBytes > maxBytes)) {
+        result.push({
+          seqFrom: current[0]!.seq,
+          seqTo: current[current.length - 1]!.seq,
+          bytes: Buffer.byteLength(serializeEventBatch(current), 'utf8'),
+          events: current,
+        })
+        current = [event]
+      } else {
+        current = candidate
+      }
+    }
+    if (current.length > 0) {
+      result.push({
+        seqFrom: current[0]!.seq,
+        seqTo: current[current.length - 1]!.seq,
+        bytes: Buffer.byteLength(serializeEventBatch(current), 'utf8'),
+        events: current,
+      })
+    }
+    return result
+  }
+
+  let seed = 0x12345678
+  const next = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+    return seed
+  }
+  const sample = Array.from({ length: 180 }, (_, seq) => ({
+    type: 'test/random',
+    seq,
+    time: 1000 + seq,
+    data: {
+      n: next() % 1000,
+      text: `事件-${next() % 100}-${'x'.repeat(next() % 80)}`,
+      nested: { a: next() % 2 === 0, b: '中文-' + (next() % 10) },
+    },
+  })) as unknown as SyncEvent[]
+
+  for (const options of [{}, { maxEvents: 1 }, { maxEvents: 7 }, { maxBytes: 120 }, { maxEvents: 13, maxBytes: 700 }]) {
+    const actual = planEventBatches(sample, -1, options)
+    const expected = oldPlan(sample, options)
+    assert.deepEqual(
+      actual.map((batch) => [batch.seqFrom, batch.seqTo, batch.bytes, batch.events.length]),
+      expected.map((batch) => [batch.seqFrom, batch.seqTo, batch.bytes, batch.events.length]),
+    )
+  }
+})
+
+test('批次：预序列化封批与普通封批完全一致', () => {
+  const plan = planEventBatches(events(51), -1)
+  for (const batch of plan) {
+    const text = serializeEventBatch(batch.events)
+    const fromText = sealEventBatchFromText(text, SESSION, 1, batch.seqFrom, batch.seqTo, KEY)
+    const fromEvents = sealEventBatch(batch.events, SESSION, 1, KEY)
+    assert.deepEqual(fromText.bytes, fromEvents.bytes)
+    assert.deepEqual(fromText.ref, fromEvents.ref)
+  }
 })
 
 test('批次：键序不影响哈希，seq 不连续要报错', () => {

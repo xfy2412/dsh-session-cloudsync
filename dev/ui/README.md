@@ -2,7 +2,7 @@
 
 独立的静态页，用来在改宿主插件之前把设置页、首启向导和同步气泡的样子调好。打开 `index.html` 即可，不需要构建，也不连接任何服务端。
 
-动效约定见 [docs/UI-GUIDELINES.md](../../docs/UI-GUIDELINES.md)：状态变化才动、只动 transform/opacity/grid-template-rows、支持 `prefers-reduced-motion`。
+动效约定见 [docs/UI-GUIDELINES.md](../../docs/ui/UI-GUIDELINES.md)：状态变化才动、只动 transform/opacity/grid-template-rows、支持 `prefers-reduced-motion`。
 
 - 顶部工具条切换三个视图：**设置页**、**首启**、**同步气泡**；
 - 右侧「预览状态」切换 **已配置 / 未配置 / 同步中 / 错误**；

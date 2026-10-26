@@ -18,6 +18,7 @@ import {
   type SyncLogger,
   type SyncProgress,
   type SyncReport,
+  type SyncStage,
   type UnmappedSessionState,
 } from './engine.ts'
 import type {
@@ -75,6 +76,15 @@ export interface SyncControllerOptions {
 /** 没有真正执行时的原因。 */
 export type SyncSkipCode = 'already-running' | 'backoff' | 'unconfigured'
 
+/** 同步开始前的完整列表条目。 */
+export interface PlannedSyncSession {
+  readonly sessionId: string
+  /** 这一行来自上传选择或远端未拉取。 */
+  readonly direction: 'push' | 'pull'
+  /** 本机记录与远端清单给出的初始方向。 */
+  readonly state?: 'planned' | 'local-ahead' | 'remote-ahead' | 'up-to-date'
+}
+
 /** 手动触发一次同步的结果。 */
 export interface SyncRunResult {
   /** 本轮是否无错误完成。 */
@@ -106,6 +116,9 @@ export class SyncController {
   private nextRetryAt = 0
   private sessions: readonly SyncDirectionStatus[] = []
   private live: readonly SyncDirectionStatus[] = []
+  private stableViews: readonly SyncSessionStatus[] = []
+  private readonly ordinals = new Map<string, number>()
+  private nextOrdinal = 0
   private statusVersion = 0
   private runView: SyncRunView = {
     id: 0,
@@ -171,6 +184,10 @@ export class SyncController {
     const ensure = (sessionId: string): MutableSessionStatus => {
       let value = map.get(sessionId)
       if (value === undefined) {
+        if (!this.ordinals.has(sessionId)) {
+          this.ordinals.set(sessionId, this.nextOrdinal)
+          this.nextOrdinal += 1
+        }
         value = {
           sessionId,
           live: false,
@@ -184,6 +201,12 @@ export class SyncController {
       return value
     }
 
+    for (const view of this.stableViews) {
+      const entry = ensure(view.sessionId)
+      if (view.push !== undefined) entry.push = view.push
+      if (view.pull !== undefined) entry.pull = view.pull
+    }
+
     const source = this.running && this.live.length > 0 ? this.live : this.sessions
     for (const view of source) {
       const entry = ensure(view.sessionId)
@@ -191,6 +214,7 @@ export class SyncController {
       else entry.pull = view
       if (view.tailOpen === true) entry.tailOpen = true
       if (view.direction === 'push' && view.status === 'remote-ahead') entry.remoteAhead = true
+      if (view.direction === 'pull' && view.status === 'remote-ahead') entry.remoteAhead = true
       if (view.direction === 'pull' && view.status === 'local-active') entry.live = true
       // push 先于 pull：pull 已经追平远端时，清除同轮 push 的 remote-ahead。
       if (view.direction === 'pull' && (view.status === 'pulled' || view.status === 'up-to-date')) entry.remoteAhead = false
@@ -217,9 +241,28 @@ export class SyncController {
       value.updatedAt = now
     }
 
-    return [...map.values()]
+    const result = [...map.values()]
+      .filter((entry) => {
+        const attention = entry.blocked !== undefined
+          || entry.decision !== undefined
+          || entry.cwdPending
+          || entry.unmapped !== undefined
+        const unselectedLocal = entry.push?.status === 'skipped'
+          && entry.push.error === '根会话未选中'
+          && entry.pull === undefined
+          && !attention
+        return !unselectedLocal
+      })
       .map((entry) => finishSessionView(entry, now))
-      .sort((left, right) => left.sessionId.localeCompare(right.sessionId))
+      .sort((left, right) => {
+        const leftOrdinal = this.ordinals.get(left.sessionId) ?? Number.MAX_SAFE_INTEGER
+        const rightOrdinal = this.ordinals.get(right.sessionId) ?? Number.MAX_SAFE_INTEGER
+        return leftOrdinal - rightOrdinal || left.sessionId.localeCompare(right.sessionId)
+      })
+    // live 只是本轮临时进度，不能写进稳定表；否则没有最终报告的实时行会
+    // 永远停留在 running。计划占位行仍保留。
+    if (!this.running) this.stableViews = result
+    return result
   }
 
   /** 订阅状态变化；返回取消订阅。 */
@@ -246,7 +289,10 @@ export class SyncController {
 
   /** 用户已处理某个 cwd 决策后清除警告。 */
   clearCwdPending(sessionId: string): void {
-    if (this.cwdPending.delete(sessionId)) this.bump()
+    if (this.cwdPending.delete(sessionId)) {
+      this.stableViews = this.stableViews.filter((view) => view.sessionId !== sessionId)
+      this.bump()
+    }
     this.persistNow()
   }
 
@@ -328,20 +374,27 @@ export class SyncController {
       : progress.phase === 'done'
         ? progress.direction === 'push' ? 'pushed' : 'pulled'
         : progress.direction === 'push' ? 'pushing' : 'pulling'
+    const previous = this.live.find((item) =>
+      item.sessionId === progress.sessionId && item.direction === progress.direction)
+    const mappedStage = progress.stage ?? stageOfStatus(progress.direction, status)
+    // 逐批进度回调（下载/上传）不带 stage；沿用上一条 live 视图，避免
+    // 下载期间阶段被清空、界面只剩“同步中”。
+    const viewStage = mappedStage ?? (progress.phase === 'progress' ? previous?.stage : undefined)
+    const totalEvents = progress.totalEvents ?? previous?.totalEvents ?? 0
+    const doneEvents = progress.doneEvents ?? previous?.doneEvents ?? 0
+    const batches = progress.batches ?? progress.doneBatches ?? previous?.batches
+    const bytes = progress.doneBytes ?? progress.bytes ?? previous?.bytes
     const view: SyncDirectionStatus = {
       sessionId: progress.sessionId,
       direction: progress.direction,
       phase: directionPhaseOf(progress.direction, status),
+      ...viewStage === undefined ? {} : { stage: viewStage },
       status,
-      totalEvents: progress.totalEvents ?? 0,
-      doneEvents: progress.doneEvents ?? 0,
+      totalEvents,
+      doneEvents,
       ...progress.error === undefined ? {} : { error: progress.error },
-      ...progress.batches === undefined && progress.doneBatches === undefined
-        ? {}
-        : { batches: progress.batches ?? progress.doneBatches },
-      ...progress.doneBytes === undefined && progress.bytes === undefined
-        ? {}
-        : { bytes: progress.doneBytes ?? progress.bytes },
+      ...batches === undefined ? {} : { batches },
+      ...bytes === undefined ? {} : { bytes },
     }
     const next = this.live.filter((item) => !(item.sessionId === view.sessionId && item.direction === view.direction))
     next.push(view)
@@ -381,16 +434,171 @@ export class SyncController {
   }
 
   /**
-   * 记录一次映射回填的拉取结果；只更新未映射表，不推进主游标。
+   * 在同步开始前写入完整列表：已选中的本地根会话 + 远端未拉取会话。
+   * 只增加占位行，不在这里推断传输状态。
+   * @param entries - 计划列表。
+   */
+  seedList(entries: readonly PlannedSyncSession[]): void {
+    if (entries.length === 0) return
+    const now = this.now()
+    const map = new Map(this.stableViews.map((view) => [view.sessionId, view]))
+    for (const entry of entries) {
+      if (!this.ordinals.has(entry.sessionId)) {
+        this.ordinals.set(entry.sessionId, this.nextOrdinal)
+        this.nextOrdinal += 1
+      }
+      const previous = map.get(entry.sessionId)
+      const state = entry.state ?? 'planned'
+      const laneStage = stageOfStatus(entry.direction, state)
+      const lane: SyncDirectionStatus = {
+        sessionId: entry.sessionId,
+        direction: entry.direction,
+        phase: directionPhaseOf(entry.direction, state),
+        ...laneStage === undefined ? {} : { stage: laneStage },
+        status: state,
+        totalEvents: 0,
+        doneEvents: 0,
+      }
+      if (previous === undefined) {
+        const next: SyncSessionStatus = {
+          sessionId: entry.sessionId,
+          phase: state === 'up-to-date' ? 'done' : state === 'planned' ? 'planned' : 'deferred',
+          pending: { upload: 0, download: 0 },
+          totalEvents: 0,
+          doneEvents: 0,
+          live: false,
+          tailOpen: false,
+          remoteAhead: state === 'remote-ahead',
+          cwdPending: false,
+          updatedAt: now,
+          ...entry.direction === 'push' ? { push: lane } : { pull: lane },
+        }
+        map.set(entry.sessionId, next)
+        continue
+      }
+      const current = entry.direction === 'push' ? previous.push : previous.pull
+      const shouldSet = current === undefined
+        || (current.status === 'planned' && lane.status !== 'planned')
+      if (entry.direction === 'push') {
+        // 本地已存在时，旧的 pull planned/unmapped 占位应被本机记录修复，不能一直显示待拉取/等待 cwd。
+        const stalePull = previous.pull?.status === 'planned' || previous.pull?.status === 'unmapped'
+        const repairedStatus = state === 'up-to-date' || state === 'local-ahead'
+          ? 'up-to-date'
+          : state === 'remote-ahead' ? 'remote-ahead' : 'planned'
+        const repairedPull = stalePull && repairedStatus !== undefined && previous.pull !== undefined
+          ? {
+              sessionId: previous.pull.sessionId,
+              direction: 'pull' as const,
+              status: repairedStatus,
+              phase: directionPhaseOf('pull', repairedStatus),
+              totalEvents: previous.pull.totalEvents,
+              doneEvents: previous.pull.doneEvents,
+              ...repairedStatus === 'up-to-date' ? { stage: 'done' as const } : {},
+              ...previous.pull.error === undefined ? {} : { error: previous.pull.error },
+            }
+          : previous.pull
+        map.set(entry.sessionId, {
+          ...previous,
+          ...shouldSet ? { push: lane } : {},
+          ...repairedPull === undefined ? {} : { pull: repairedPull },
+        })
+      } else if (shouldSet) {
+        map.set(entry.sessionId, { ...previous, pull: lane })
+      }
+    }
+    this.stableViews = [...map.values()]
+    this.bump()
+  }
+
+  /**
+   * 用本机记录修正 seed 留下的陈旧状态：
+   * - 本地已有记录时，旧的 unmapped/pull planned 不能继续支配气泡；
+   * - 未选中的纯本地会话从列表移除（除非仍有分叉/cwd 等需要处理）。
+   * @param localIds - 本机所有会话 id。
+   * @param selected - 当前上传选择。
+   */
+  reconcileLocal(localIds: ReadonlySet<string>, selected: ReadonlySet<string>): void {
+    let changed = false
+    for (const sessionId of localIds) {
+      if (this.unmapped.delete(sessionId)) changed = true
+    }
+    const staleUnmapped = (view: SyncDirectionStatus): boolean =>
+      localIds.has(view.sessionId) && view.direction === 'pull' && view.status === 'unmapped'
+    this.sessions = this.sessions.filter((view) => !staleUnmapped(view))
+    this.live = this.live.filter((view) => !staleUnmapped(view))
+
+    const remove = new Set<string>()
+    for (const view of this.stableViews) {
+      if (!localIds.has(view.sessionId)) continue
+      if (selected.has(view.sessionId)) continue
+      if (view.blocked !== undefined || view.decision !== undefined || view.cwdPending) continue
+      remove.add(view.sessionId)
+    }
+    if (remove.size > 0) {
+      this.stableViews = this.stableViews.filter((view) => !remove.has(view.sessionId))
+      this.sessions = this.sessions.filter((view) => !remove.has(view.sessionId))
+      this.live = this.live.filter((view) => !remove.has(view.sessionId))
+      changed = true
+    }
+    if (changed) this.bump()
+  }
+
+  /**
+   * 开始一次由宿主映射回填触发的 pull。它不推进主 cursor，也不走 scheduler 的
+   * 退避，但必须让气泡看到正在拉取的状态。
+   * @returns 已有同步在跑时返回 false。
+   */
+  beginBackfill(): boolean {
+    if (this.running) return false
+    this.running = true
+    this.live = []
+    this.runView = {
+      id: this.runView.id + 1,
+      trigger: 'auto',
+      state: 'running',
+      startedAt: this.now(),
+      finishedAt: null,
+    }
+    this.bump()
+    return true
+  }
+
+  /**
+   * 结束映射回填，并把 pull 结果合并进稳定视图。
+   * @param report - 拉取结果；缺失时只结束运行状态。
+   */
+  endBackfill(report?: PullReport): void {
+    if (!this.running) return
+    if (report !== undefined && report.configured) {
+      const views: SyncDirectionStatus[] = []
+      this.collectPull(report, views, [])
+      this.sessions = views
+    }
+    this.running = false
+    this.live = []
+    this.runView = {
+      ...this.runView,
+      state: 'finished',
+      finishedAt: this.now(),
+    }
+    this.bump()
+  }
+
+  /**
+   * 记录一次映射回填的拉取结果：更新未映射表，并把 pull 方向合并进会话视图。
+   * 回填不推进主游标，但必须让设置页/气泡看到真实 pull 状态，不能只留
+   * 上一轮的 push skipped。
    * @param report - 回填拉取结果。
    */
   recordBackfill(report: PullReport): void {
     if (!report.configured) return
-    let changed = false
-    for (const session of report.sessions) changed = this.trackUnmapped(session) || changed
-    if (changed) {
+    const views: SyncDirectionStatus[] = []
+    this.collectPull(report, views, [])
+    if (views.length > 0) {
+      const merged = new Map(this.sessions.map((view) => [`${view.direction}:${view.sessionId}`, view]))
+      for (const view of views) merged.set(`${view.direction}:${view.sessionId}`, view)
+      this.sessions = [...merged.values()]
       this.bump()
-      this.persistNow()
     }
   }
 
@@ -625,10 +833,12 @@ function sameLifecycle(
 function pushView(session: SessionSyncReport): SyncDirectionStatus {
   const totalEvents = session.totalEvents ?? 0
   const doneEvents = session.doneEvents ?? (session.status === 'pushed' ? totalEvents : 0)
+  const stage = stageOfStatus('push', session.status)
   return {
     sessionId: session.sessionId,
     direction: 'push',
     phase: directionPhaseOf('push', session.status),
+    ...stage === undefined ? {} : { stage },
     status: session.status,
     totalEvents,
     doneEvents,
@@ -650,10 +860,12 @@ function pushView(session: SessionSyncReport): SyncDirectionStatus {
 function pullView(session: PullSessionReport): SyncDirectionStatus {
   const doneEvents = session.applied ?? 0
   const totalEvents = session.totalEvents ?? doneEvents
+  const stage = stageOfStatus('pull', session.status)
   return {
     sessionId: session.sessionId,
     direction: 'pull',
     phase: directionPhaseOf('pull', session.status),
+    ...stage === undefined ? {} : { stage },
     status: session.status,
     totalEvents,
     doneEvents,
@@ -673,9 +885,20 @@ function directionPhaseOf(direction: 'push' | 'pull', status: string): SyncDirec
   if (status === 'pushed' || status === 'pulled') return 'done'
   if (status === 'skipped' || status === 'excluded' || status === 'tombstone') return 'skipped'
   if (status === 'remote-ahead' || status === 'partial'
-    || status === 'local-active' || status === 'local-ahead' || status === 'unmapped') return 'deferred'
+    || status === 'local-active' || status === 'write-owned' || status === 'local-ahead' || status === 'unmapped') return 'deferred'
   if (direction === 'push' ? status === 'pushing' : status === 'pulling') return 'transferring'
   return 'planned'
+}
+
+/** 方向最终状态对应的细分阶段。 */
+function stageOfStatus(_direction: 'push' | 'pull', status: string): SyncStage | undefined {
+  if (status === 'error') return 'failed'
+  if (status === 'pushed' || status === 'pulled' || status === 'up-to-date') return 'done'
+  if (status === 'local-active') return 'waiting-live'
+  if (status === 'write-owned') return 'waiting-write'
+  if (status === 'unmapped') return 'waiting-cwd'
+  if (status === 'partial') return 'applying'
+  return undefined
 }
 
 /** 聚合视图的可变中间态。 */
@@ -712,6 +935,7 @@ function finishSessionView(entry: MutableSessionStatus, now: number): SyncSessio
   const deferred = entry.live || entry.remoteAhead || entry.cwdPending
     || entry.unmapped !== undefined
     || entry.pull?.phase === 'deferred'
+    || entry.push?.status === 'local-ahead'
     || (entry.push?.phase === 'deferred' && entry.remoteAhead)
   const terminal = directions.length > 0 && directions.every((direction) =>
     direction.phase === 'done' || direction.phase === 'up-to-date' || direction.phase === 'skipped'
@@ -727,9 +951,13 @@ function finishSessionView(entry: MutableSessionStatus, now: number): SyncSessio
           : terminal
             ? (directions.every((direction) => direction.phase === 'skipped') ? 'skipped' : 'done')
             : 'planned'
+  const stage = directions.map((direction) => direction.stage)
+    .find((value) => value !== undefined && value !== 'done' && value !== 'failed')
+    ?? directions.map((direction) => direction.stage).find((value) => value !== undefined)
   return {
     sessionId: entry.sessionId,
     phase,
+    ...stage === undefined ? {} : { stage },
     ...entry.push === undefined ? {} : { push: entry.push },
     ...entry.pull === undefined ? {} : { pull: entry.pull },
     pending: { upload, download },

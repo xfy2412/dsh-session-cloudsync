@@ -16,15 +16,16 @@ import {
   headerMetaOf,
   openEventBatch,
   openHeader,
-  planEventBatches,
+  iterateEventBatches,
   sealEventBatch,
+  sealEventBatchFromText,
   sealHeader,
   type SessionHeaderLike,
   type SessionHeaderMeta,
   type SyncEvent,
 } from '../../shared/src/batches.ts'
 import { stableStringify } from '../../shared/src/chain.ts'
-import { deriveMasterKey, sha256 } from '../../shared/src/crypto.ts'
+import { deriveMasterKeyAsync, sha256 } from '../../shared/src/crypto.ts'
 import {
   sessionKeyOf,
   type SealedFrame,
@@ -102,8 +103,8 @@ export interface EngineConfig {
   readonly salt?: string
   /** 是否同步子代理会话，默认 true。 */
   readonly includeSubagents?: boolean
-  /** 本地排除的根会话 id；子代理跟随根。 */
-  readonly excludedSessionIds?: readonly string[]
+  /** 显式选中的根会话 id；缺省（undefined）只用于底层调用，等同于全选。 */
+  readonly syncSessionIds?: readonly string[]
   /** 单批事件上限，默认 50。 */
   readonly batchEvents?: number
   /** 单批规范 JSON 字节上限，默认 256 KiB。 */
@@ -147,6 +148,26 @@ export interface SyncLogger {
   error(message: string): void
 }
 
+/** 一次同步操作内部的细分阶段。 */
+export type SyncStage =
+  | 'reading'
+  | 'planning'
+  | 'sealing'
+  | 'uploading'
+  | 'committing'
+  | 'downloading'
+  | 'verifying'
+  | 'applying'
+  | 'flushing'
+  | 'projecting'
+  | 'attaching'
+  | 'waiting-write'
+  | 'waiting-live'
+  | 'waiting-cwd'
+  | 'waiting-retry'
+  | 'done'
+  | 'failed'
+
 /** 一轮同步中某个会话的实时阶段。 */
 export interface SyncProgress {
   /** 会话 id。 */
@@ -155,6 +176,8 @@ export interface SyncProgress {
   readonly direction: 'push' | 'pull'
   /** 当前阶段。 */
   readonly phase: 'start' | 'progress' | 'transferred' | 'committed' | 'done' | 'error'
+  /** 当前细分阶段；缺省表示只上报粗粒度进度。 */
+  readonly stage?: SyncStage
   /** 0–1 的粗粒度进度。 */
   readonly progress: number
   /** 本方向计划处理的事件数。 */
@@ -233,6 +256,8 @@ export interface PullDeps<Session> {
   readonly workspacePathOf: (workspaceKey: string) => string | undefined
   /** 拉取完成后挂回工作区；失败由调用方处理。 */
   readonly attach?: (sessionId: string, workspacePath?: string) => Promise<void>
+  /** 首次拉取成功的根会话；宿主可据此加入上传选择。 */
+  readonly onFirstPull?: (sessionId: string) => void
   readonly logger?: SyncLogger
   readonly fetch?: typeof fetch
   /** 在第一次本地写入之前落盘 pending 记录。 */
@@ -326,7 +351,7 @@ export interface PullState {
 /** 单个会话的拉取结果。 */
 export interface PullSessionReport {
   readonly sessionId: string
-  readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'local-ahead' | 'tombstone' | 'unmapped' | 'excluded' | 'error'
+  readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'write-owned' | 'local-ahead' | 'tombstone' | 'unmapped' | 'excluded' | 'error'
   readonly applied?: number
   /** 本次计划处理/已经安全可见的事件数。 */
   readonly totalEvents?: number
@@ -483,6 +508,28 @@ function resolveSalt(config: EngineConfig, base: string): Buffer {
   const salt = Buffer.from(config.salt, 'base64')
   if (salt.length !== 16) throw new Error('salt 必须是 base64 的 16 字节值')
   return salt
+}
+
+const MASTER_KEY_CACHE_LIMIT = 8
+const masterKeyCache = new Map<string, Buffer>()
+
+/**
+ * 异步派生并缓存主密钥；缓存键不保存口令明文。
+ * @param passphrase - 同步口令。
+ * @param salt - keybox 盐。
+ * @returns 32 字节主密钥。
+ */
+async function deriveMasterKeyCached(passphrase: string, salt: Buffer): Promise<Buffer> {
+  const cacheKey = sha256(Buffer.concat([Buffer.from('v1\0', 'utf8'), Buffer.from(passphrase, 'utf8'), Buffer.from([0]), salt]))
+  const cached = masterKeyCache.get(cacheKey)
+  if (cached !== undefined) return cached
+  const derived = await deriveMasterKeyAsync(passphrase, salt)
+  if (masterKeyCache.size >= MASTER_KEY_CACHE_LIMIT) {
+    const oldest = masterKeyCache.keys().next().value
+    if (oldest !== undefined) masterKeyCache.delete(oldest)
+  }
+  masterKeyCache.set(cacheKey, derived)
+  return derived
 }
 
 /**
@@ -866,38 +913,44 @@ async function syncSession<Session>(
   }
 
   const uploadSteps: Array<{ readonly entry: SealedFrame; readonly events: number }> = []
+  notifyProgress(deps, { sessionId, direction: 'push', phase: 'progress', stage: 'planning', progress: 0 })
   let baseIndex: number
   let baseChainHash: string | null
   let pushedBatches = 0
   let totalEvents = 0
 
+  notifyProgress(deps, { sessionId, direction: 'push', phase: 'progress', stage: 'sealing', progress: 0 })
   if (remote === undefined) {
     const headerEntry = sealHeader(meta, sessionId, sessionKey)
     uploadSteps.push({ entry: headerEntry, events: 0 })
-    const batches = planEventBatches(events, -1, batchOptions(deps.config))
-    batches.forEach((batch, offset) => {
+    let index = 1
+    for (const batch of iterateEventBatches(events, -1, batchOptions(deps.config))) {
       totalEvents += batch.events.length
       uploadSteps.push({
-        entry: sealEventBatch(batch.events, sessionId, offset + 1, sessionKey),
+        entry: sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey),
         events: batch.events.length,
       })
-    })
-    pushedBatches = batches.length
+      index += 1
+    }
+    pushedBatches = index - 1
     baseIndex = -1
     baseChainHash = null
   } else {
-    const batches = planEventBatches(events, remote.lastSeq, batchOptions(deps.config))
-    if (batches.length === 0) {
-      return { sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
-    }
-    batches.forEach((batch, offset) => {
+    let index = remote.frames.length
+    let count = 0
+    for (const batch of iterateEventBatches(events, remote.lastSeq, batchOptions(deps.config))) {
       totalEvents += batch.events.length
       uploadSteps.push({
-        entry: sealEventBatch(batch.events, sessionId, remote.frames.length + offset, sessionKey),
+        entry: sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey),
         events: batch.events.length,
       })
-    })
-    pushedBatches = batches.length
+      index += 1
+      count += 1
+    }
+    if (count === 0) {
+      return { sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
+    }
+    pushedBatches = count
     baseIndex = remote.frames.length - 1
     baseChainHash = remote.frames[remote.frames.length - 1]!.chainHash
   }
@@ -911,6 +964,7 @@ async function syncSession<Session>(
       sessionId,
       direction: 'push',
       phase: 'progress',
+      stage: 'uploading',
       progress: totalEvents === 0 ? 1 : doneEvents / totalEvents,
       totalEvents,
       doneEvents,
@@ -930,6 +984,19 @@ async function syncSession<Session>(
     }
     notifyUpload()
   }
+  notifyProgress(deps, {
+    sessionId,
+    direction: 'push',
+    phase: 'progress',
+    stage: 'committing',
+    progress: 1,
+    totalEvents,
+    doneEvents: totalEvents,
+    totalBatches: pushedBatches,
+    doneBatches: pushedBatches,
+    bytes: totalBytes,
+    doneBytes: totalBytes,
+  })
   const sealedEntries = uploadSteps.map((step) => step.entry)
 
   await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {
@@ -955,6 +1022,15 @@ async function syncSession<Session>(
   }
 }
 
+/** 解析根会话选择：undefined 只保留给底层调用（全选），插件配置总是传数组。 */
+function sessionSelection(config: EngineConfig): {
+  readonly all: boolean
+  readonly selected?: ReadonlySet<string>
+} {
+  if (config.syncSessionIds === undefined) return { all: true }
+  return { all: false, selected: new Set(config.syncSessionIds) }
+}
+
 /**
  * 执行一次推送；单个会话失败不影响其他会话。
  * @param deps - 引擎依赖。
@@ -968,12 +1044,13 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [] }
   const salt = resolveSalt(config, base)
-  const master = deriveMasterKey(config.passphrase, salt)
+  const master = await deriveMasterKeyCached(config.passphrase, salt)
   const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
   const snapshots = await deps.persistence.list()
+  const selection = sessionSelection(config)
   const plan = planSessionClosure(snapshots, {
     includeSubagents: config.includeSubagents !== false,
-    excludedSessionIds: config.excludedSessionIds ?? [],
+    ...selection.selected === undefined ? {} : { selectedSessionIds: [...selection.selected] },
   })
   const sessions: SessionSyncReport[] = []
 
@@ -983,7 +1060,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
 
   for (const entry of plan.planned) {
     const sessionId = String(entry.snapshot.header.id)
-    notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', progress: 0 })
+    notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', stage: 'reading', progress: 0 })
     try {
       const sessionKey = sessionKeyOf(master, sessionId)
       const report = await syncSession(deps, fetchImpl, base, sessionKey, entry.snapshot, entry.depth === 0)
@@ -991,6 +1068,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
       notifyProgress(deps, {
         sessionId, direction: 'push',
         phase: report.status === 'error' ? 'error' : 'done',
+        stage: report.status === 'error' ? 'failed' : 'done',
         progress: report.status === 'error' ? 0 : 1,
         ...report.totalEvents === undefined ? {} : { totalEvents: report.totalEvents },
         ...report.doneEvents === undefined ? {} : { doneEvents: report.doneEvents },
@@ -1013,7 +1091,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
         ...entry.snapshot.header.createdAt === undefined ? {} : { createdAt: entry.snapshot.header.createdAt },
         ...entry.snapshot.header.version === undefined ? {} : { formatVersion: entry.snapshot.header.version },
       })
-      notifyProgress(deps, { sessionId, direction: 'push', phase: 'error', progress: 0, error: classified.message })
+      notifyProgress(deps, { sessionId, direction: 'push', phase: 'error', stage: 'failed', progress: 0, error: classified.message })
     }
   }
 
@@ -1314,6 +1392,30 @@ async function resolveRootSessionId(
  * @param preloaded - 已读取的 manifest/会话头；缺省现读。
  * @returns 会话拉取结果。
  */
+/** DSH 的写所有权冲突；由持久化 provider 统一抛出。 */
+function isSessionAlreadyOwned(error: unknown): boolean {
+  return error instanceof Error
+    && (error.name === 'SessionAlreadyOwnedError'
+      || /already owned by an active write handle/u.test(error.message))
+}
+
+/**
+ * 把拉取到的事件分批写入本地。
+ *
+ * DSH 的 session store 在 append 里同步编码/压缩；一次性塞入几万条事件会占住
+ * host 事件循环，表现为本地端口整体卡顿。这里按事件数切片，并在批次之间让出
+ * 事件循环，写入总量不变，但端口/SSE 能持续响应。
+ * @param handle - 本地写句柄。
+ * @param events - 已按 seq 排好序的事件。
+ */
+async function appendPulledEvents(handle: WriteHandleLike, events: readonly SyncEvent[]): Promise<void> {
+  const chunkSize = 500
+  for (let offset = 0; offset < events.length; offset += chunkSize) {
+    await handle.append(events.slice(offset, offset + chunkSize))
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+  }
+}
+
 async function pullSession<Session>(
   deps: PullDeps<Session>,
   fetchImpl: typeof fetch,
@@ -1339,35 +1441,75 @@ async function pullSession<Session>(
   const live = deps.sessions.get(sessionId)
   const local = await deps.persistence.stat(sessionId)
   if (local !== undefined) {
-    // 活跃会话只能读，不能写：DSH 的 session store 已持有写句柄。先读本地
-    // lastSeq，确认远端没有新事件时直接 up-to-date；确实落后时返回
-    // local-active，让游标停在它之前，等会话关闭后再 apply。
-    const handle = await deps.persistence.open(sessionId, live === undefined ? 'write' : 'read')
-    try {
+    const readLocal = async (handle: ReadHandleLike): Promise<{
+      readonly events: readonly SyncEvent[]
+      readonly last: number
+      readonly cwdNonPortable: boolean
+    }> => {
       const read = await handle.read()
       const localMeta = headerMetaOf(handle.header, handle.inheritedEventCount)
       if (headerChainHash(localMeta) !== headerRef.chainHash) throw new Error('本地会话头与远端不一致（diverged）')
-      const localLast = read.events.length === 0 ? -1 : read.events[read.events.length - 1]!.seq
       await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events)
-      const localCwdNonPortable = cwdNonPortableOf(read.events, workspacePath)
-      if (localLast > safe) {
-        return { sessionId, status: 'local-ahead', totalEvents: 0, ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
+      return {
+        events: read.events,
+        last: read.events.length === 0 ? -1 : read.events[read.events.length - 1]!.seq,
+        cwdNonPortable: cwdNonPortableOf(read.events, workspacePath),
       }
-      if (localLast === safe) {
-        if (live === undefined && !localCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
-        return { sessionId, status: 'up-to-date', totalEvents: 0, ...localCwdNonPortable ? { cwdNonPortable: true } : {} }
+    }
+
+    // 先读再判断是否需要写：read 不申请写所有权，可安全观察 live/官方
+    // 正在写入的会话；只有确实落后时才去抢 write。
+    const reader = await deps.persistence.open(sessionId, 'read')
+    let observed: Awaited<ReturnType<typeof readLocal>>
+    try {
+      observed = await readLocal(reader)
+    } finally {
+      await reader.close()
+    }
+    if (observed.last > safe) {
+      return { sessionId, status: 'local-ahead', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
+    }
+    if (observed.last === safe) {
+      if (live === undefined && !observed.cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
+      return { sessionId, status: 'up-to-date', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
+    }
+    if (live !== undefined) {
+      const pendingEvents = safe - observed.last
+      return {
+        sessionId,
+        status: 'local-active',
+        totalEvents: pendingEvents,
+        pendingEvents,
+        ...observed.cwdNonPortable ? { cwdNonPortable: true } : {},
       }
-      if (live !== undefined) {
-        const pendingEvents = safe - localLast
+    }
+
+    let handle: WriteHandleLike
+    try {
+      handle = await deps.persistence.open(sessionId, 'write')
+    } catch (error: unknown) {
+      if (isSessionAlreadyOwned(error)) {
+        const pendingEvents = safe - observed.last
         return {
           sessionId,
-          status: 'local-active',
+          status: 'write-owned',
           totalEvents: pendingEvents,
           pendingEvents,
-          ...localCwdNonPortable ? { cwdNonPortable: true } : {},
+          ...observed.cwdNonPortable ? { cwdNonPortable: true } : {},
         }
       }
-      const totalEvents = safe - localLast
+      throw error
+    }
+    try {
+      observed = await readLocal(handle)
+      if (observed.last > safe) {
+        return { sessionId, status: 'local-ahead', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
+      }
+      if (observed.last === safe) {
+        if (!observed.cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
+        return { sessionId, status: 'up-to-date', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
+      }
+      const totalEvents = safe - observed.last
       const notifyDownload = (doneEvents: number): void => {
         notifyProgress(deps, {
           sessionId,
@@ -1379,17 +1521,20 @@ async function pullSession<Session>(
         })
       }
       notifyDownload(0)
+      notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0 })
       const events = await downloadSafeEvents(
-        fetchImpl, base, deps.config.token, sessionId, remote.frames, localLast, safe, sessionKey,
+        fetchImpl, base, deps.config.token, sessionId, remote.frames, observed.last, safe, sessionKey,
         (doneEvents) => { notifyDownload(doneEvents) },
       )
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
+      notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'verifying', progress: 0.9 })
       await deps.beforeApply?.(sessionId, safe)
-      await handle.append(events)
+      notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'applying', progress: 0.95 })
+      await appendPulledEvents(handle, events)
+      notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'flushing', progress: 0.99 })
       await handle.flush()
-      const nextCwdNonPortable = cwdNonPortableOf([...read.events, ...events], workspacePath)
+      const nextCwdNonPortable = cwdNonPortableOf([...observed.events, ...events], workspacePath)
       if (!nextCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
-      await deps.afterApply?.(sessionId)
       return {
         sessionId,
         status: safe < remote.lastSeq ? 'partial' : 'pulled',
@@ -1420,6 +1565,7 @@ async function pullSession<Session>(
     })
   }
   notifyDownload(0)
+  notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0 })
   const events = await downloadSafeEvents(
     fetchImpl, base, deps.config.token, sessionId, remote.frames, -1, safe, sessionKey,
     (doneEvents) => { notifyDownload(doneEvents) },
@@ -1436,17 +1582,20 @@ async function pullSession<Session>(
     ...meta.origin === undefined ? {} : { origin: meta.origin },
   }
   const options = meta.isSeeded ? { inheritedEventCount: meta.inheritedEventCount ?? 0 } : undefined
+  notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'verifying', progress: 0.9 })
   await deps.beforeApply?.(sessionId, safe)
+  notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'applying', progress: 0.95 })
   const handle = await deps.persistence.create(header, options)
   try {
-    if (events.length > 0) await handle.append(events)
+    if (events.length > 0) await appendPulledEvents(handle, events)
+    notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'flushing', progress: 0.99 })
     await handle.flush()
   } finally {
     await handle.close()
   }
   const cwdNonPortable = cwdNonPortableOf(events, workspacePath)
   if (!cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
-  await deps.afterApply?.(sessionId)
+  if (!cwdNonPortable && meta.parentSession === undefined && meta.delegationDepth === 0) deps.onFirstPull?.(sessionId)
   return {
     sessionId,
     status: safe < remote.lastSeq ? 'partial' : 'pulled',
@@ -1481,7 +1630,7 @@ export async function correctCwd<Session>(
 
   const base = normalizeBase(deps.config.serverUrl)
   if (base === '') return { ok: false, status: 'error', message: 'serverUrl 非法' }
-  const master = deriveMasterKey(deps.config.passphrase, resolveSalt(deps.config, base))
+  const master = await deriveMasterKeyCached(deps.config.passphrase, resolveSalt(deps.config, base))
   const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
   const handle = await deps.persistence.open(sessionId, 'write')
   try {
@@ -1570,14 +1719,13 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       revision: state.revision,
     }
   }
-  const excluded = new Set(config.excludedSessionIds ?? [])
   if (deps.workspacePathOf === undefined) {
     return { configured: false, reason: 'workspace 绑定未初始化', sessions: [], revision: state.revision }
   }
   const base = normalizeBase(config.serverUrl)
   if (base === '') return { configured: false, reason: 'serverUrl 非法', sessions: [], revision: state.revision }
   const salt = resolveSalt(config, base)
-  const master = deriveMasterKey(config.passphrase, salt)
+  const master = await deriveMasterKeyCached(config.passphrase, salt)
   const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
 
   const reports: PullSessionReport[] = []
@@ -1594,7 +1742,9 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   // 子代理/根会话只到一半时刷新列表。pending 在 append+flush 后即清除，
   // 挂载失败时下一轮会因本地已是最新而重试挂载。
   const attachments: Array<{ readonly sessionId: string; readonly workspacePath?: string }> = []
+  const finalizeAfterAttach = new Set<string>()
   let applyStarted: string | undefined
+  let recoveredPendingId: string | undefined
   const applyDeps: PullDeps<Session> = {
     ...deps,
     ...(deps.attach === undefined ? {} : {
@@ -1616,19 +1766,25 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
   if (state.pending !== undefined) {
     try {
       const loaded = await loadRemoteHeader(fetchImpl, base, config.token, master, state.pending.sessionId)
-      const rootId = await resolveRootSessionId(loaded, fetchImpl, base, config.token, master, () => undefined)
-      if (excluded.has(rootId)) {
-        reports.push({ sessionId: state.pending.sessionId, status: 'excluded' })
-        return { configured: true, sessions: reports, revision: state.revision }
-      }
       const workspaceKey = await resolveWorkspaceKey(loaded, fetchImpl, base, config.token, master, () => undefined)
       const workspacePath = resolvePath(workspaceKey)
       if (workspacePath === undefined) {
         reports.push({ sessionId: state.pending.sessionId, status: 'unmapped', revision: state.revision, ...workspaceKey === undefined ? {} : { workspaceKey } })
         return { configured: true, sessions: reports, revision: state.revision }
       }
-      reports.push(await pullSession(applyDeps, fetchImpl, base, master, state.pending.sessionId, workspacePath, loaded))
-      await deps.afterApply?.(state.pending.sessionId)
+      const recovered = await pullSession(applyDeps, fetchImpl, base, master, state.pending.sessionId, workspacePath, loaded)
+      reports.push(recovered)
+      recoveredPendingId = state.pending.sessionId
+      // local-active / write-owned 代表这次没有真正 apply，pending 必须留给
+      // 下一次；其余状态在 attach 成功后结束，cwd/nonPortable 没有 attach。
+      if (recovered.status !== 'local-active' && recovered.status !== 'write-owned') {
+        if (deps.attach === undefined || recovered.cwdNonPortable === true
+          || recovered.status === 'local-ahead' || recovered.status === 'up-to-date') {
+          await deps.afterApply?.(state.pending.sessionId)
+        } else {
+          finalizeAfterAttach.add(state.pending.sessionId)
+        }
+      }
     } catch (error: unknown) {
       const classified = classifySyncError(error)
       deps.logger?.warn(`dsh-session-cloudsync: 恢复 ${state.pending.sessionId} 失败：${classified.message}`)
@@ -1641,6 +1797,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
     const cursor = await readCursor(fetchImpl, base, config.token, revision)
     const prepared: Array<{ readonly sessionId: string; readonly loaded: LoadedRemote; readonly revision: number }> = []
     for (const change of cursor.sessions) {
+      if (change.sessionId === recoveredPendingId) continue
       if (change.deletedAt !== null) {
         reports.push({ sessionId: change.sessionId, status: 'tombstone' })
         continue
@@ -1671,22 +1828,9 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         reports.push({ sessionId: item.sessionId, status: 'tombstone' })
         continue
       }
-      notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', progress: 0 })
+      notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'start', stage: 'reading', progress: 0 })
       applyStarted = undefined
       try {
-        const rootId = await resolveRootSessionId(
-          item.loaded,
-          fetchImpl,
-          base,
-          config.token,
-          master,
-          (sessionId) => preparedById.get(sessionId),
-        )
-        if (excluded.has(rootId)) {
-          reports.push({ sessionId: item.sessionId, status: 'excluded' })
-          notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'done', progress: 1 })
-          continue
-        }
         const workspaceKey = await resolveWorkspaceKey(
           item.loaded,
           fetchImpl,
@@ -1708,21 +1852,28 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
             },
           })
           notifyProgress(deps, {
-            sessionId: item.sessionId, direction: 'pull', phase: 'done', progress: 1,
+            sessionId: item.sessionId, direction: 'pull', phase: 'done',
+            stage: 'waiting-cwd', progress: 1,
             error: '未映射工作区：unmapped',
           })
           continue
         }
         const report = await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, workspacePath, item.loaded)
         reports.push(report)
-        if (report.status === 'local-active' || report.status === 'local-ahead') {
+        if (report.status === 'local-active' || report.status === 'write-owned' || report.status === 'local-ahead') {
           deferredRevision = deferredRevision === undefined
             ? item.revision
             : Math.min(deferredRevision, item.revision)
+        } else if (deps.attach === undefined || report.cwdNonPortable === true || report.status === 'up-to-date') {
+          await deps.afterApply?.(item.sessionId)
+        } else {
+          // 真正清 pending 要等本轮 attach 成功，不能 append/flush 后就清。
+          finalizeAfterAttach.add(item.sessionId)
         }
         notifyProgress(deps, {
           sessionId: item.sessionId, direction: 'pull',
           phase: report.status === 'error' ? 'error' : 'done',
+          stage: report.status === 'error' ? 'failed' : 'done',
           progress: report.status === 'error' ? 0 : 1,
           ...report.totalEvents === undefined ? {} : { totalEvents: report.totalEvents },
           ...report.applied === undefined ? {} : { doneEvents: report.applied },
@@ -1741,7 +1892,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
             formatVersion: item.loaded.meta.formatVersion,
           },
         })
-        notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'error', progress: 0, error: classified.message })
+        notifyProgress(deps, { sessionId: item.sessionId, direction: 'pull', phase: 'error', stage: 'failed', progress: 0, error: classified.message })
         // 已经调用 beforeApply 的失败会留下 pending；此时必须停下，不能
         // 让下一个会话覆盖唯一一条恢复记录。只读阶段的分叉/格式错误没有
         // pending，可以跳过该会话，继续处理其他安全会话。
@@ -1773,6 +1924,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
     for (const [sessionId, workspacePath] of unique) {
       try {
         await deps.attach(sessionId, workspacePath)
+        if (finalizeAfterAttach.delete(sessionId)) await deps.afterApply?.(sessionId)
       } catch (error: unknown) {
         const classified = classifySyncError(error)
         deps.logger?.warn(`dsh-session-cloudsync: 挂载 ${sessionId} 失败：${classified.message}`)

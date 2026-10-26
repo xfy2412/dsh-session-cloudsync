@@ -95,6 +95,34 @@ test('SSE：until=idle 在非运行状态后关闭，运行中保持打开', asy
   assert.equal(done.done, true)
 })
 
+test('SSE：不带 until=idle 时空闲连接保持打开', async () => {
+  let current = makeStatus(1)
+  const listeners = new Set()
+  const response = createEventStreamResponse(
+    new Request('http://host/api/session-cloudsync/events'),
+    {
+      status: () => current,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      heartbeatMs: 10_000,
+      coalesceMs: 5,
+      idleGraceMs: 5,
+      maxLifetimeMs: 30_000,
+    },
+  )
+  const reader = response.body.getReader()
+  const first = await readUntil(reader, '\n\n')
+  assert.match(first.text, /"statusVersion":1/)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  current = makeStatus(2)
+  for (const listener of [...listeners]) listener()
+  const second = await readUntil(reader, '\n\n')
+  assert.match(second.text, /"statusVersion":2/)
+  await reader.cancel()
+})
+
 test('SSE：客户端 abort 会取消订阅', async () => {
   const abort = new AbortController()
   const listeners = new Set()

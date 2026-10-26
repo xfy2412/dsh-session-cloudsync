@@ -1,8 +1,8 @@
 # 术语表
 
 > 状态：约定文档（2026-10-21）。
-> 本文只解释词义，不是协议规范；冲突时以 [RECONCILE.md](RECONCILE.md)、
-> [CWD.md](CWD.md)、[VAULT.md](VAULT.md)、[PROTOCOL.md](PROTOCOL.md) 为准。
+> 本文只解释词义，不是协议规范；冲突时以 [RECONCILE.md](../sync/RECONCILE.md)、
+> [CWD.md](../architecture/CWD.md)、[VAULT.md](../sync/VAULT.md)、[PROTOCOL.md](../architecture/PROTOCOL.md) 为准。
 
 ## 1. 先说最重要的几个
 
@@ -114,7 +114,7 @@ sessionId + createdAt + formatVersion
 | **binding / 绑定** | 本机的 `workspaceKey → localPath` 映射；首次确认后不可改绑 |
 | **alias binding / 别名绑定** | `workspaceKey != pathKey` 的绑定；以后从该本机路径推送时复用远端 key |
 | **nonPortable** | 当前/最后 cwd 在工作区外；本地警告，保留原值，不映射到根 |
-| **excludedSessionIds / 会话排除** | 本机不参与同步的根会话 id；子代理跟随根，默认空 = 全选 |
+| **syncSessionIds / 会话白名单** | 本机显式选中参与同步的根会话 id；空数组 = 不选任何会话，子代理跟随根；新会话不会自动进入白名单 |
 | **pull target / 拉取落点** | 远端会话最终写入哪个本地工作区；由工作区绑定解析 |
 
 ## 5. 对账流程

@@ -4,7 +4,7 @@
 > 管理台（cookie 会话 + 只读页面）已实现。M4 只保留 `batches` / `batchCount`，旧 `frames` / `frameCount` 已删除。
 >
 > 2026-10-22：租约已扩展为 `session:<id>` / `vault-writer:<writer>`，owner 增加
-> `clientInstanceId`；Vault V1 的 append/cursor/stream 与 writer 租约已实现，见 [VAULT.md](VAULT.md)。
+> `clientInstanceId`；Vault V1 的 append/cursor/stream 与 writer 租约已实现，见 [VAULT.md](../sync/VAULT.md)。
 > 2026-10-23：会话租约升级为全局单写者 `sync` 租约；上传/创建/删除需要它，拉取不需要。
 >
 > **M3/M4 语义**：同步单位是**连续事件批次**；差异见文末「M3/M4 语义」。
@@ -114,7 +114,7 @@
 客户端先比 `batchCount + headChainHash`，一致就跳过；不一致再按页拉 `batches` 找公共前缀。响应里仍带 `frameCount` / `frames` 作为旧字段别名。
 
 > Vault（设备台账 / 工作区映射 / 笔记）的 `/v1/vault/*` 已在 V1 实现，
-> 设计见 [VAULT.md](VAULT.md)；记录封帧、cursor、writer 租约和配额以该文为准。
+> 设计见 [VAULT.md](../sync/VAULT.md)；记录封帧、cursor、writer 租约和配额以该文为准。
 
 ## 不变量
 

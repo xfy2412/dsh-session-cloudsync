@@ -16,7 +16,7 @@ export interface EventStreamOptions {
   readonly subscribe: (listener: () => void) => () => void
   /** 心跳间隔，默认 15s。 */
   readonly heartbeatMs?: number
-  /** 合并窗口，默认 80ms。 */
+  /** 合并窗口，默认 200ms。 */
   readonly coalesceMs?: number
   /** 空闲关闭宽限，默认 2s。 */
   readonly idleGraceMs?: number
@@ -25,7 +25,7 @@ export interface EventStreamOptions {
 }
 
 const DEFAULT_HEARTBEAT_MS = 15_000
-const DEFAULT_COALESCE_MS = 80
+const DEFAULT_COALESCE_MS = 200
 const DEFAULT_IDLE_GRACE_MS = 2_000
 const DEFAULT_MAX_LIFETIME_MS = 10 * 60_000
 

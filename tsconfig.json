@@ -9,6 +9,7 @@
     "packages/server/src/**/*.ts",
     "packages/server/tests/**/*.ts",
     "packages/plugin/src/**/*.ts",
-    "packages/plugin/tests/**/*.ts"
+    "packages/plugin/tests/**/*.ts",
+    "tests/tools/**/*.ts"
   ]
 }

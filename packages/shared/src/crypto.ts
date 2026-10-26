@@ -6,7 +6,7 @@
  *
  * @module @dsh-session-cloudsync/shared/crypto
  */
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, scryptSync } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, scrypt, scryptSync } from 'node:crypto'
 
 /** 对称密钥长度（字节）。 */
 export const KEY_BYTES = 32
@@ -45,6 +45,21 @@ export function newSalt(): Buffer {
  */
 export function deriveMasterKey(passphrase: string, salt: Buffer): Buffer {
   return scryptSync(passphrase, salt, KEY_BYTES, { ...SCRYPT, maxmem: 128 * 1024 * 1024 })
+}
+
+/**
+ * 异步版本的主密钥派生；用于不在宿主事件循环上跑 scrypt。
+ * @param passphrase - 同步口令，永不落盘。
+ * @param salt - 存在 keybox 里的盐。
+ * @returns 32 字节密钥。
+ */
+export async function deriveMasterKeyAsync(passphrase: string, salt: Buffer): Promise<Buffer> {
+  return await new Promise<Buffer>((resolve, reject) => {
+    scrypt(passphrase, salt, KEY_BYTES, { ...SCRYPT, maxmem: 128 * 1024 * 1024 }, (error, key) => {
+      if (error !== null) reject(error)
+      else resolve(Buffer.from(key))
+    })
+  })
 }
 
 /**

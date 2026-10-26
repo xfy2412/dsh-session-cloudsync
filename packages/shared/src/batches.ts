@@ -215,6 +215,32 @@ export function eventBatchHash(events: readonly SyncEvent[]): string {
 }
 
 /**
+ * 封一批已经序列化好的规范 JSON 文本。
+ *
+ * 规划阶段可以在关闭批次时保留该批文本，封帧时直接哈希/加密，
+ * 避免对同一批事件再次 `stableStringify`。
+ * @param text - `serializeEventBatch(events)` 的结果。
+ * @param sessionId - 会话 id。
+ * @param index - 链上下标（必须 >= 1）。
+ * @param seqFrom - 批内首 seq。
+ * @param seqTo - 批内末 seq。
+ * @param sessionKey - 会话密钥。
+ * @returns 封好的批次。
+ */
+export function sealEventBatchFromText(
+  text: string,
+  sessionId: string,
+  index: number,
+  seqFrom: number,
+  seqTo: number,
+  sessionKey: Buffer,
+): SealedFrame {
+  if (index < 1) throw new Error('事件批次的链下标必须 >= 1')
+  if (seqFrom > seqTo) throw new Error('事件批次的 seq 区间非法')
+  return sealFrame(Buffer.from(text, 'utf8'), { sessionId, index, seqFrom, seqTo }, sessionKey)
+}
+
+/**
  * 封一批事件。
  * @param events - 连续的已排序事件。
  * @param sessionId - 会话 id。
@@ -233,8 +259,7 @@ export function sealEventBatch(
   const seqFrom = events[0]!.seq
   const seqTo = events[events.length - 1]!.seq
   assertContiguous(events, seqFrom, seqTo)
-  const plain = Buffer.from(serializeEventBatch(events), 'utf8')
-  return sealFrame(plain, { sessionId, index, seqFrom, seqTo }, sessionKey)
+  return sealEventBatchFromText(serializeEventBatch(events), sessionId, index, seqFrom, seqTo, sessionKey)
 }
 
 /**
@@ -281,6 +306,79 @@ function assertContiguous(events: readonly SyncEvent[], seqFrom: number, seqTo: 
   })
 }
 
+/** 已规划、带规范 JSON 文本的批次；文本只在当前批次内保留。 */
+export interface PlannedEventBatch extends EventBatch {
+  /** `serializeEventBatch(events)` 的结果。 */
+  readonly text: string
+}
+
+/**
+ * 惰性切批：每关闭一批才产出一次，调用方可以立即封帧而不必保留全部文本。
+ * @param events - 本地全部事件（按 seq 升序）。
+ * @param startAfterSeq - 最后一个已上传批次覆盖的 seq；-1 表示从 0 开始。
+ * @param options - 单批上限。
+ * @param includeText - 是否生成批次规范 JSON 文本；规划-only 调用可关闭。
+ * @yields 带规范 JSON 文本的批次。
+ * @throws 事件不连续/重复或第一条待传事件不是 `startAfterSeq + 1` 时抛出。
+ */
+export function* iterateEventBatches(
+  events: readonly SyncEvent[],
+  startAfterSeq: number,
+  options: BatchOptions = {},
+  includeText = true,
+): Generator<PlannedEventBatch, void, void> {
+  const maxEvents = options.maxEvents ?? DEFAULT_BATCH_EVENTS
+  const maxBytes = options.maxBytes ?? DEFAULT_BATCH_BYTES
+  if (!Number.isSafeInteger(maxEvents) || maxEvents < 1) throw new Error('maxEvents 必须是正整数')
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('maxBytes 必须是正整数')
+
+  events.forEach((event, offset) => {
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0) throw new Error(`第 ${offset} 个事件的 seq 非法`)
+    if (offset > 0 && events[offset - 1]!.seq + 1 !== event.seq) throw new Error(`事件 seq 不连续：${events[offset - 1]!.seq} -> ${event.seq}`)
+  })
+
+  const pending = events.filter((event) => event.seq > startAfterSeq)
+  if (pending.length === 0) return
+  if (pending[0]!.seq !== startAfterSeq + 1) throw new Error(`待传事件应从 ${startAfterSeq + 1} 开始，实际是 ${pending[0]!.seq}`)
+
+  let current: SyncEvent[] = []
+  let currentTexts: string[] | undefined = includeText ? [] : undefined
+  let currentBytes = 2
+  for (const event of pending) {
+    // 数组规范 JSON = "[" + 各对象规范 JSON + 逗号 + "]"。
+    // 每个事件只序列化一次，用增量长度判断上限，避免 O(n²) 重序列化。
+    const eventText = stableStringify(event)
+    const eventBytes = Buffer.byteLength(eventText, 'utf8')
+    const candidateBytes = current.length === 0 ? currentBytes + eventBytes : currentBytes + 1 + eventBytes
+    const candidateLength = current.length + 1
+    if (current.length > 0 && (candidateLength > maxEvents || candidateBytes > maxBytes)) {
+      yield {
+        seqFrom: current[0]!.seq,
+        seqTo: current[current.length - 1]!.seq,
+        events: current,
+        bytes: currentBytes,
+        text: currentTexts === undefined ? '' : `[${currentTexts.join(',')}]`,
+      }
+      current = [event]
+      currentTexts = includeText ? [eventText] : undefined
+      currentBytes = 2 + eventBytes
+    } else {
+      current.push(event)
+      currentTexts?.push(eventText)
+      currentBytes = candidateBytes
+    }
+  }
+  if (current.length > 0) {
+    yield {
+      seqFrom: current[0]!.seq,
+      seqTo: current[current.length - 1]!.seq,
+      events: current,
+      bytes: currentBytes,
+      text: currentTexts === undefined ? '' : `[${currentTexts.join(',')}]`,
+    }
+  }
+}
+
 /**
  * 把待上传事件切成新批次；已经有批次边界的旧事件不会重新参与切分。
  * @param events - 本地全部事件（按 seq 升序）。
@@ -294,40 +392,10 @@ export function planEventBatches(
   startAfterSeq: number,
   options: BatchOptions = {},
 ): EventBatch[] {
-  const maxEvents = options.maxEvents ?? DEFAULT_BATCH_EVENTS
-  const maxBytes = options.maxBytes ?? DEFAULT_BATCH_BYTES
-  if (!Number.isSafeInteger(maxEvents) || maxEvents < 1) throw new Error('maxEvents 必须是正整数')
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('maxBytes 必须是正整数')
-
-  events.forEach((event, offset) => {
-    if (!Number.isSafeInteger(event.seq) || event.seq < 0) throw new Error(`第 ${offset} 个事件的 seq 非法`)
-    if (offset > 0 && events[offset - 1]!.seq + 1 !== event.seq) throw new Error(`事件 seq 不连续：${events[offset - 1]!.seq} -> ${event.seq}`)
-  })
-
-  const pending = events.filter((event) => event.seq > startAfterSeq)
-  if (pending.length === 0) return []
-  if (pending[0]!.seq !== startAfterSeq + 1) throw new Error(`待传事件应从 ${startAfterSeq + 1} 开始，实际是 ${pending[0]!.seq}`)
-
-  const batches: EventBatch[] = []
-  let current: SyncEvent[] = []
-  for (const event of pending) {
-    const candidate = [...current, event]
-    const candidateBytes = Buffer.byteLength(serializeEventBatch(candidate), 'utf8')
-    if (current.length > 0 && (candidate.length > maxEvents || candidateBytes > maxBytes)) {
-      const bytes = Buffer.byteLength(serializeEventBatch(current), 'utf8')
-      batches.push({ seqFrom: current[0]!.seq, seqTo: current[current.length - 1]!.seq, events: current, bytes })
-      current = [event]
-    } else {
-      current = candidate
-    }
-  }
-  if (current.length > 0) {
-    batches.push({
-      seqFrom: current[0]!.seq,
-      seqTo: current[current.length - 1]!.seq,
-      events: current,
-      bytes: Buffer.byteLength(serializeEventBatch(current), 'utf8'),
-    })
-  }
-  return batches
+  return [...iterateEventBatches(events, startAfterSeq, options, false)].map(({ seqFrom, seqTo, events: batchEvents, bytes }) => ({
+    seqFrom,
+    seqTo,
+    events: batchEvents,
+    bytes,
+  }))
 }

@@ -7,15 +7,45 @@
  *
  * @module @dsh-session-cloudsync/server
  */
-import { chmodSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createDevice, createHttpServer, listDevices, mintOnboardingCode, revokeDevice, DEFAULT_MAX_BYTES } from './http.ts'
+import {
+  ONBOARDING_CODE_FILE,
+  ONBOARDING_TTL_MS,
+  createDevice,
+  createHttpServer,
+  listDevices,
+  mintOnboardingCode,
+  revokeDevice,
+  DEFAULT_MAX_BYTES,
+} from './http.ts'
 import { clearAdminPassword, ensureSetupToken, isAdminInitialized, openDatabase, readMaxBytes } from './db.ts'
 
 interface Parsed {
   command: string
   positionals: string[]
   flags: Map<string, string>
+}
+
+/** 把当前初始化密钥写到本地 0600 文件，供同机开发/管理工具读取。 */
+function writeOnboardingCode(dataDir: string, code: string): void {
+  mkdirSync(dataDir, { recursive: true })
+  const file = join(dataDir, ONBOARDING_CODE_FILE)
+  const temporary = `${file}.tmp`
+  writeFileSync(temporary, `${JSON.stringify({ code, expiresAt: Date.now() + ONBOARDING_TTL_MS })}\n`, {
+    mode: 0o600,
+  })
+  try {
+    chmodSync(temporary, 0o600)
+  } catch {
+    // Windows 可能不支持改 mode。
+  }
+  renameSync(temporary, file)
+}
+
+/** 初始化完成或重置时删除本地密钥副本。 */
+function clearOnboardingCode(dataDir: string): void {
+  rmSync(join(dataDir, ONBOARDING_CODE_FILE), { force: true })
 }
 
 function usage(): never {
@@ -102,6 +132,7 @@ async function main(parsed: Parsed): Promise<void> {
       }
       if (action === 'reset') {
         clearAdminPassword(db)
+        clearOnboardingCode(dataDir)
         console.log('已清除管理密码。重启 server 后会在控制台打印新的初始化密钥。')
         return
       }
@@ -123,6 +154,8 @@ async function main(parsed: Parsed): Promise<void> {
       }
       const initialized = isAdminInitialized(db)
       const onboardingCode = initialized ? undefined : mintOnboardingCode()
+      if (onboardingCode === undefined) clearOnboardingCode(dataDir)
+      else writeOnboardingCode(dataDir, onboardingCode)
       const server = createHttpServer({ db, dataDir, maxBytes, ...onboardingCode === undefined ? {} : { onboardingCode } })
       server.listen(port, host, () => {
         const address = server.address()

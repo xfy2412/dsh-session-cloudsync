@@ -13,7 +13,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { SyncController } from './controller.ts'
+import { SyncController, type PlannedSyncSession } from './controller.ts'
 import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { prepareReplaceScript } from './replace.ts'
 import {
@@ -30,13 +30,14 @@ import {
 } from './engine.ts'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
 import { createEventStreamResponse } from './event-stream.ts'
+import { DevLogSink, withDevLog } from './dev-log.ts'
 import { DeviceLeaseKeeper } from './device-lease.ts'
 import { SyncScheduler } from './scheduler.ts'
 import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
 import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
 import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
-import type { SetupInfo, SyncSessionCandidate, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
+import type { SetupInfo, SyncConfigSnapshot, SyncSessionCandidate, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
 export const name = 'dsh-session-cloudsync'
@@ -64,8 +65,8 @@ export interface Config {
   salt?: string
   /** 本设备短标签；空表示未使用。 */
   deviceName?: string
-  /** 本地排除的根会话 id；子代理跟随根。 */
-  excludedSessionIds?: string[]
+  /** 显式选中的根会话 id；空数组表示不选任何会话。 */
+  syncSessionIds?: string[]
   /** 是否自动绑定同路径的远端工作区；默认关闭。 */
   autoBindSamePath?: boolean
   /** 是否自动按间隔推送，默认 true；关闭后只做一次启动推送。 */
@@ -80,6 +81,10 @@ export interface Config {
   batchBytes?: number
   /** 单次 HTTP 读取超时（毫秒），默认 10000。 */
   requestTimeoutMs?: number
+  /** 开发模式：把插件日志同时发到本地 dev 控制台；默认关闭。 */
+  debug?: boolean
+  /** 开发控制台日志接收地址，例如 `http://127.0.0.1:3092/api/log/a`。 */
+  devLogUrl?: string
 }
 
 /** 配置 schema；非敏感字段可被 DSH 设置页直接编辑并热更新。 */
@@ -90,7 +95,7 @@ export const Config = z.object({
   passphrase: z.string().default(''),
   salt: z.string().default(''),
   deviceName: z.string().default('').volatile(),
-  excludedSessionIds: z.array(z.string()).default([]).volatile(),
+  syncSessionIds: z.array(z.string()).default([]).volatile(),
   autoBindSamePath: z.boolean().default(false).volatile(),
   autoSync: z.boolean().default(true).volatile(),
   intervalMs: z.number().min(1000).default(60000).volatile(),
@@ -98,6 +103,8 @@ export const Config = z.object({
   batchEvents: z.number().min(1).default(50).volatile(),
   batchBytes: z.number().min(1024).default(256 * 1024).volatile(),
   requestTimeoutMs: z.number().min(1000).default(10_000).volatile(),
+  debug: z.boolean().default(false).volatile(),
+  devLogUrl: z.string().default('').volatile(),
 })
 
 /** 活动的会话类型（由 ctx.sessions 推导，避免手写 DSH 内部类型）。 */
@@ -117,6 +124,23 @@ interface WorkspaceRegistryLike {
   create(path: string, title: string): Promise<WorkspaceLike>
   list?(): readonly WorkspaceLike[]
 }
+
+/** dsh-settings 的最小接口；设置服务不存在时自动加入上传名单会跳过。 */
+interface SettingsLike {
+  readonly writable?: boolean
+  describe(options?: { readonly redactSecrets?: boolean }): readonly SettingsDescriptorLike[]
+  mutate(ns: string, ops: readonly SettingsPathOpLike[], expectedRevision?: number): Promise<void>
+}
+
+interface SettingsDescriptorLike {
+  readonly ns: string
+  readonly revision: number
+  readonly value?: unknown
+}
+
+type SettingsPathOpLike =
+  | { readonly op: 'set'; readonly path: readonly string[]; readonly value: unknown }
+  | { readonly op: 'unset'; readonly path: readonly string[] }
 
 /** `ctx.connection` 的最小结构（类型包不在本插件依赖里）。 */
 interface ConnectionLike {
@@ -186,25 +210,44 @@ function readVolatile<T>(value: unknown): T | undefined {
  * @param config - 服务端、凭据与批次参数。
  */
 export function apply(ctx: Context, config: Config): void {
-  const logger: SyncLogger = {
+  const envDevLogUrl = process.env.DSH_SESSION_CLOUDSYNC_DEV_LOG?.trim() ?? ''
+  const envSyncServerUrl = process.env.DSH_SESSION_CLOUDSYNC_SERVER_URL?.trim() ?? ''
+  const envSyncToken = process.env.DSH_SESSION_CLOUDSYNC_TOKEN?.trim() ?? ''
+  const envSyncPassphrase = process.env.DSH_SESSION_CLOUDSYNC_PASSPHRASE?.trim() ?? ''
+  const envSyncDeviceName = process.env.DSH_SESSION_CLOUDSYNC_DEVICE_NAME?.trim() ?? ''
+  let debug = envDevLogUrl !== '' || readVolatile<boolean>(config.debug) === true
+  let devLogUrl = envDevLogUrl !== ''
+    ? envDevLogUrl
+    : (readVolatile<string>(config.devLogUrl)?.trim() ?? '')
+  const baseLogger: SyncLogger = {
     info: (message) => ctx.logger.info(message),
     warn: (message) => ctx.logger.warn(message),
     error: (message) => ctx.logger.error(message),
   }
+  const logger = withDevLog(baseLogger, new DevLogSink({
+    enabled: () => debug && devLogUrl !== '',
+    url: () => devLogUrl,
+  }))
 
   if (readVolatile<boolean>(config.enabled) === false) {
     logger.info('dsh-session-cloudsync: 已禁用')
     return
   }
-  let serverUrl = readVolatile<string>(config.serverUrl) ?? ''
-  const configToken = readVolatile<string>(config.token) ?? ''
-  const configPassphrase = readVolatile<string>(config.passphrase) ?? ''
+  let serverUrl = envSyncServerUrl !== ''
+    ? envSyncServerUrl
+    : (readVolatile<string>(config.serverUrl) ?? '')
+  const yamlToken = readVolatile<string>(config.token) ?? ''
+  const yamlPassphrase = readVolatile<string>(config.passphrase) ?? ''
+  const configToken = envSyncToken !== '' ? envSyncToken : yamlToken
+  const configPassphrase = envSyncPassphrase !== '' ? envSyncPassphrase : yamlPassphrase
   let intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
-  let excludedSessionIds: string[] = []
+  let syncSessionIds: string[] = []
   let autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
   let salt = readVolatile<string>(config.salt) ?? ''
   let includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
-  let deviceName = readVolatile<string>(config.deviceName) ?? ''
+  let deviceName = envSyncDeviceName !== ''
+    ? envSyncDeviceName
+    : (readVolatile<string>(config.deviceName) ?? '')
   let autoSync = readVolatile<boolean>(config.autoSync) !== false
   let batchEvents = readVolatile<number>(config.batchEvents) ?? 50
   let batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
@@ -212,13 +255,13 @@ export function apply(ctx: Context, config: Config): void {
   // 每次 DSH 进程启动生成一次；同一进程内 lease/append 复用，重启后换新值。
   const clientId = randomBytes(16).toString('hex')
 
-  const readExcludedSessions = (): string[] => {
-    const raw = readVolatile<unknown>(config.excludedSessionIds)
+  const readSyncSessions = (): string[] => {
+    const raw = readVolatile<unknown>(config.syncSessionIds)
     return Array.isArray(raw)
       ? raw.filter((id): id is string => typeof id === 'string' && id.trim() !== '')
       : []
   }
-  excludedSessionIds = readExcludedSessions()
+  syncSessionIds = readSyncSessions()
 
   const engineConfig: MutableEngineConfig = {
     serverUrl,
@@ -226,7 +269,7 @@ export function apply(ctx: Context, config: Config): void {
     passphrase: configPassphrase,
     ...salt === '' ? {} : { salt },
     includeSubagents,
-    excludedSessionIds,
+    syncSessionIds,
     batchEvents,
     batchBytes,
     requestTimeoutMs,
@@ -240,20 +283,28 @@ export function apply(ctx: Context, config: Config): void {
    * 插件；每轮同步/设置读取前调用，保证不会一直拿 apply 时的旧值。
    */
   const refreshConfig = (): void => {
-    serverUrl = readVolatile<string>(config.serverUrl) ?? ''
+    serverUrl = envSyncServerUrl !== ''
+      ? envSyncServerUrl
+      : (readVolatile<string>(config.serverUrl) ?? '')
     intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
-    excludedSessionIds = readExcludedSessions()
+    syncSessionIds = readSyncSessions()
     autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
     salt = readVolatile<string>(config.salt) ?? ''
     includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
-    deviceName = readVolatile<string>(config.deviceName) ?? ''
+    deviceName = envSyncDeviceName !== ''
+      ? envSyncDeviceName
+      : (readVolatile<string>(config.deviceName) ?? '')
     autoSync = readVolatile<boolean>(config.autoSync) !== false
     batchEvents = readVolatile<number>(config.batchEvents) ?? 50
     batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
     requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
+    debug = envDevLogUrl !== '' || readVolatile<boolean>(config.debug) === true
+    devLogUrl = envDevLogUrl !== ''
+      ? envDevLogUrl
+      : (readVolatile<string>(config.devLogUrl)?.trim() ?? '')
     engineConfig.serverUrl = serverUrl
     engineConfig.includeSubagents = includeSubagents
-    engineConfig.excludedSessionIds = excludedSessionIds
+    engineConfig.syncSessionIds = syncSessionIds
     engineConfig.batchEvents = batchEvents
     engineConfig.batchBytes = batchBytes
     engineConfig.requestTimeoutMs = requestTimeoutMs
@@ -271,8 +322,12 @@ export function apply(ctx: Context, config: Config): void {
     onChange: () => notifyChanged?.(),
     logger,
   })
-  let tokenSource: string | null = configToken.trim() === '' ? null : 'config'
-  let passphraseSource: string | null = configPassphrase === '' ? null : 'config'
+  let tokenSource: string | null = envSyncToken !== ''
+    ? 'env'
+    : configToken.trim() === '' ? null : 'config'
+  let passphraseSource: string | null = envSyncPassphrase !== ''
+    ? 'env'
+    : configPassphrase === '' ? null : 'config'
   let refreshingSecrets: Promise<void> | undefined
 
   /**
@@ -298,14 +353,22 @@ export function apply(ctx: Context, config: Config): void {
       ])
       const credentialToken = tokenValue?.value ?? ''
       const credentialPassphrase = passphraseValue?.value ?? ''
-      engineConfig.token = credentialToken !== '' ? credentialToken : configToken
-      engineConfig.passphrase = credentialPassphrase !== '' ? credentialPassphrase : configPassphrase
-      tokenSource = credentialToken !== ''
-        ? tokenValue?.source ?? 'credentials'
-        : configToken.trim() !== '' ? 'config' : null
-      passphraseSource = credentialPassphrase !== ''
-        ? passphraseValue?.source ?? 'credentials'
-        : configPassphrase !== '' ? 'config' : null
+      engineConfig.token = envSyncToken !== ''
+        ? envSyncToken
+        : credentialToken !== '' ? credentialToken : configToken
+      engineConfig.passphrase = envSyncPassphrase !== ''
+        ? envSyncPassphrase
+        : credentialPassphrase !== '' ? credentialPassphrase : configPassphrase
+      tokenSource = envSyncToken !== ''
+        ? 'env'
+        : credentialToken !== ''
+          ? tokenValue?.source ?? 'credentials'
+          : configToken.trim() !== '' ? 'config' : null
+      passphraseSource = envSyncPassphrase !== ''
+        ? 'env'
+        : credentialPassphrase !== ''
+          ? passphraseValue?.source ?? 'credentials'
+          : configPassphrase.trim() !== '' ? 'config' : null
     })()
     try {
       await refreshingSecrets
@@ -329,7 +392,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const workspaceRegistry = ctx.get('workspaceRegistry') as unknown as WorkspaceRegistryLike | undefined
-  if (configToken !== '' || configPassphrase !== '') {
+  if (yamlToken !== '' || yamlPassphrase !== '') {
     logger.warn(
       'dsh-session-cloudsync: token/passphrase 仍写在 YAML；建议迁到 DSH 凭据库'
       + `（${CREDENTIAL_REFS.token} / ${CREDENTIAL_REFS.passphrase}），YAML 仅作 fallback`,
@@ -349,6 +412,8 @@ export function apply(ctx: Context, config: Config): void {
   let workspaceLabels: Record<string, string> = {}
   let labelsIdentity: string | undefined
   let labelsFetchedAt = 0
+  let remoteInventory: { readonly identity: string; readonly at: number; readonly byKey: Map<string, string[]> } | undefined
+  const remoteLastSeq = new Map<string, number>()
   const refreshWorkspaceLabels = async (): Promise<void> => {
     if (statePath === undefined || bindingsDir === undefined) return
     if (engineConfig.token.trim() === '' || engineConfig.passphrase === '') return
@@ -376,6 +441,75 @@ export function apply(ctx: Context, config: Config): void {
       logger.warn(`dsh-session-cloudsync: 读取 Vault 工作区 label 失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
+  /**
+   * 读取远端会话清单，按 workspaceKey 聚合。只用于设置页/映射页展示，
+   * 不参与同步判定本身。
+   */
+  const readRemoteInventory = async (): Promise<Map<string, string[]>> => {
+    const base = serverUrl.trim().replace(/\/+$/u, '')
+    const token = engineConfig.token.trim()
+    if (base === '' || token === '') return new Map()
+    const identity = `${base}\u0000${token}`
+    if (remoteInventory !== undefined && remoteInventory.identity === identity && Date.now() - remoteInventory.at < 15_000) {
+      return remoteInventory.byKey
+    }
+    if (remoteInventory?.identity !== identity) remoteLastSeq.clear()
+    const byKey = new Map<string, string[]>()
+    try {
+      let since = 0
+      for (let page = 0; page < 50; page += 1) {
+        const response = await fetch(`${base}/v1/cursor?since=${since}&limit=200`, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(engineConfig.requestTimeoutMs ?? 10_000),
+        })
+        if (!response.ok) break
+        const body = await response.json() as {
+          readonly value?: {
+            readonly revision?: number
+            readonly sessions?: readonly { readonly sessionId?: string; readonly deletedAt?: number | null }[]
+            readonly hasMore?: boolean
+          }
+        }
+        const sessions = body.value?.sessions ?? []
+        for (const change of sessions) {
+          if (change.deletedAt !== null && change.deletedAt !== undefined) continue
+          const sessionId = change.sessionId
+          if (typeof sessionId !== 'string' || sessionId === '') continue
+          const manifestResponse = await fetch(`${base}/v1/sessions/${encodeURIComponent(sessionId)}/manifest`, {
+            headers: { authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(engineConfig.requestTimeoutMs ?? 10_000),
+          })
+          if (!manifestResponse.ok) continue
+          const manifestBody = await manifestResponse.json() as {
+            readonly value?: {
+              readonly manifest?: {
+                readonly workspaceKey?: unknown
+                readonly deletedAt?: unknown
+                readonly lastSeq?: unknown
+              }
+            }
+          }
+          const manifest = manifestBody.value?.manifest
+          if (manifest === undefined || typeof manifest.workspaceKey !== 'string' || manifest.workspaceKey === '') continue
+          if (manifest.deletedAt !== undefined) continue
+          if (typeof manifest.lastSeq === 'number' && Number.isFinite(manifest.lastSeq)) {
+            remoteLastSeq.set(sessionId, manifest.lastSeq)
+          }
+          const list = byKey.get(manifest.workspaceKey) ?? []
+          list.push(sessionId)
+          byKey.set(manifest.workspaceKey, list)
+        }
+        const revision = typeof body.value?.revision === 'number' ? body.value.revision : since
+        since = Math.max(since, revision)
+        if (body.value?.hasMore !== true || revision <= 0) break
+      }
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-cloudsync: 读取远端会话清单失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+    remoteInventory = { identity, at: Date.now(), byKey }
+    return byKey
+  }
+
   let vaultKeyCache: { readonly identity: string; readonly key: Buffer } | undefined
   const currentVaultKey = (): Buffer | undefined => {
     const identity = `${serverUrl}\u0000${engineConfig.passphrase}\u0000${engineConfig.salt ?? ''}`
@@ -478,6 +612,73 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   let pullWithDeps: ((state: PullState) => Promise<PullReport>) | undefined
+  // 所有 pull 都必须经过这一把锁：控制器轮次、映射回填、未来任何入口。
+  let pullTail: Promise<unknown> = Promise.resolve()
+  const withPullLock = <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = pullTail.then(operation, operation)
+    pullTail = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  const autoUploadRoots = new Set<string>()
+
+  /** 读取 dsh-settings；不存在时返回 undefined，不把设置页当成硬依赖。 */
+  const settingsService = (): SettingsLike | undefined => {
+    try {
+      const value = (ctx as unknown as { get(name: string): unknown }).get('settings')
+      if (value === null || typeof value !== 'object') return undefined
+      const settings = value as Partial<SettingsLike>
+      if (typeof settings.describe !== 'function' || typeof settings.mutate !== 'function') return undefined
+      return settings as SettingsLike
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 把首次成功拉取的根会话补进上传白名单，并让设置页的勾选反映出来。
+   * 只在首次冷拉取时调用；用户之后手动取消勾选不会被下一轮重新加回。
+   */
+  const flushAutoUpload = async (): Promise<void> => {
+    if (autoUploadRoots.size === 0) return
+    const settings = settingsService()
+    if (settings === undefined || settings.writable === false) return
+    let lastError: unknown
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const descriptor = settings.describe({ redactSecrets: true }).find((entry) => {
+          if (entry.ns.includes('session-cloudsync')) return true
+          const value = entry.value
+          return value !== null && typeof value === 'object'
+            && Array.isArray((value as Record<string, unknown>)['syncSessionIds'])
+            && typeof (value as Record<string, unknown>)['serverUrl'] === 'string'
+        })
+        if (descriptor === undefined) return
+        const raw = descriptor.value
+        if (raw === null || typeof raw !== 'object') return
+        const value = raw as Record<string, unknown>
+        const current = Array.isArray(value['syncSessionIds'])
+          ? value['syncSessionIds'].filter((entry): entry is string => typeof entry === 'string')
+          : []
+        const next = [...new Set([...current, ...autoUploadRoots])]
+        if (next.length !== current.length) {
+          await settings.mutate(descriptor.ns, [{
+            op: 'set',
+            path: ['syncSessionIds'],
+            value: next,
+          }], descriptor.revision)
+          refreshConfig()
+        }
+        autoUploadRoots.clear()
+        return
+      } catch (error: unknown) {
+        lastError = error
+        const message = error instanceof Error ? error.message : String(error)
+        if (!/changed since it was read/u.test(message)) break
+      }
+    }
+    logger.warn(`dsh-session-cloudsync: 自动加入上传名单失败：${lastError instanceof Error ? lastError.message : String(lastError)}`)
+  }
   const controller = new SyncController({
     push: () => syncOnce({
       ...deps,
@@ -486,7 +687,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
     pull: (state) => {
       if (pullWithDeps === undefined) throw new Error('拉取引擎尚未初始化')
-      return pullWithDeps(state)
+      return withPullLock(() => pullWithDeps!(state))
     },
     persist: persistState,
     configuration,
@@ -565,12 +766,14 @@ export function apply(ctx: Context, config: Config): void {
       const read = await handle.read()
       cache.coldSnapshot(handle.header, handle.inheritedEventCount ?? 0, read.events)
       // coldSnapshot 的落盘是 fire-and-forget；等 title 行可见后再 attach，
-      // 避免列表恰好读到尚未写完的缓存。
-      for (let attempt = 0; attempt < 25; attempt += 1) {
+      // 避免列表恰好读到尚未写完的缓存。大会话的 projection checkpoint 可能
+      // 超过旧实现的 250ms 窗口，这里给 2s 并留下诊断。
+      for (let attempt = 0; attempt < 200; attempt += 1) {
         if (typeof cache.cachedSnapshot !== 'function') return
         if (cache.cachedSnapshot(handle.header, ['title']) !== undefined) return
         await new Promise<void>((resolve) => setTimeout(resolve, 10))
       }
+      logger.warn(`dsh-session-cloudsync: 会话 ${sessionId} 的标题投影在 2s 内未就绪，继续挂载`)
     } finally {
       await handle.close()
     }
@@ -591,14 +794,23 @@ export function apply(ctx: Context, config: Config): void {
     attach: async (sessionId: string, mappedPath?: string): Promise<void> => {
       if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
       if (mappedPath === undefined || mappedPath === '') throw new Error('会话没有可用的本地工作区落点')
+      controller.updateProgress({
+        sessionId, direction: 'pull', phase: 'progress', stage: 'projecting', progress: 1,
+      })
       try {
         await warmProjectionCache(sessionId)
       } catch (error: unknown) {
         logger.warn(`dsh-session-cloudsync: 预热会话投影缓存失败：${error instanceof Error ? error.message : String(error)}`)
       }
+      controller.updateProgress({
+        sessionId, direction: 'pull', phase: 'progress', stage: 'attaching', progress: 1,
+      })
       const workspace = (await workspaceRegistry.resolveByPath(mappedPath))
         ?? (await workspaceRegistry.create(mappedPath, 'Session Sync'))
       await workspace.attachSession(sessionId as SessionId)
+    },
+    onFirstPull: (sessionId: string): void => {
+      if (!syncSessionIds.includes(sessionId)) autoUploadRoots.add(sessionId)
     },
     logger,
     beforeApply: async (sessionId: string, targetSeq: number): Promise<void> => {
@@ -623,21 +835,31 @@ export function apply(ctx: Context, config: Config): void {
    * 不推进主游标。这样即使映射页打开时游标已经越过它们，也能补回来。
    */
   const backfillMappedWorkspaces = async (): Promise<void> => {
-    if (backfilling || controller.snapshot().running) return
+    if (backfilling) return
+    if (controller.snapshot().running) return
     const pending = controller.unmappedSessions()
       .filter((entry) => bindings.bindings[entry.workspaceKey] !== undefined)
     if (pending.length === 0) return
-    const revision = Math.max(0, Math.min(...pending.map((entry) => entry.revision)) - 1)
+    if (pullWithDeps === undefined) return
     backfilling = true
+    if (!controller.beginBackfill()) {
+      backfilling = false
+      return
+    }
     try {
-      const snapshot = controller.snapshot()
-      const report = await pullWithDeps({
-        revision,
-        ...snapshot.pending === null ? {} : { pending: snapshot.pending },
+      const report = await withPullLock(() => {
+        const snapshot = controller.snapshot()
+        const revision = Math.max(0, Math.min(...pending.map((entry) => entry.revision)) - 1)
+        return pullWithDeps!({
+          revision,
+          ...snapshot.pending === null ? {} : { pending: snapshot.pending },
+        })
       })
-      controller.recordBackfill(report)
+      controller.endBackfill(report)
+      await flushAutoUpload()
       await refreshBindings()
     } catch (error: unknown) {
+      controller.endBackfill()
       logger.warn(`dsh-session-cloudsync: 映射回填失败：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       backfilling = false
@@ -652,8 +874,10 @@ export function apply(ctx: Context, config: Config): void {
       configured: state.configured,
       reason: state.reason ?? null,
       serverUrl,
+      serverUrlSource: envSyncServerUrl !== '' ? 'env' : 'settings',
       deviceName,
-      excludedSessionIds,
+      deviceNameSource: envSyncDeviceName !== '' ? 'env' : 'settings',
+      syncSessionIds,
       autoBindSamePath,
       autoSync,
       intervalMs,
@@ -694,6 +918,45 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
+  /**
+   * 在 controller 开始本轮之前建立完整列表：选中的本地根 + 远端未拉取根。
+   * 这样气泡在第一个会话开始传输前就知道整轮有哪些行。
+   */
+  const seedControllerList = async (): Promise<void> => {
+    const snapshots = await ctx.sessionPersistence.list()
+    const tree = buildSessionTree(snapshots)
+    const localById = new Map(snapshots.map((snapshot) => [String(snapshot.header.id), snapshot]))
+    const selected = new Set(syncSessionIds)
+    const inventory = await readRemoteInventory()
+    const remoteIds = new Set<string>()
+    for (const ids of inventory.values()) {
+      for (const sessionId of ids) remoteIds.add(sessionId)
+    }
+    const stateFor = (sessionId: string): 'planned' | 'local-ahead' | 'remote-ahead' | 'up-to-date' => {
+      const local = localById.get(sessionId)
+      if (local === undefined) return 'remote-ahead'
+      if (!remoteIds.has(sessionId)) return 'local-ahead'
+      const remoteLast = remoteLastSeq.get(sessionId)
+      if (remoteLast === undefined) return 'planned'
+      const localLast = Math.max(-1, (local.eventCount ?? 0) - 1)
+      if (localLast === remoteLast) return 'up-to-date'
+      return localLast < remoteLast ? 'remote-ahead' : 'local-ahead'
+    }
+    const entries: PlannedSyncSession[] = []
+    for (const root of tree.roots) {
+      if (!selected.has(String(root.root.header.id))) continue
+      for (const snapshot of [root.root, ...root.descendants.map((entry) => entry.snapshot)]) {
+        const sessionId = String(snapshot.header.id)
+        entries.push({ sessionId, direction: 'push', state: stateFor(sessionId) })
+      }
+    }
+    for (const sessionId of [...remoteIds].sort()) {
+      if (!localById.has(sessionId)) entries.push({ sessionId, direction: 'pull', state: 'remote-ahead' })
+    }
+    controller.seedList(entries)
+    controller.reconcileLocal(new Set(localById.keys()), selected)
+  }
+
   const runSync = async (
     manual = false,
     trigger?: 'startup' | 'auto' | 'manual',
@@ -702,12 +965,15 @@ export function apply(ctx: Context, config: Config): void {
     await refreshSecrets()
     await deviceLease.ensure()
     await refreshBindings()
+    // 已有同步在跑时不要重写列表占位，否则会把刚完成的 pull 状态覆盖成 planned。
+    if (!controller.snapshot().running) await seedControllerList()
     const result = await controller.run({
       manual,
       ...trigger === undefined ? {} : { trigger },
     })
     await autoBindMatchingWorkspaces()
     await backfillMappedWorkspaces()
+    await flushAutoUpload()
     void runVault().catch((error: unknown) => {
       logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
     })
@@ -727,9 +993,9 @@ export function apply(ctx: Context, config: Config): void {
     await refreshBindings()
     await refreshSecrets()
     await refreshWorkspaceLabels()
+    const inventory = await readRemoteInventory()
     const snapshots = await ctx.sessionPersistence.list()
     const tree = buildSessionTree(snapshots)
-    const excludedSet = new Set(excludedSessionIds)
     const sessions: SyncSessionCandidate[] = []
     const groups = new Map<string, { path: string; rootSessions: number; subagentSessions: number }>()
     for (const entry of tree.roots) {
@@ -748,7 +1014,6 @@ export function apply(ctx: Context, config: Config): void {
         formatVersion: entry.root.header.version ?? 0,
         eventCount: entry.root.eventCount ?? 0,
         subagentSessions: entry.descendants.length,
-        excluded: excludedSet.has(sessionId),
       })
     }
     sessions.sort((left, right) => right.createdAt - left.createdAt || left.sessionId.localeCompare(right.sessionId))
@@ -791,45 +1056,57 @@ export function apply(ctx: Context, config: Config): void {
     for (const entry of controller.unmappedSessions()) {
       if (bindings.bindings[entry.workspaceKey] !== undefined) continue
       if (localWorkspacePathForKey(entry.workspaceKey) !== undefined) continue
-      unmapped.set(entry.workspaceKey, (unmapped.get(entry.workspaceKey) ?? 0) + 1)
+      unmapped.set(entry.workspaceKey, inventory.get(entry.workspaceKey)?.length ?? 1)
     }
     // 首启映射步骤通常发生在第一次同步之前；Vault 里已有 workspace/profile，
     // 用它补出远端工作区列表，避免“没有未映射工作区”的假象。
     for (const key of Object.keys(workspaceLabels)) {
       if (bindings.bindings[key] !== undefined) continue
       if (localWorkspacePathForKey(key) !== undefined) continue
-      if (!unmapped.has(key)) unmapped.set(key, 0)
+      if (!unmapped.has(key)) unmapped.set(key, inventory.get(key)?.length ?? 0)
+    }
+    for (const key of inventory.keys()) {
+      if (bindings.bindings[key] !== undefined) continue
+      if (localWorkspacePathForKey(key) !== undefined) continue
+      if (!unmapped.has(key)) unmapped.set(key, inventory.get(key)?.length ?? 0)
     }
 
-    const remote = new Map<string, { label?: string; sessions: number }>()
+    const remote = new Map<string, { label?: string; sessions: number; sessionIds?: readonly string[] }>()
     for (const binding of Object.values(bindings.bindings)) {
       const current = remote.get(binding.key)
+      const sessionIds = inventory.get(binding.key)
       remote.set(binding.key, {
         ...current?.label === undefined ? {} : { label: current.label },
         ...binding.label === '' ? {} : { label: binding.label },
-        sessions: current?.sessions ?? 0,
+        ...sessionIds === undefined ? {} : { sessionIds },
+        sessions: sessionIds?.length ?? current?.sessions ?? 0,
       })
     }
     for (const [key, label] of Object.entries(workspaceLabels)) {
+      if (bindings.bindings[key] === undefined && localWorkspacePathForKey(key) !== undefined) continue
       const current = remote.get(key)
+      const sessionIds = inventory.get(key)
       remote.set(key, {
         ...current?.label === undefined ? {} : { label: current.label },
         label,
-        sessions: current?.sessions ?? 0,
+        ...sessionIds === undefined ? {} : { sessionIds },
+        sessions: sessionIds?.length ?? current?.sessions ?? 0,
       })
     }
-    for (const entry of controller.unmappedSessions()) {
-      const current = remote.get(entry.workspaceKey)
-      remote.set(entry.workspaceKey, {
+    for (const [key, sessionIds] of inventory) {
+      if (bindings.bindings[key] === undefined && localWorkspacePathForKey(key) !== undefined) continue
+      const current = remote.get(key)
+      remote.set(key, {
         ...current?.label === undefined ? {} : { label: current.label },
-        sessions: (current?.sessions ?? 0) + 1,
+        sessionIds,
+        sessions: sessionIds.length,
       })
     }
 
     return {
       workspaces: candidates,
       sessions,
-      excludedSessionIds,
+      syncSessionIds,
       bindings: Object.values(bindings.bindings).map((binding) => ({
         workspaceKey: binding.key,
         localPath: binding.localPath,
@@ -848,6 +1125,7 @@ export function apply(ctx: Context, config: Config): void {
           workspaceKey,
           sessions: value.sessions,
           ...value.label === undefined ? {} : { label: value.label },
+          ...value.sessionIds === undefined ? {} : { sessionIds: value.sessionIds },
         }))
         .sort((left, right) => (left.label ?? left.workspaceKey).localeCompare(right.label ?? right.workspaceKey)),
     }
@@ -874,6 +1152,21 @@ export function apply(ctx: Context, config: Config): void {
 
   const control: SyncControl = {
     status: () => controller.snapshot(),
+    config: async (): Promise<SyncConfigSnapshot> => {
+      const setupInfo = await setup()
+      const workspaceList = await workspaces()
+      return {
+        schemaVersion: 2,
+        generatedAt: Date.now(),
+        setup: setupInfo,
+        status: controller.snapshot(),
+        workspaces: workspaceList,
+        selection: {
+          uploadRootIds: syncSessionIds,
+          pull: { mode: 'bound-workspaces' },
+        },
+      }
+    },
     events: async (request: Request) => createEventStreamResponse(request, {
       status: () => controller.snapshot(),
       subscribe: (listener) => controller.subscribe(listener),

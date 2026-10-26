@@ -49,8 +49,8 @@ export interface SessionTree<T> {
 export interface ClosureOptions {
   /** 是否把子代理后代一起同步。 */
   readonly includeSubagents: boolean
-  /** 用户本地排除的根会话 id；子代理跟随根。 */
-  readonly excludedSessionIds?: readonly string[]
+  /** 用户选中的根会话 id；缺省表示全选（底层兼容）。 */
+  readonly selectedSessionIds?: readonly string[]
 }
 
 /** 计划同步的会话。 */
@@ -159,10 +159,12 @@ export function planSessionClosure<T extends ClosureSnapshot>(
   const tree = buildSessionTree(snapshots)
   const planned: PlannedSession<T>[] = []
   const skipped: SkippedSession<T>[] = [...tree.orphans]
-  const excluded = new Set(options.excludedSessionIds ?? [])
+  const selected = options.selectedSessionIds === undefined
+    ? undefined
+    : new Set(options.selectedSessionIds)
 
   for (const { root, descendants } of tree.roots) {
-    if (excluded.has(root.header.id)) {
+    if (selected !== undefined && !selected.has(root.header.id)) {
       skipped.push({ snapshot: root, reason: '根会话未选中' })
       for (const descendant of descendants) {
         skipped.push({ snapshot: descendant.snapshot, reason: '根会话未选中' })

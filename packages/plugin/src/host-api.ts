@@ -10,12 +10,14 @@ import { classifySyncError } from './engine.ts'
 import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
-import type { SetupInfo, SyncStatus, SyncWorkspaceList } from './status.ts'
+import type { SetupInfo, SyncConfigSnapshot, SyncStatus, SyncWorkspaceList } from './status.ts'
 
 /** 宿主注入的控制面。 */
 export interface SyncControl {
   /** 当前状态快照。 */
   status(): SyncStatus
+  /** 所有设置/向导/气泡共用的单一快照。 */
+  config(): Promise<SyncConfigSnapshot>
   /** 打开一个状态 SSE 流。 */
   events(request: Request): Promise<Response>
   /** 非敏感配置，供首启/设置页读取；会顺带刷新凭据。 */
@@ -72,6 +74,22 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async () => json({ ok: true, value: control.status() }),
+    },
+    {
+      path: '/api/session-cloudsync/config',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => {
+        try {
+          return json({ ok: true, value: await control.config() })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
     },
     {
       path: '/api/session-cloudsync/events',

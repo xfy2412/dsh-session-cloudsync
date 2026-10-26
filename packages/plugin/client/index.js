@@ -36,6 +36,10 @@ window.__ModuleLoader__.load({
       '.dssync{--dssync-accent:#5686fe;--dssync-accent-soft:rgba(86,134,254,.14);--dssync-line:var(--dsw-alias-border-l2,rgba(127,127,127,.24));--dssync-line-strong:var(--dsw-alias-border-l4,rgba(127,127,127,.42));--dssync-text:var(--dsw-alias-label-primary,inherit);--dssync-muted:var(--dsw-alias-label-secondary,rgba(220,220,230,.7));--dssync-faint:var(--dsw-alias-label-tertiary,rgba(220,220,230,.46));color:var(--dssync-text);font-size:14px;line-height:1.55}',
       '.dssync *{box-sizing:border-box}',
       '.dssync-page{display:flex;flex-direction:column;gap:22px;padding:4px 0 28px}',
+      '.dssync-savebar{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:10px;padding:10px 0;background:var(--dsw-alias-bg-primary,#151a20);border-bottom:1px solid var(--dssync-line)}',
+      '.dssync-savebar .spacer{flex:1 1 auto}',
+      '.dssync-savebar .dirty{color:var(--dsw-alias-state-warn-primary,#f0b64a);font-size:12px}',
+      '.dssync-savebar .clean{color:var(--dssync-faint);font-size:12px}',
       '.dssync-sec{display:flex;flex-direction:column;gap:12px;padding:0 0 20px;border-bottom:1px solid var(--dssync-line)}',
       '.dssync-sec:last-child{border-bottom:0;padding-bottom:0}',
       '.dssync-sechead{display:flex;align-items:baseline;gap:10px}',
@@ -176,8 +180,15 @@ window.__ModuleLoader__.load({
       '.dssync-cloud:hover{background:rgba(86,134,254,.14)}',
       '.dssync-cloud svg{width:20px;height:20px}',
       '.dssync-bubble.collapsed .dssync-cloud{width:28px;height:28px}',
-      '.dssync-dot{position:absolute;right:1px;bottom:1px;width:6px;height:6px;border-radius:50%;background:var(--dssync-faint);border:1.5px solid #232324}',
+      '.dssync-dot{position:absolute;right:1px;bottom:1px;width:6px;height:6px;border-radius:50%;background:var(--dssync-faint);border:1.5px solid #232324;overflow:visible}',
       '.dssync-dot.syncing{background:#f0b64a}.dssync-dot.bad{background:#ef4444}.dssync-dot.ok{background:#22c55e}.dssync-dot.warn{background:#f59e0b}',
+      '.dssync-dot.syncing::before,.dssync-st.run::before{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid transparent;border-top-color:#f0b64a;border-right-color:rgba(240,182,74,.35);animation:dssync-orbit 1.15s linear infinite;pointer-events:none}',
+      '.dssync-dot.syncing::after,.dssync-st.run::after{content:"";position:absolute;inset:-3px;border-radius:50%;animation:dssync-halo 1.6s ease-in-out infinite;pointer-events:none}',
+      '.dssync-dot.waiting{background:#f59e0b}.dssync-dot.waiting::after,.dssync-st.waiting::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid rgba(245,158,11,.65);animation:dssync-ripple 2.4s ease-out infinite;pointer-events:none}',
+      '@keyframes dssync-orbit{to{transform:rotate(360deg)}}',
+      '@keyframes dssync-halo{0%,100%{box-shadow:0 0 0 0 rgba(240,182,74,.25)}50%{box-shadow:0 0 0 4px rgba(240,182,74,0)}}',
+      '@keyframes dssync-ripple{0%{opacity:.65;transform:scale(.75)}70%,100%{opacity:0;transform:scale(1.45)}}',
+      '@media(prefers-reduced-motion:reduce){.dssync-dot::before,.dssync-dot::after,.dssync-st::before,.dssync-st::after{animation:none!important}}',
       '.dssync-label{min-width:0;flex:1 1 auto;max-width:100%;overflow:hidden;transition:max-width .34s,opacity .18s}',
       '.dssync-label b{display:block;font-size:12px;font-weight:500;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dssync-label span{display:block;color:var(--dssync-faint);font-size:10.5px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -201,11 +212,12 @@ window.__ModuleLoader__.load({
       '.dssync-bubble.open .dssync-collapse-in{opacity:1;transform:none}',
       '.dssync-panel{padding:2px 10px 4px;max-height:250px;overflow:auto}',
       '.dssync-rowline{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:6px;font-size:11.5px}',
+      '.dssync-rowline.focus{background:rgba(240,182,74,.08);box-shadow:inset 2px 0 0 rgba(240,182,74,.65)}',
       '.dssync-rowline .name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dssync-muted)}',
       '.dssync-rowline .name.child{padding-left:12px;color:var(--dssync-faint)}',
       '.dssync-rowline .tag{margin-left:auto;color:var(--dssync-faint);font-size:10px;white-space:nowrap}',
-      '.dssync-st{width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:var(--dssync-faint)}',
-      '.dssync-st.ok{background:#22c55e}.dssync-st.bad{background:#ef4444}.dssync-st.run{background:#f0b64a}',
+      '.dssync-st{position:relative;width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:var(--dssync-faint);overflow:visible}',
+      '.dssync-st.ok{background:#22c55e}.dssync-st.bad{background:#ef4444}.dssync-st.run{background:#f0b64a}.dssync-st.waiting{background:#f59e0b}',
       '.dssync-error{margin:0 8px 8px;padding:8px 9px;border:1px solid rgba(239,68,68,.24);border-radius:8px;background:rgba(239,68,68,.09);color:#ffb1b1;font-size:11px;line-height:1.5}',
       '.dssync-foot{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--dssync-line);color:var(--dssync-faint);font-size:10.5px}',
       '.dssync-foot .spacer{flex:1 1 auto}',
@@ -293,14 +305,15 @@ window.__ModuleLoader__.load({
 
     function createModel() {
       var snapshot = {
-        loading: true, setup: null, status: null, workspaces: null,
+        loading: true, setup: null, status: null, workspaces: null, config: null,
         error: null, toast: null, replacePlan: null,
       }
       var listeners = new Set()
       var pollTimer = null
-      var streamTimer = null
       var streamAbort = null
       var streamFailedUntil = 0
+      var streamLastAt = 0
+      var watchdogTimer = null
       var lastVersion = -1
       var hidden = false
       var toastTimer = null
@@ -351,28 +364,21 @@ window.__ModuleLoader__.load({
         return text
       }
 
+      function clearWatchdog() {
+        if (watchdogTimer !== null) {
+          clearInterval(watchdogTimer)
+          watchdogTimer = null
+        }
+      }
+
       function handleStreamStatus(status) {
         if (disposed) return
-        if (!acceptStatus(status)) return
-        if (statusActive(status)) {
-          if (streamTimer !== null) {
-            clearTimeout(streamTimer)
-            streamTimer = null
-          }
-          return
-        }
-        if (streamTimer !== null) clearTimeout(streamTimer)
-        streamTimer = setTimeout(function () {
-          streamTimer = null
-          closeStream()
-        }, 2500)
+        streamLastAt = Date.now()
+        acceptStatus(status)
       }
 
       function closeStream() {
-        if (streamTimer !== null) {
-          clearTimeout(streamTimer)
-          streamTimer = null
-        }
+        clearWatchdog()
         if (streamAbort !== null) {
           var controller = streamAbort
           streamAbort = null
@@ -385,13 +391,18 @@ window.__ModuleLoader__.load({
         if (disposed || streamAbort !== null) return
         var controller = new AbortController()
         streamAbort = controller
+        streamLastAt = Date.now()
         function fail(error) {
           if (streamAbort !== controller) return
+          clearWatchdog()
           streamAbort = null
           streamFailedUntil = Date.now() + 3000
           schedule()
         }
-        fetch(API + '/events?until=idle', {
+        // 不使用 until=idle：空闲时也保持一条长连接。后台自动同步可能在任何
+        // 时刻启动，客户端不能等到“发现 running”才去连接 SSE，否则会错过
+        // 前几秒甚至大半进度。连接建立时服务端会立即发一帧全量快照。
+        fetch(API + '/events', {
           credentials: 'same-origin',
           headers: { accept: 'text/event-stream' },
           signal: controller.signal,
@@ -401,6 +412,17 @@ window.__ModuleLoader__.load({
             throw new Error('SSE 不可用')
           }
           streamFailedUntil = 0
+          streamLastAt = Date.now()
+          clearWatchdog()
+          watchdogTimer = setInterval(function () {
+            if (streamAbort !== controller) return
+            if (Date.now() - streamLastAt <= 40_000) return
+            clearWatchdog()
+            streamAbort = null
+            controller.abort()
+            streamFailedUntil = Date.now() + 1000
+            schedule()
+          }, 10_000)
           var reader = response.body.getReader()
           var decoder = new TextDecoder()
           var buffer = ''
@@ -408,12 +430,14 @@ window.__ModuleLoader__.load({
             return reader.read().then(function (result) {
               if (streamAbort !== controller) return
               if (result.done) {
+                clearWatchdog()
                 streamAbort = null
-                if (statusActive(snapshot.status)) streamFailedUntil = Date.now() + 3000
+                streamFailedUntil = Date.now() + 1000
                 schedule()
                 return
               }
               buffer += decoder.decode(result.value, { stream: true })
+              streamLastAt = Date.now()
               buffer = consumeSse(buffer)
               return pump()
             }, function (error) {
@@ -431,36 +455,13 @@ window.__ModuleLoader__.load({
         if (pollTimer !== null) clearTimeout(pollTimer)
         pollTimer = null
         if (disposed || hidden) return
-        var status = snapshot.status
-        if (status === null) return
-        if (statusActive(status)) {
-          if (streamAbort === null) {
-            if (Date.now() < streamFailedUntil) {
-              pollTimer = setTimeout(function () { refreshStatus() }, 1000)
-            } else {
-              openStream()
-            }
-          }
+        if (streamAbort !== null) return
+        if (Date.now() < streamFailedUntil) {
+          // SSE 短暂失败时用 /status 兜底，恢复后重新挂长连接。
+          pollTimer = setTimeout(function () { refreshStatus() }, 1000)
           return
         }
-        if (streamAbort !== null) {
-          if (streamTimer === null) {
-            streamTimer = setTimeout(function () {
-              streamTimer = null
-              closeStream()
-            }, 1000)
-          }
-          return
-        }
-        var scheduler = status.scheduler || {}
-        if (scheduler.autoSync !== true) return
-        var interval = typeof scheduler.intervalMs === 'number' ? scheduler.intervalMs : 60000
-        var now = Date.now()
-        var next = typeof scheduler.nextRunAt === 'number' ? scheduler.nextRunAt : now + interval
-        var delay = Math.max(1000, Math.min(next - 1500 - now, interval - 5000))
-        pollTimer = setTimeout(function () {
-          refreshStatus()
-        }, delay)
+        openStream()
       }
 
       async function refreshStatus() {
@@ -490,37 +491,64 @@ window.__ModuleLoader__.load({
         refreshStatus()
       }
 
-      async function refreshSetup() {
+      async function refreshConfig() {
         try {
-          var setup = await fetchJson('/setup')
-          patch({ setup: setup })
-          return setup
+          var config = await fetchJson('/config')
+          if (config && config.status) acceptStatus(config.status)
+          patch({
+            config: config,
+            setup: config ? config.setup : snapshot.setup,
+            workspaces: config ? config.workspaces : snapshot.workspaces,
+            loading: false,
+          })
+          return config
         } catch (error) {
-          patch({ error: errorText(error) })
-          return null
+          // 旧版 host 还没有 /config：退回旧端点，避免升级期间整页失效。
+          try {
+            var values = await Promise.all([fetchJson('/setup'), fetchJson('/status')])
+            var fallback = { setup: values[0], status: values[1], workspaces: null }
+            acceptStatus(values[1])
+            try { fallback.workspaces = await fetchJson('/workspaces') } catch (_) { /* 允许暂不可用 */ }
+            patch({
+              config: null,
+              setup: fallback.setup,
+              workspaces: fallback.workspaces,
+              loading: false,
+            })
+            return fallback
+          } catch (fallbackError) {
+            patch({ loading: false, error: errorText(fallbackError) })
+            return null
+          }
+        } finally {
+          // refreshAll 以前会顺带调用 refreshStatus；改成 /config 后必须显式
+          // 重新排期，否则初始状态不会再打开 SSE / 轮询。
+          schedule()
         }
       }
 
+      async function refreshSetup() {
+        var config = await refreshConfig()
+        return config ? config.setup : null
+      }
+
       async function refreshWorkspaces() {
-        try {
-          var workspaces = await fetchJson('/workspaces')
-          patch({ workspaces: workspaces })
-          return workspaces
-        } catch (error) {
-          patch({ error: errorText(error) })
-          return null
-        }
+        var config = await refreshConfig()
+        return config ? config.workspaces : null
       }
 
       function refreshAll() {
         if (inflight !== null) return inflight
-        inflight = Promise.all([refreshStatus(), refreshSetup()]).then(function (values) {
+        // /config 可能包含远端清单，不能让它挡住第一帧状态；先拿便宜的
+        // /status 打开 SSE/轮询，再等聚合快照。
+        if (snapshot.status === null) void refreshStatus()
+        inflight = refreshConfig().then(function (config) {
           inflight = null
-          return values
+          return config
         }, function (error) {
           inflight = null
           patch({ error: errorText(error) })
-          return []
+          return null
         })
         return inflight
       }
@@ -592,7 +620,7 @@ window.__ModuleLoader__.load({
       function dispose() {
         disposed = true
         if (pollTimer !== null) clearTimeout(pollTimer)
-        if (streamTimer !== null) clearTimeout(streamTimer)
+        clearWatchdog()
         if (streamAbort !== null) {
           var controller = streamAbort
           streamAbort = null
@@ -606,6 +634,7 @@ window.__ModuleLoader__.load({
         getSnapshot: getSnapshot,
         subscribe: subscribe,
         refreshAll: refreshAll,
+        refreshConfig: refreshConfig,
         refreshStatus: refreshStatus,
         onVisibilityChange: onVisibilityChange,
         refreshSetup: refreshSetup,
@@ -643,13 +672,63 @@ window.__ModuleLoader__.load({
       }, toast ? toast.text : '')
     }
 
+    var STAGE_LABELS = {
+      reading: '读取中',
+      planning: '计算中',
+      sealing: '加密中',
+      uploading: '上传中',
+      committing: '提交中',
+      downloading: '下载中',
+      verifying: '校验中',
+      applying: '写入中',
+      flushing: '落盘中',
+      projecting: '预热标题',
+      attaching: '挂载中',
+      'waiting-write': '等待官方写入',
+      'waiting-live': '等待会话关闭',
+      'waiting-cwd': '等待 cwd 处理',
+      'waiting-retry': '等待重试',
+      done: '已完成',
+      failed: '失败',
+    }
+
+    function isWaitingStage(stage) {
+      return stage === 'waiting-write' || stage === 'waiting-live'
+        || stage === 'waiting-cwd' || stage === 'waiting-retry'
+    }
+
+    function isActiveStage(stage) {
+      return stage !== undefined && stage !== null && !isWaitingStage(stage)
+        && stage !== 'done' && stage !== 'failed'
+    }
+
+    function sessionStage(session) {
+      if (session && session.stage) return session.stage
+      if (session && session.pull && session.pull.stage) return session.pull.stage
+      if (session && session.push && session.push.stage) return session.push.stage
+      return undefined
+    }
+
+    function stageLabel(stage) {
+      return STAGE_LABELS[stage] || ''
+    }
+
+    function sessionOngoing(session) {
+      if (!session) return false
+      if (session.phase === 'running') return true
+      var stage = sessionStage(session)
+      return isActiveStage(stage) || isWaitingStage(stage)
+    }
+
     function statusDot(status) {
       if (status === null) return 'warn'
+      var sessions = Array.isArray(status.sessions) ? status.sessions : []
+      if (sessions.some(function (session) { return isActiveStage(sessionStage(session)) })) return 'syncing'
+      if (sessions.some(function (session) { return isWaitingStage(sessionStage(session)) })) return 'waiting'
       if (status.running) return 'syncing'
       if (status.lastError !== null) return 'bad'
       var lease = status.deviceLease
       if (lease && (lease.state === 'foreign' || lease.state === 'lost')) return 'warn'
-      var sessions = Array.isArray(status.sessions) ? status.sessions : []
       if (sessions.some(function (session) { return session.phase === 'failed' || session.phase === 'blocked' })) return 'bad'
       if (sessions.some(function (session) {
         return session.phase === 'deferred' || session.cwdPending === true
@@ -768,9 +847,9 @@ window.__ModuleLoader__.load({
       return {
         serverUrl: source.serverUrl !== undefined ? source.serverUrl : (fallback.serverUrl || ''),
         deviceName: source.deviceName !== undefined ? source.deviceName : (fallback.deviceName || ''),
-        excludedSessionIds: Array.isArray(source.excludedSessionIds)
-          ? source.excludedSessionIds.slice()
-          : (Array.isArray(fallback.excludedSessionIds) ? fallback.excludedSessionIds.slice() : []),
+        syncSessionIds: Array.isArray(source.syncSessionIds)
+          ? source.syncSessionIds.slice()
+          : (Array.isArray(fallback.syncSessionIds) ? fallback.syncSessionIds.slice() : []),
         autoBindSamePath: source.autoBindSamePath !== undefined ? source.autoBindSamePath === true : fallback.autoBindSamePath === true,
         autoSync: source.autoSync !== undefined ? source.autoSync !== false : fallback.autoSync !== false,
         intervalMs: source.intervalMs !== undefined ? source.intervalMs : (fallback.intervalMs || 60000),
@@ -1084,6 +1163,9 @@ window.__ModuleLoader__.load({
       var messageState = useState(null)
       var message = messageState[0]
       var setMessage = messageState[1]
+      var dirtyState = useState(false)
+      var dirty = dirtyState[0]
+      var setDirty = dirtyState[1]
       var lastRevision = useRef(revision)
       var loadedWorkspaces = useRef(false)
 
@@ -1098,10 +1180,12 @@ window.__ModuleLoader__.load({
         if (revision !== lastRevision.current) {
           lastRevision.current = revision
           setFields(fieldsFrom(formState && formState.value, state.setup))
+          setDirty(false)
         }
       }, [revision])
 
       function set(key, value) {
+        setDirty(true)
         setFields(function (previous) {
           var next = Object.assign({}, previous)
           next[key] = value
@@ -1110,12 +1194,13 @@ window.__ModuleLoader__.load({
       }
 
       function toggleSession(sessionId) {
+        setDirty(true)
         setFields(function (previous) {
-          var list = previous.excludedSessionIds.slice()
+          var list = previous.syncSessionIds.slice()
           var index = list.indexOf(sessionId)
           if (index >= 0) list.splice(index, 1)
           else list.push(sessionId)
-          return Object.assign({}, previous, { excludedSessionIds: list })
+          return Object.assign({}, previous, { syncSessionIds: list })
         })
       }
 
@@ -1131,9 +1216,9 @@ window.__ModuleLoader__.load({
           return false
         }
         var ops = [
-          { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
-          { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
-          { op: 'set', path: ['excludedSessionIds'], value: fields.excludedSessionIds.slice() },
+          ...serverLocked ? [] : [{ op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() }],
+          ...deviceLocked ? [] : [{ op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() }],
+          { op: 'set', path: ['syncSessionIds'], value: fields.syncSessionIds.slice() },
           { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
           { op: 'set', path: ['intervalMs'], value: Number(fields.intervalMs) || 60000 },
@@ -1163,6 +1248,7 @@ window.__ModuleLoader__.load({
         try {
           if (!await persistFields()) return
           await model.refreshAll()
+          setDirty(false)
           setMessage({ bad: false, text: '设置已保存' })
           model.toast('设置已保存')
         } catch (error) {
@@ -1221,16 +1307,16 @@ window.__ModuleLoader__.load({
       if (props.view === 'summary') {
         var setup = state.setup
         var summarySessions = state.workspaces && Array.isArray(state.workspaces.sessions) ? state.workspaces.sessions : []
-        var excludedNow = fields.excludedSessionIds || []
-        var selected = summarySessions.filter(function (session) { return excludedNow.indexOf(session.sessionId) < 0 }).length
+        var selectedIds = fields.syncSessionIds || []
+        var selected = summarySessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
         return h('span', null, '自部署同步 · ' + (setup && setup.configured ? '已配置' : '未配置') + ' · ' + selected + ' 个根会话')
       }
 
       var workspaces = state.workspaces
       var candidates = workspaces ? workspaces.workspaces : []
       var sessions = workspaces && Array.isArray(workspaces.sessions) ? workspaces.sessions : []
-      var excludedIds = fields.excludedSessionIds || []
-      var includedCount = sessions.filter(function (session) { return excludedIds.indexOf(session.sessionId) < 0 }).length
+      var selectedIds = fields.syncSessionIds || []
+      var includedCount = sessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
       var sessionGroups = candidates.filter(function (item) {
         return sessions.some(function (session) { return session.workspacePath === item.path })
       })
@@ -1238,22 +1324,38 @@ window.__ModuleLoader__.load({
       var tokenConfigured = setupInfo ? setupInfo.hasToken : false
       var passConfigured = setupInfo ? setupInfo.hasPassphrase : false
       var disabled = busy !== '' || formState.status !== 'ready' || !formState.writable
+      var serverLocked = setupInfo !== null && setupInfo.serverUrlSource === 'env'
+      var deviceLocked = setupInfo !== null && setupInfo.deviceNameSource === 'env'
+      var tokenLocked = setupInfo !== null && setupInfo.tokenSource === 'env'
+      var passLocked = setupInfo !== null && setupInfo.passphraseSource === 'env'
+      var savebar = h('div', { className: 'dssync-savebar' },
+        h('span', { className: dirty ? 'dirty' : 'clean' },
+          busy === 'save' ? '正在保存…' : dirty ? '有未保存修改' : '非敏感配置已保存'),
+        h('span', { className: 'spacer' }),
+        h('button', {
+          className: 'dssync-pill primary', type: 'button',
+          disabled: disabled || busy === 'save' || !dirty,
+          onClick: save,
+        }, busy === 'save' ? '保存中…' : '保存配置'))
 
       return h('div', { className: 'dssync dssync-page' },
+        savebar,
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
             h('h3', null, '连接'),
             h('span', null, '自部署服务端')),
           h('div', { className: 'dssync-grid' },
-            h(Field, { id: 'dssync-server', label: '服务端地址', hint: '填写后测试服务端与 token。' },
+            h(Field, { id: 'dssync-server', label: '服务端地址', hint: serverLocked ? '由环境变量设置，设置页不可修改。' : '填写后测试服务端与 token。' },
               h('input', {
                 id: 'dssync-server', value: fields.serverUrl, spellCheck: false,
+                disabled: serverLocked,
                 placeholder: 'http://127.0.0.1:8787',
                 onChange: function (event) { set('serverUrl', event.target.value) },
               })),
-            h(Field, { id: 'dssync-device', label: '设备名称', hint: '用于日志与设备台账。' },
+            h(Field, { id: 'dssync-device', label: '设备名称', hint: deviceLocked ? '由环境变量设置，设置页不可修改。' : '用于日志与设备台账。' },
               h('input', {
                 id: 'dssync-device', value: fields.deviceName,
+                disabled: deviceLocked,
                 onChange: function (event) { set('deviceName', event.target.value) },
               }))),
           h('div', { className: 'dssync-btnrow' },
@@ -1266,30 +1368,32 @@ window.__ModuleLoader__.load({
             h('h3', null, '凭据'),
             h('span', null, '保存到 DSH 凭据库，不写进普通配置')),
           h('div', { className: 'dssync-grid' },
-            h(Field, { id: 'dssync-token', label: '设备 token', hint: tokenConfigured ? '已配置；留空保持不变。' : '由服务端管理台或 CLI 签发。' },
+            h(Field, { id: 'dssync-token', label: '设备 token', hint: tokenLocked ? '由环境变量设置，设置页不可修改。' : tokenConfigured ? '已配置；留空保持不变。' : '由服务端管理台或 CLI 签发。' },
               h('input', {
                 id: 'dssync-token', type: 'password', value: token, autoComplete: 'off',
+                disabled: tokenLocked,
                 placeholder: tokenConfigured ? '已配置；留空保持不变' : '粘贴 token',
-                onChange: function (event) { setToken(event.target.value) },
+                onChange: function (event) { setDirty(true); setToken(event.target.value) },
               })),
-            h(Field, { id: 'dssync-pass', label: '同步口令', hint: passConfigured ? '已配置；留空保持不变。所有设备必须使用同一口令。' : '用于派生端到端加密密钥；所有设备必须一致。' },
+            h(Field, { id: 'dssync-pass', label: '同步口令', hint: passLocked ? '由环境变量设置，设置页不可修改。' : passConfigured ? '已配置；留空保持不变。所有设备必须使用同一口令。' : '用于派生端到端加密密钥；所有设备必须一致。' },
               h('input', {
                 id: 'dssync-pass', type: 'password', value: passphrase, autoComplete: 'new-password',
+                disabled: passLocked,
                 placeholder: passConfigured ? '已配置；留空保持不变' : '设置同步口令',
-                onChange: function (event) { setPassphrase(event.target.value) },
+                onChange: function (event) { setDirty(true); setPassphrase(event.target.value) },
               }))),
           h('div', { className: 'dssync-note' }, '同步口令必须与其它设备一致；加解密参数还取决于服务端地址，建议各设备填写同一个规范地址（如 http://127.0.0.1:8787），不要混用 localhost/127.0.0.1 或省略 //。口令或地址不同都会导致加解密参数不符、无法解密。'),
           h('div', { className: 'dssync-note' }, '口令丢失后，云端内容无法解密。凭据引用：' + CREDENTIAL_REFS.token + ' / ' + CREDENTIAL_REFS.passphrase)),
 
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
-            h('h3', null, '同步范围'),
-            h('span', null, '按根会话选择；子代理跟随')),
+            h('h3', null, '上传范围'),
+            h('span', null, '仅本地根会话；拉取由工作区绑定决定')),
           h('div', { className: 'dssync-btnrow' },
             h('button', {
               className: 'dssync-pill', type: 'button', disabled: disabled || sessions.length === 0,
               onClick: function () {
-                set('excludedSessionIds', includedCount === sessions.length ? sessions.map(function (session) { return session.sessionId }) : [])
+                set('syncSessionIds', includedCount === sessions.length ? [] : sessions.map(function (session) { return session.sessionId }))
               },
             }, includedCount === sessions.length && sessions.length > 0 ? '清空会话' : '全选会话'),
             h('span', { className: 'dssync-note' }, '同步 ' + includedCount + ' / ' + sessions.length + ' 个根会话'),
@@ -1299,26 +1403,26 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'dssync-note warn' }, '还没有可同步的根会话。')
             : h('div', { className: 'dssync-sessionlist' }, sessionGroups.map(function (workspace) {
               var workspaceSessions = sessions.filter(function (session) { return session.workspacePath === workspace.path })
-              var workspaceSelected = workspaceSessions.filter(function (session) { return excludedIds.indexOf(session.sessionId) < 0 }).length
+              var workspaceSelected = workspaceSessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
               return h('div', { className: 'dssync-sessiongroup', key: workspace.path },
                 h('div', { className: 'dssync-sessiongroup-head' },
                   h('b', null, workspace.title || workspace.path),
                   h('span', null, workspace.path),
                   h('span', null, workspaceSelected + ' / ' + workspaceSessions.length)),
                 workspaceSessions.map(function (session) {
-                  var excluded = excludedIds.indexOf(session.sessionId) >= 0
-                  return h('label', { className: 'dssync-session' + (excluded ? ' off' : ''), key: session.sessionId },
-                    h('input', { type: 'checkbox', checked: !excluded, onChange: function () { toggleSession(session.sessionId) } }),
+                  var checked = selectedIds.indexOf(session.sessionId) >= 0
+                  return h('label', { className: 'dssync-session' + (checked ? '' : ' off'), key: session.sessionId },
+                    h('input', { type: 'checkbox', checked: checked, onChange: function () { toggleSession(session.sessionId) } }),
                     h('span', { className: 'dssync-session-check' }, '✓'),
                     h('span', { className: 'dssync-session-main' },
                       h('b', { title: session.sessionId }, displaySessionTitle(props.titleOf, session.sessionId)),
                       h('span', null, shortDisplaySessionId(session.sessionId) + ' · ' + new Date(session.createdAt).toLocaleString())),
                     h('span', { className: 'dssync-session-meta' },
                       h('span', null, session.subagentSessions + ' 个子代理'),
-                      h('span', { className: 'dssync-session-status' + (excluded ? ' off' : '') }, excluded ? '已排除' : '同步')))
+                      h('span', { className: 'dssync-session-status' + (checked ? '' : ' off') }, checked ? '同步' : '未选中')))
                 }))
             })),
-          h('div', { className: 'dssync-note' }, '选择只在本设备生效；取消勾选不会删除远端历史。')),
+          h('div', { className: 'dssync-note' }, '默认不选中任何会话；勾选只决定本机上传，不决定拉取。绑定工作区后会自动拉取该工作区的远端会话，取消勾选不会删除远端历史。')),
 
         h('section', { className: 'dssync-sec' },
           h('div', { className: 'dssync-sechead' },
@@ -1372,10 +1476,8 @@ window.__ModuleLoader__.load({
             h(Switch, { checked: fields.includeSubagents, disabled: disabled, label: '同步子代理会话', onChange: function (value) { set('includeSubagents', value) } }))),
 
         h('div', { className: 'dssync-btnrow' },
-          h('button', { className: 'dssync-pill primary', type: 'button', disabled: disabled || busy === 'save', onClick: save }, busy === 'save' ? '保存中…' : '保存'),
           h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || busy === 'sync', onClick: syncNow }, busy === 'sync' ? '同步中…' : '立即同步'),
           h('span', { className: 'spacer' }),
-          setupInfo && setupInfo.lastSuccess ? null : null,
           message ? h('span', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null),
         h(Toast, { model: model }))
     }
@@ -1460,11 +1562,11 @@ window.__ModuleLoader__.load({
 
       function toggleSession(sessionId) {
         setFields(function (previous) {
-          var list = previous.excludedSessionIds.slice()
+          var list = previous.syncSessionIds.slice()
           var index = list.indexOf(sessionId)
           if (index >= 0) list.splice(index, 1)
           else list.push(sessionId)
-          return Object.assign({}, previous, { excludedSessionIds: list })
+          return Object.assign({}, previous, { syncSessionIds: list })
         })
       }
 
@@ -1488,7 +1590,7 @@ window.__ModuleLoader__.load({
         var ops = [
           { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
           { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
-          { op: 'set', path: ['excludedSessionIds'], value: fields.excludedSessionIds.slice() },
+          { op: 'set', path: ['syncSessionIds'], value: fields.syncSessionIds.slice() },
           { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
           { op: 'set', path: ['intervalMs'], value: Number(fields.intervalMs) || 60000 },
@@ -1601,8 +1703,8 @@ window.__ModuleLoader__.load({
       var workspaces = state.workspaces
       var candidates = workspaces ? workspaces.workspaces : []
       var sessions = workspaces && Array.isArray(workspaces.sessions) ? workspaces.sessions : []
-      var excludedIds = fields.excludedSessionIds || []
-      var includedCount = sessions.filter(function (session) { return excludedIds.indexOf(session.sessionId) < 0 }).length
+      var selectedIds = fields.syncSessionIds || []
+      var includedCount = sessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
       var steps = ['连接', '凭据', '会话', '映射', '完成']
       var body
       if (step === 0) {
@@ -1631,7 +1733,7 @@ window.__ModuleLoader__.load({
             h('button', {
               className: 'dssync-pill', type: 'button',
               onClick: function () {
-                set('excludedSessionIds', includedCount === sessions.length ? sessions.map(function (session) { return session.sessionId }) : [])
+                set('syncSessionIds', includedCount === sessions.length ? [] : sessions.map(function (session) { return session.sessionId }))
               },
             }, includedCount === sessions.length && sessions.length > 0 ? '清空会话' : '全选会话'),
             h('span', { className: 'dssync-note' }, '同步 ' + includedCount + ' / ' + sessions.length + ' 个根会话')),
@@ -1640,25 +1742,25 @@ window.__ModuleLoader__.load({
             : h('div', { className: 'dssync-sessionlist' }, candidates.map(function (workspace) {
               var workspaceSessions = sessions.filter(function (session) { return session.workspacePath === workspace.path })
               if (workspaceSessions.length === 0) return null
-              var workspaceSelected = workspaceSessions.filter(function (session) { return excludedIds.indexOf(session.sessionId) < 0 }).length
+              var workspaceSelected = workspaceSessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
               return h('div', { className: 'dssync-sessiongroup', key: workspace.path },
                 h('div', { className: 'dssync-sessiongroup-head' },
                   h('b', null, workspace.title || workspace.path),
                   h('span', null, workspace.path),
                   h('span', null, workspaceSelected + ' / ' + workspaceSessions.length)),
                 workspaceSessions.map(function (session) {
-                  var excluded = excludedIds.indexOf(session.sessionId) >= 0
-                  return h('label', { className: 'dssync-session' + (excluded ? ' off' : ''), key: session.sessionId },
-                    h('input', { type: 'checkbox', checked: !excluded, onChange: function () { toggleSession(session.sessionId) } }),
+                  var checked = selectedIds.indexOf(session.sessionId) >= 0
+                  return h('label', { className: 'dssync-session' + (checked ? '' : ' off'), key: session.sessionId },
+                    h('input', { type: 'checkbox', checked: checked, onChange: function () { toggleSession(session.sessionId) } }),
                     h('span', { className: 'dssync-session-main' },
                       h('b', { title: session.sessionId }, displaySessionTitle(props.titleOf, session.sessionId)),
                       h('span', null, shortDisplaySessionId(session.sessionId) + ' · ' + new Date(session.createdAt).toLocaleString())),
                     h('span', { className: 'dssync-session-meta' },
                       h('span', null, session.subagentSessions + ' 个子代理'),
-                      h('span', { className: 'dssync-session-status' + (excluded ? ' off' : '') }, excluded ? '已排除' : '同步')))
+                      h('span', { className: 'dssync-session-status' + (checked ? '' : ' off') }, checked ? '同步' : '未选中')))
                 }))
             })),
-          h('div', { className: 'dssync-note' }, '选择只在本设备生效；子代理跟随根会话。'),
+          h('div', { className: 'dssync-note' }, '默认不选中任何会话；勾选只决定本机上传；绑定工作区后会自动拉取该工作区的远端会话。'),
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else if (step === 3) {
@@ -1853,32 +1955,83 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
+      var panelRef = useRef(null)
+      var focusRef = useRef(null)
+      var followState = useState(true)
+      var follow = followState[0]
+      var setFollow = followState[1]
+      var focusSessions = status && Array.isArray(status.sessions) ? status.sessions : []
+      var currentFocus = focusSessions.find(function (session) {
+        return session.sessionId === focusRef.current && sessionOngoing(session)
+      })
+      var focusSession = currentFocus || focusSessions.find(sessionOngoing)
+      var focusSessionId = focusSession ? focusSession.sessionId : null
+
+      useEffect(function () {
+        focusRef.current = focusSessionId
+        if (!visible || !open || !follow || focusSessionId === null || panelRef.current === null) return
+        var panel = panelRef.current
+        var rows = panel.querySelectorAll('[data-session-id]')
+        var target = null
+        for (var index = 0; index < rows.length; index += 1) {
+          if (rows[index].getAttribute('data-session-id') === focusSessionId) {
+            target = rows[index]
+            break
+          }
+        }
+        if (target === null) return
+        var panelRect = panel.getBoundingClientRect()
+        var rowRect = target.getBoundingClientRect()
+        if (rowRect.top >= panelRect.top && rowRect.bottom <= panelRect.bottom) return
+        if (typeof target.scrollIntoView === 'function') {
+          target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        }
+      }, [focusSessionId, follow, open, visible, status && status.statusVersion])
+
+      function pauseFollowOnUserScroll() {
+        if (!follow || focusSessionId === null) return
+        setFollow(false)
+      }
+
+      function resumeFollow() {
+        setFollow(true)
+      }
+
       if (setup === null || !setup.configured) return h(Toast, { model: model })
 
       var sessions = status && Array.isArray(status.sessions) ? status.sessions.slice() : []
       var total = sessions.length
       var done = sessions.filter(function (session) { return session.phase === 'done' }).length
-      var skipped = sessions.filter(function (session) { return session.phase === 'skipped' }).length
+      var planned = sessions.filter(function (session) { return session.phase === 'planned' }).length
       var deferred = sessions.filter(function (session) { return session.phase === 'deferred' }).length
       var blockedCount = sessions.filter(function (session) { return session.phase === 'blocked' }).length
       var failed = sessions.some(function (session) { return session.phase === 'failed' })
       var running = status && status.running
+      var activeStage = sessions.map(sessionStage).find(isActiveStage)
+      var waitingStage = sessions.map(sessionStage).find(isWaitingStage)
+      var activeCount = sessions.filter(sessionOngoing).length
+      var headerStageLabel = stageLabel(activeStage) || stageLabel(waitingStage)
       var lease = status && status.deviceLease
       var leaseBlocked = lease && (lease.state === 'foreign' || lease.state === 'lost')
       var title = failed ? '同步失败'
         : blockedCount > 0 ? '需要处理'
           : leaseBlocked ? '只读同步'
             : running ? '正在同步'
-              : deferred > 0 ? '部分待处理' : '同步完成'
+              : waitingStage ? '等待处理'
+                : deferred > 0 ? '部分待处理' : '同步完成'
       var subtitle = failed ? '有会话未完成，已暂停'
         : blockedCount > 0 ? blockedCount + ' 个会话历史分叉，已阻止继续写入'
           : leaseBlocked ? (lease.state === 'foreign'
             ? '另一台设备持有全局同步锁；本机只拉取'
             : '全局同步租约丢失；本机只拉取并重试')
-            : running ? (total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
-              : deferred > 0 ? deferred + ' 个会话等待拉取/关闭/cwd 处理'
-                : total === 0 ? '还没有同步记录'
-                  : (done + skipped) + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
+            : running ? (headerStageLabel !== ''
+              ? headerStageLabel + ' · ' + activeCount + ' 个会话'
+              : total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
+              : waitingStage ? (headerStageLabel + ' · ' + activeCount + ' 个会话')
+                : deferred > 0 ? deferred + ' 个会话等待拉取/关闭/cwd 处理'
+                  : planned > 0 ? planned + ' 个会话待开始'
+                    : total === 0 ? '还没有同步记录'
+                      : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
       var dot = statusDot(status)
       var segments = sessions.map(function (session) {
         var bad = session.phase === 'failed' || session.phase === 'blocked'
@@ -1932,11 +2085,11 @@ window.__ModuleLoader__.load({
 
       function onIcon() {
         if (visible) collapse()
-        else expand(true)
+        else { expand(true); model.refreshStatus() }
       }
 
       function onHead() {
-        if (!visible) { expand(true); return }
+        if (!visible) { expand(true); model.refreshStatus(); return }
         setOpen(function (value) { return !value })
       }
 
@@ -1958,7 +2111,7 @@ window.__ModuleLoader__.load({
 
       function onListToggle(event) {
         event.stopPropagation()
-        if (!visible) expand(true)
+        if (!visible) { expand(true); model.refreshStatus() }
         else setOpen(function (value) { return !value })
       }
 
@@ -2074,19 +2227,30 @@ window.__ModuleLoader__.load({
         var isBlocked = blockedEntry !== null
         var isResolved = decisionEntry !== null
         var decisionTag = isResolved ? (decisionEntry.action === 'ignore' ? '已忽略' : '已强行写入') : ''
+        var stage = sessionStage(session)
+        var waitingStage = isWaitingStage(stage)
+        var stageText = stage === 'done' || stage === 'failed' ? '' : stageLabel(stage)
         var tag = isBlocked ? '分叉'
           : isResolved ? decisionTag
             : session.phase === 'failed' ? '失败'
               : session.phase === 'blocked' ? '分叉'
-                : session.phase === 'skipped' ? '已跳过'
-                  : session.phase === 'done' ? '已完成'
-                    : session.phase === 'running' ? '同步中'
-                      : session.phase === 'deferred'
-                        ? (session.live ? '已加载'
-                          : session.remoteAhead ? '远端领先'
-                            : session.unmapped ? '待映射'
-                              : session.cwdPending ? 'cwd 外' : '等待')
-                        : '等待'
+                : waitingStage ? (stageText || '等待')
+                  : session.push && session.push.status === 'local-ahead' ? '本地领先'
+                    : session.push && session.push.status === 'remote-ahead' ? '远端领先'
+                      : session.pull && session.pull.status === 'remote-ahead' ? '远端领先'
+                        : session.phase === 'planned'
+                          ? (session.pull && session.pull.status === 'planned' ? '待拉取'
+                            : session.push && session.push.status === 'planned' ? '待上传' : '待开始')
+                          : stageText !== '' && session.phase !== 'done' && session.phase !== 'skipped' ? stageText
+                            : session.phase === 'skipped' ? '未选上传'
+                              : session.phase === 'done' ? '已同步'
+                                : session.phase === 'running' ? '同步中'
+                                  : session.phase === 'deferred'
+                                    ? (session.live ? '已加载'
+                                      : session.remoteAhead ? '远端领先'
+                                        : session.unmapped ? '待映射'
+                                          : session.cwdPending ? 'cwd 外' : '等待')
+                                    : '等待'
         var counts = []
         var liveRunning = session.phase === 'running'
         if (session.push && session.push.totalEvents > 0 && (liveRunning || session.push.doneEvents > 0)) {
@@ -2104,10 +2268,16 @@ window.__ModuleLoader__.load({
           counts.push('↓ ' + session.pending.download)
         }
         var attention = tag === '远端领先' || tag === '已加载' || tag === '待映射' || tag === 'cwd 外'
+        var queued = tag === '本地领先' || tag === '远端领先' || tag === '待拉取' || tag === '待上传'
         var stateClass = isBlocked || session.phase === 'failed' ? 'bad'
           : session.phase === 'done' || session.phase === 'skipped' ? 'ok'
-            : session.phase === 'running' || attention || isResolved ? 'run' : ''
-        return h('div', { className: 'dssync-rowline', key: session.sessionId },
+            : waitingStage || queued ? 'waiting'
+              : session.phase === 'running' || attention || isResolved ? 'run' : ''
+        return h('div', {
+          className: 'dssync-rowline' + (focusSessionId === session.sessionId ? ' focus' : ''),
+          key: session.sessionId,
+          'data-session-id': session.sessionId,
+        },
           h('span', { className: 'dssync-st ' + stateClass }),
           h('span', { className: 'name' }, sessionLabel(session.sessionId)),
           counts.length > 0 ? h('span', { className: 'dssync-events' }, counts.join(' · ')) : null,
@@ -2140,7 +2310,7 @@ window.__ModuleLoader__.load({
       h('div', { className: 'dssync-label' },
         h('b', null, title),
         h('span', null, subtitle)),
-      h('span', { className: 'dssync-count' }, (done + skipped) + '/' + total),
+      h('span', { className: 'dssync-count' }, done + '/' + total),
       h('button', {
         className: 'dssync-chev', type: 'button', 'aria-label': open ? '收起同步会话列表' : '展开同步会话列表',
         'aria-expanded': open, onClick: onListToggle,
@@ -2148,7 +2318,12 @@ window.__ModuleLoader__.load({
 
       var panel = h('div', { className: 'dssync-collapse' },
         h('div', { className: 'dssync-collapse-in' },
-          h('div', { className: 'dssync-panel' }, rows.length > 0
+          h('div', {
+            className: 'dssync-panel',
+            ref: panelRef,
+            onWheel: pauseFollowOnUserScroll,
+            onTouchMove: pauseFollowOnUserScroll,
+          }, rows.length > 0
             ? rows
             : h('div', { className: 'dssync-note' }, '暂无会话记录')),
           leaseBlocked ? h('div', { className: 'dssync-error' }, lease.state === 'foreign'
@@ -2156,8 +2331,11 @@ window.__ModuleLoader__.load({
             : '全局同步租约丢失；本机暂停上传并重试') : null,
           status && status.lastError ? h('div', { className: 'dssync-error' }, status.lastError.message + (status.retryCount > 0 ? ' · 已重试 ' + status.retryCount + ' 次' : '')) : null,
           h('div', { className: 'dssync-foot' },
-            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blockedCount > 0 ? '有分叉待处理' : deferred > 0 ? '有会话待处理' : '全部完成'),
+            h('span', null, running ? '正在同步…' : failed ? '已暂停' : blockedCount > 0 ? '有分叉待处理' : deferred > 0 ? '有会话待处理' : planned > 0 ? '等待开始' : '全部完成'),
             h('span', { className: 'spacer' }),
+            !follow && focusSessionId !== null
+              ? h('button', { className: 'dssync-mini', type: 'button', onClick: resumeFollow }, '回到当前同步')
+              : null,
             h('button', { className: 'dssync-mini', type: 'button', disabled: syncing || running, 'aria-busy': syncing, onClick: triggerSync }, syncing || running ? '同步中…' : '立即同步'),
             h('button', { className: 'dssync-mini', type: 'button', onClick: props.openSettings }, '设置'))))
 
@@ -2239,6 +2417,35 @@ window.__ModuleLoader__.load({
       ctx.effect(function () { return function () { style.remove() } }, 'dsh-session-cloudsync: styles')
       ctx.effect(function () { return function () { model.dispose() } }, 'dsh-session-cloudsync: model')
       model.refreshAll()
+
+      // 同步完成后让 DSH 客户端重新拉一次 session/list：拉取 attach 的会话、
+      // 投影缓存里的标题和工作区分组才会进入已有窗口，而不需要用户手动刷新。
+      var lastFinishedRunId = -1
+      var lastSessionRefreshKey = ''
+      function refreshSessionList() {
+        try {
+          if (!ctx.sessions || typeof ctx.sessions.refresh !== 'function') return
+          var result = ctx.sessions.refresh()
+          if (result && typeof result.catch === 'function') result.catch(function () {})
+        } catch (error) {
+          // 列表刷新失败不能影响同步状态界面。
+        }
+      }
+      model.subscribe(function () {
+        var status = model.getSnapshot().status
+        if (!status || !status.run || status.run.state !== 'finished') return
+        var sessions = Array.isArray(status.sessions) ? status.sessions : []
+        var key = sessions.map(function (session) {
+          var pull = session.pull || {}
+          var push = session.push || {}
+          return [session.sessionId, session.phase, pull.status || '', pull.applied || '', push.status || ''].join(':')
+        }).join('|')
+        if (status.run.id !== lastFinishedRunId || key !== lastSessionRefreshKey) {
+          lastFinishedRunId = status.run.id
+          lastSessionRefreshKey = key
+          refreshSessionList()
+        }
+      })
 
       var credentials = ctx.get('remote.credentials')
       var settings = ctx.get('remote.settings')

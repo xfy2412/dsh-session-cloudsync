@@ -1,8 +1,8 @@
 # cwd 可移植性：跨设备会话里的工作目录
 
 > 状态：**最终设计**（2026-10-21）。插件未公开发布，不考虑历史数据迁移。
-> 决策经过见 [DECISIONS.md](DECISIONS.md)；会话身份见 [RECONCILE.md](RECONCILE.md)；
-> 用户协议见 [USAGE-AGREEMENT.md](USAGE-AGREEMENT.md)。
+> 决策经过见 [DECISIONS.md](../plans/DECISIONS.md)；会话身份见 [RECONCILE.md](../sync/RECONCILE.md)；
+> 用户协议见 [USAGE-AGREEMENT.md](../guides/USAGE-AGREEMENT.md)。
 >
 > 结论先行：**header canonical，`working-directory/change` 保持 raw；不做 cwd
 > canonical 投影；`nonPortable` 只是本地警告；修正在接收端追加。**
@@ -47,7 +47,7 @@ DSH 源码关系：
 - 工具调用/消息里提到的外部路径；
 - 远端工作区没有本地绑定（`unmapped`）；
 - 另一个独立工作区（不同 `workspaceKey`）；
-- 被本地排除的根会话（`excludedSessionIds`）。
+- 不在本地白名单里的根会话（`syncSessionIds`）。
 
 ### 1.2 canonical 只用于 header，不是文件 checksum
 

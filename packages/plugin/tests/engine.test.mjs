@@ -246,6 +246,29 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       assert.equal(liveCurrent.sessions[0].status, 'up-to-date')
       assert.equal(liveCurrent.revision, mapped.revision)
 
+      // 本地落后但官方/其他插件已持有 write：先读判断，再探测 write；
+      // 冲突必须归为 write-owned，而不是 error/unknown。
+      const ownedStore = fakeStore(header, events(0, 1))
+      const originalOpen = ownedStore.open
+      ownedStore.open = async (id, access) => {
+        if (access === 'write') {
+          const error = new Error(`session "${id}" is already owned by an active write handle`)
+          error.name = 'SessionAlreadyOwnedError'
+          throw error
+        }
+        return originalOpen(id)
+      }
+      const owned = await pullOnce({
+        persistence: ownedStore,
+        sessions,
+        config,
+        workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
+      }, { revision: 0 })
+      assert.equal(owned.sessions[0].status, 'write-owned')
+      assert.equal(owned.sessions[0].pendingEvents, 4)
+      assert.equal(ownedStore.sessions.get(sessionId).events.length, 2)
+      assert.ok(owned.revision < mapped.revision, 'write-owned 必须把游标停在会话之前')
+
       const unmappedStore = fakeStore(undefined)
       const unmapped = await pullOnce({
         persistence: unmappedStore,
@@ -256,15 +279,15 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       assert.equal(unmapped.sessions[0].status, 'unmapped')
       assert.equal(unmappedStore.sessions.has(sessionId), false)
 
-      const excludedStore = fakeStore(undefined)
-      const excluded = await pullOnce({
-        persistence: excludedStore,
+      const pulledStore = fakeStore(undefined)
+      const pulled = await pullOnce({
+        persistence: pulledStore,
         sessions,
-        config: { ...config, excludedSessionIds: [sessionId] },
+        config: { ...config, syncSessionIds: [] },
         workspacePathOf: () => 'D:/mapped',
       })
-      assert.equal(excluded.sessions[0].status, 'excluded')
-      assert.equal(excludedStore.sessions.has(sessionId), false)
+      assert.equal(pulled.sessions[0].status, 'pulled')
+      assert.equal(pulledStore.sessions.has(sessionId), true)
     } finally {
       await close()
       db.close()
@@ -627,7 +650,7 @@ test('拉取引擎：一个只读阶段失败后继续其他安全会话', async
   }
 })
 
-test('推送引擎：本地排除根会话时不推送', async () => {
+test('推送引擎：白名单为空时不推送', async () => {
   const header = { id: 'session-no-allowlist', version: 4, createdAt: 1, isSeeded: false, delegationDepth: 0, cwd: 'D:/work' }
   const report = await syncOnce({
     persistence: fakePersistence(header, { events: events(0, 2) }),
@@ -636,7 +659,7 @@ test('推送引擎：本地排除根会话时不推送', async () => {
       serverUrl: 'http://127.0.0.1:1',
       token: 'token',
       passphrase: 'pass',
-      excludedSessionIds: [header.id],
+      syncSessionIds: [],
     },
   })
   assert.equal(report.configured, true)
@@ -645,7 +668,7 @@ test('推送引擎：本地排除根会话时不推送', async () => {
   ])
 })
 
-test('推送引擎：默认同步子代理闭包，子先父后，被排除的根跳过', async () => {
+test('推送引擎：白名单只选根时同步其子代理闭包', async () => {
   const temp = createTempHome('plugin-closure')
   try {
     const db = openDatabase(temp.dataDir)
@@ -682,7 +705,7 @@ test('推送引擎：默认同步子代理闭包，子先父后，被排除的�
           serverUrl: base,
           token: device.token,
           passphrase: 'closure pass',
-          excludedSessionIds: [other.id],
+          syncSessionIds: [root.id],
         },
         isTailOpen: () => false,
       })

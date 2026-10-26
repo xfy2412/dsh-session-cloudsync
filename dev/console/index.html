@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>DSH 双实例控制台</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d1014;
+    --panel: #15191f;
+    --panel-2: #10141a;
+    --line: #29303a;
+    --line-soft: #20262e;
+    --text: #e6e9ee;
+    --muted: #8d98a7;
+    --faint: #66717e;
+    --blue: #6b9cff;
+    --green: #58c98a;
+    --amber: #f0b64a;
+    --red: #ff7b72;
+    --mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  button, input { font: inherit; }
+  button {
+    color: var(--text);
+    background: #222a34;
+    border: 1px solid #35404d;
+    border-radius: 6px;
+    padding: 4px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { background: #2c3743; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: #244c8d; border-color: #3b6fbd; }
+  button.primary:hover { background: #2c5da8; }
+  button.danger { background: #4a2929; border-color: #6d3b3b; }
+  button.danger:hover { background: #5b3131; }
+  code, .mono { font-family: var(--mono); }
+  header {
+    min-height: 54px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 9px 14px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+    background: #11151b;
+  }
+  .brand { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+  .brand strong { font-size: 14px; letter-spacing: .2px; }
+  .brand span { color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .brand .mark {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 4px rgba(88, 201, 138, .12);
+  }
+  .top-actions { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+  .global-state { color: var(--muted); font-size: 11px; margin-right: 4px; }
+  .sync-state {
+    color: var(--muted); font-size: 10.5px;
+    border: 1px solid var(--line); border-radius: 5px;
+    padding: 3px 7px; white-space: nowrap;
+    background: transparent; font-family: inherit; cursor: pointer;
+  }
+  .sync-state:hover { color: var(--text); border-color: var(--faint); }
+  .sync-state[data-tone="ok"] { color: var(--green); border-color: rgba(88, 201, 138, .35); }
+  .sync-state[data-tone="run"] { color: var(--amber); border-color: rgba(240, 182, 74, .35); }
+  .sync-state[data-tone="bad"] { color: var(--red); border-color: rgba(255, 123, 114, .4); }
+  main {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1.2fr) minmax(220px, 0.8fr);
+    gap: 8px;
+    padding: 8px;
+  }
+  .frames, .logs { min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    overflow: hidden;
+  }
+  .card-head {
+    flex: 0 0 auto;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--line-soft);
+    background: #181d24;
+  }
+  .side-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .badge {
+    display: inline-grid; place-items: center;
+    min-width: 20px; height: 20px;
+    border-radius: 5px;
+    background: #253247; color: #a8c2ff;
+    font: 11px/1 var(--mono); font-weight: 600;
+  }
+  .side-title b { font-size: 12px; font-weight: 600; }
+  .status {
+    display: inline-flex; align-items: center; gap: 4px;
+    color: var(--faint); font-size: 10.5px;
+    white-space: nowrap;
+  }
+  .status::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: #505a66;
+  }
+  .status[data-tone="ok"]::before { background: var(--green); }
+  .status[data-tone="run"]::before { background: var(--amber); box-shadow: 0 0 0 3px rgba(240, 182, 74, .12); }
+  .status[data-tone="bad"]::before { background: var(--red); }
+  .card-actions { margin-left: auto; display: flex; gap: 5px; align-items: center; }
+  .card-actions button, .card-actions a {
+    font-size: 11px; padding: 3px 7px;
+  }
+  .card-actions a {
+    color: var(--text); text-decoration: none;
+    border: 1px solid #35404d; border-radius: 6px; background: #222a34;
+  }
+  .card-actions a:hover { background: #2c3743; }
+  .url-row {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 6px;
+    min-height: 25px;
+    padding: 2px 8px;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--faint);
+    background: #12171d;
+    font-size: 10.5px;
+  }
+  .url-row code {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: #9fb0c7;
+  }
+  .url-row button { padding: 1px 6px; font-size: 10px; }
+  .frame-body { position: relative; flex: 1 1 auto; min-height: 0; background: #0b0e12; }
+  iframe { width: 100%; height: 100%; border: 0; background: #0b0e12; display: block; }
+  .empty {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    padding: 20px;
+    color: var(--faint); font-size: 12px;
+    text-align: center; pointer-events: none;
+    background: radial-gradient(circle at 50% 40%, #141b25, #0b0e12 70%);
+  }
+  .empty.hidden { display: none; }
+  .log-card .card-head { min-height: 34px; flex-wrap: wrap; row-gap: 4px; }
+  .log-actions {
+    flex: 1 0 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .log-actions input[type="search"] {
+    width: 130px;
+    padding: 3px 7px;
+    border: 1px solid #35404d; border-radius: 5px;
+    background: #0f141a; color: var(--text); font-size: 11px;
+  }
+  .log-actions label { color: var(--faint); font-size: 10.5px; display: inline-flex; gap: 3px; align-items: center; }
+  .log-actions button { font-size: 10.5px; padding: 2px 6px; }
+  .log-list {
+    flex: 1 1 auto; min-height: 0;
+    overflow: auto;
+    padding: 5px 7px 8px;
+    background: var(--panel-2);
+    font: 11.5px/1.5 var(--mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .log-line { display: flex; gap: 6px; padding: 1px 0; border-radius: 3px; }
+  .log-line:hover { background: rgba(255, 255, 255, .025); }
+  .log-time { flex: 0 0 auto; color: #56616f; }
+  .log-source { flex: 0 0 auto; max-width: 108px; overflow: hidden; text-overflow: ellipsis; color: #7f8fa4; }
+  .log-msg { min-width: 0; color: #cbd3df; }
+  .log-line[data-level="warn"] .log-msg { color: var(--amber); }
+  .log-line[data-level="error"] .log-msg { color: #ff9a93; }
+  .log-line[data-level="error"] .log-source { color: #d8847f; }
+  .log-empty { color: var(--faint); padding: 8px 2px; }
+  .hint { color: var(--faint); font-size: 10.5px; }
+  dialog.clean-dialog {
+    width: min(440px, calc(100vw - 32px));
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 0;
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, .55);
+  }
+  dialog.clean-dialog::backdrop { background: rgba(0, 0, 0, .58); }
+  .clean-body { padding: 16px; }
+  .clean-body h2 { margin: 0 0 4px; font-size: 15px; }
+  .clean-body p { margin: 0 0 12px; color: var(--muted); font-size: 11.5px; }
+  .clean-list { display: grid; gap: 7px; margin: 12px 0 16px; }
+  .clean-list label {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--line-soft); border-radius: 7px;
+    background: #12171d;
+    cursor: pointer;
+  }
+  .clean-list label:hover { border-color: var(--line); }
+  .clean-list b { display: block; font-size: 12px; }
+  .clean-list small { display: block; color: var(--faint); font-size: 10.5px; margin-top: 2px; }
+  .clean-list input { margin-top: 2px; }
+  .clean-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .clean-actions a { color: var(--accent); font-size: 11px; align-self: center; text-decoration: none; }
+  .setup-code {
+    display: flex; align-items: center; gap: 8px;
+    margin: 12px 0; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: #12171d;
+  }
+  .setup-code code {
+    flex: 1; color: var(--green); font-family: ui-monospace, Consolas, monospace;
+    font-size: 18px; letter-spacing: .12em; user-select: all;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #2d3743; border-radius: 999px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  @media (max-width: 760px) {
+    body { overflow: auto; }
+    header { height: auto; min-height: 54px; flex-wrap: wrap; padding: 8px 10px; }
+    .top-actions { margin-left: 0; width: 100%; }
+    main { display: flex; flex-direction: column; height: auto; }
+    .frames, .logs { grid-template-columns: 1fr; }
+    .frames { height: 68vh; }
+    .logs { height: 52vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <strong>DSH 双实例控制台</strong>
+    <span>A/B 独立 home · stdout + 插件 dev sink</span>
+  </div>
+  <div class="top-actions">
+    <button class="sync-state" id="sync-state" type="button" data-tone="" title="查看同步服务端">同步服务端：准备中…</button>
+    <span class="global-state" id="global-state">连接控制台…</span>
+    <button id="restore">恢复预配置</button>
+    <button id="import-open">导入大会话</button>
+    <button id="prepare-all" class="primary">准备两套</button>
+    <button id="start-all">启动两套</button>
+    <button id="stop-all" class="danger">停止两套</button>
+    <button id="clean-open" class="danger">清理数据</button>
+  </div>
+</header>
+
+<main>
+  <section class="frames" aria-label="DSH 实例">
+    <article class="card" data-side="a">
+      <div class="card-head">
+        <div class="side-title">
+          <span class="badge">A</span>
+          <b>实例 A</b>
+          <span class="status" id="status-a" data-tone="">未启动</span>
+        </div>
+        <div class="card-actions">
+          <button data-action="start" data-side="a">启动</button>
+          <button data-action="stop" data-side="a">停止</button>
+          <button data-action="reload" data-side="a">刷新页面</button>
+          <a id="open-a" href="#" target="_blank" rel="noreferrer">新窗口</a>
+        </div>
+      </div>
+      <div class="url-row">
+        <code id="url-a">等待启动</code>
+        <button data-action="copy-url" data-side="a">复制 URL</button>
+      </div>
+      <div class="frame-body">
+        <iframe id="iframe-a" title="DSH 实例 A" referrerpolicy="no-referrer"></iframe>
+        <div class="empty" id="empty-a">点“启动”后在这里显示 DSH A<br><span class="hint">独立 DSH_HOME · 端口 <span id="port-a">3090</span></span></div>
+      </div>
+    </article>
+
+    <article class="card" data-side="b">
+      <div class="card-head">
+        <div class="side-title">
+          <span class="badge">B</span>
+          <b>实例 B</b>
+          <span class="status" id="status-b" data-tone="">未启动</span>
+        </div>
+        <div class="card-actions">
+          <button data-action="start" data-side="b">启动</button>
+          <button data-action="stop" data-side="b">停止</button>
+          <button data-action="reload" data-side="b">刷新页面</button>
+          <a id="open-b" href="#" target="_blank" rel="noreferrer">新窗口</a>
+        </div>
+      </div>
+      <div class="url-row">
+        <code id="url-b">等待启动</code>
+        <button data-action="copy-url" data-side="b">复制 URL</button>
+      </div>
+      <div class="frame-body">
+        <iframe id="iframe-b" title="DSH 实例 B" referrerpolicy="no-referrer"></iframe>
+        <div class="empty" id="empty-b">点“启动”后在这里显示 DSH B<br><span class="hint">独立 DSH_HOME · 端口 <span id="port-b">3091</span></span></div>
+      </div>
+    </article>
+  </section>
+
+  <section class="logs" aria-label="实例控制台">
+    <article class="card log-card" data-side="a">
+      <div class="card-head">
+        <div class="side-title">
+          <span class="badge">A</span>
+          <b>控制台 A</b>
+          <span class="status" id="log-count-a" data-tone="">0 条</span>
+        </div>
+        <div class="log-actions">
+          <input id="filter-a" type="search" placeholder="过滤 A…" aria-label="过滤 A 日志">
+          <label><input id="pause-a" type="checkbox"> 暂停滚动</label>
+          <button data-action="clear-log" data-side="a">清空</button>
+          <button data-action="test-log" data-side="a">测试日志</button>
+          <button data-action="copy-ingest" data-side="a">接收地址</button>
+        </div>
+      </div>
+      <div class="log-list" id="log-a" role="log" aria-live="polite"></div>
+    </article>
+
+    <article class="card log-card" data-side="b">
+      <div class="card-head">
+        <div class="side-title">
+          <span class="badge">B</span>
+          <b>控制台 B</b>
+          <span class="status" id="log-count-b" data-tone="">0 条</span>
+        </div>
+        <div class="log-actions">
+          <input id="filter-b" type="search" placeholder="过滤 B…" aria-label="过滤 B 日志">
+          <label><input id="pause-b" type="checkbox"> 暂停滚动</label>
+          <button data-action="clear-log" data-side="b">清空</button>
+          <button data-action="test-log" data-side="b">测试日志</button>
+          <button data-action="copy-ingest" data-side="b">接收地址</button>
+        </div>
+      </div>
+      <div class="log-list" id="log-b" role="log" aria-live="polite"></div>
+    </article>
+  </section>
+</main>
+
+<dialog class="clean-dialog" id="clean-dialog">
+  <form class="clean-body" method="dialog">
+    <h2>清理数据</h2>
+    <p>删除后不可恢复。DSH 实例会先停止；同步服务端清理会同时重建设备 token 和口令。</p>
+    <div class="clean-list">
+      <label>
+        <input type="checkbox" data-clean="a">
+        <span><b>DSH A</b><small>删除 A 的 DSH_HOME、文档、会话与插件安装状态。</small></span>
+      </label>
+      <label>
+        <input type="checkbox" data-clean="b">
+        <span><b>DSH B</b><small>删除 B 的 DSH_HOME、文档、会话与插件安装状态。</small></span>
+      </label>
+      <label>
+        <input type="checkbox" data-clean="server">
+        <span><b>同步服务端</b><small>删除本地 sync-data、token/passphrase；A/B 会停止，下次准备时重建。</small></span>
+      </label>
+    </div>
+    <div class="clean-actions">
+      <button value="cancel">取消</button>
+      <button type="button" class="danger" id="clean-confirm">清理选中</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="clean-dialog" id="import-dialog">
+  <form class="clean-body" method="dialog">
+    <h2>导入大会话</h2>
+    <p>用形状轨迹生成约 69,587 事件、52 MB 的合成 v4 会话；不含真实内容。运行中的实例会先停止再重启。</p>
+    <div class="clean-list">
+      <label>
+        <input type="checkbox" data-import="a" checked>
+        <span><b>DSH A</b><small>写入 A 的默认工作区，并在侧栏挂载。</small></span>
+      </label>
+      <label>
+        <input type="checkbox" data-import="b">
+        <span><b>DSH B</b><small>写入 B 的默认工作区；两边使用同一会话 id，适合本地对比，不适合制造分叉。</small></span>
+      </label>
+    </div>
+    <p class="hint">测 A 推、B 拉时只勾 A；两边都勾只会各有一份相同副本，不会产生需要同步的差异。</p>
+    <div class="clean-actions">
+      <button value="cancel">取消</button>
+      <button type="button" class="primary" id="import-confirm">生成并导入</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="clean-dialog" id="server-dialog">
+  <form class="clean-body" method="dialog">
+    <h2>同步服务端</h2>
+    <p id="server-summary">正在读取服务端状态…</p>
+    <div class="setup-code" id="setup-code-row" hidden>
+      <code id="setup-code"></code>
+      <button type="button" id="setup-copy">复制</button>
+    </div>
+    <p id="server-hint"></p>
+    <div class="clean-actions">
+      <button type="button" id="sync-restart">重启服务端</button>
+      <a id="server-admin" href="#" target="_blank" rel="noreferrer">打开管理台</a>
+      <button value="cancel">关闭</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const sideIds = ['a', 'b']
+const logs = { a: [], b: [] }
+const filter = { a: '', b: '' }
+const paused = { a: false, b: false }
+const state = { sides: new Map(), consolePort: 3092, sync: undefined, importTrace: undefined }
+const renderQueued = { a: false, b: false }
+const $ = (id) => document.getElementById(id)
+
+/** 调控制台 API。 */
+async function api(path, options) {
+  const response = await fetch(path, {
+    headers: { 'content-type': 'application/json' },
+    ...options,
+  })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok || body.ok === false) {
+    throw new Error(body.error || `HTTP ${response.status}`)
+  }
+  return body
+}
+
+/** 格式时间。 */
+function timeOf(ms) {
+  const date = new Date(ms)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
+}
+
+/** 状态文案。 */
+function statusOf(side) {
+  if (side === undefined) return ['连接中', '']
+  if (side.setup === 'preparing') return ['准备中', 'run']
+  if (side.setup === 'error') return ['准备失败', 'bad']
+  if (side.status === 'error') return ['错误', 'bad']
+  if (side.status === 'starting') return ['启动中', 'run']
+  if (side.url !== null) return ['运行中', 'ok']
+  if (side.running) return ['等待页面', 'run']
+  if (side.setup === 'ready') return ['已准备', '']
+  return ['未启动', '']
+}
+
+/** 把状态应用到两侧。 */
+function renderState(data) {
+  state.consolePort = data.consolePort
+  state.sync = data.sync
+  state.importTrace = data.importTrace
+  state.sides = new Map(data.sides.map((side) => [side.id, side]))
+  const importButton = $('import-open')
+  importButton.disabled = data.importTrace?.available !== true
+  importButton.title = data.importTrace?.available === true
+    ? `轨迹：${data.importTrace.path}`
+    : '缺少 tests/fixtures/shapes/b0e-69587.trace.json'
+  const sync = data.sync
+  const syncEl = $('sync-state')
+  if (sync === undefined) {
+    syncEl.textContent = '同步服务端：未知'
+    syncEl.dataset.tone = ''
+    syncEl.title = ''
+  } else if (sync.mode === 'off') {
+    syncEl.textContent = '同步服务端：已关闭'
+    syncEl.dataset.tone = ''
+    syncEl.title = 'DEV_CONSOLE_SYNC=off'
+  } else if (sync.error) {
+    syncEl.textContent = '同步服务端：错误'
+    syncEl.dataset.tone = 'bad'
+    syncEl.title = sync.error
+  } else if (sync.ready) {
+    syncEl.textContent = sync.mode === 'external' ? '同步服务端：外部' : '同步服务端：本地'
+    syncEl.dataset.tone = 'ok'
+    syncEl.title = sync.url
+  } else if (sync.status === 'starting' || sync.status === 'preparing') {
+    syncEl.textContent = '同步服务端：准备中…'
+    syncEl.dataset.tone = 'run'
+    syncEl.title = sync.url
+  } else {
+    syncEl.textContent = '同步服务端：未启动'
+    syncEl.dataset.tone = ''
+    syncEl.title = sync.url
+  }
+  syncEl.title = `${syncEl.title || '同步服务端'} · 点击查看服务端`
+  $('global-state').textContent = data.sides.every((side) => side.url !== null)
+    ? 'A/B 就绪'
+    : data.sides.some((side) => side.running) ? '实例运行中' : '实例未启动'
+  $('global-state').className = 'global-state'
+  for (const side of data.sides) {
+    const [label, tone] = statusOf(side)
+    const status = $(`status-${side.id}`)
+    status.textContent = label
+    status.dataset.tone = tone
+    $(`port-${side.id}`).textContent = String(side.port)
+    const url = $(`url-${side.id}`)
+    url.textContent = side.url ?? (side.setup === 'error' ? side.lastError ?? '准备失败' : '等待启动')
+    url.title = side.url ?? ''
+    const open = $(`open-${side.id}`)
+    open.href = side.url ?? '#'
+    open.style.opacity = side.url === null ? '.4' : '1'
+    open.style.pointerEvents = side.url === null ? 'none' : 'auto'
+    const count = $(`log-count-${side.id}`)
+    count.dataset.tone = side.pluginInstalled ? '' : 'run'
+    updateLogCount(side.id)
+    syncIframe(side)
+  }
+}
+
+/** 更新日志条数，保留当前过滤条件。 */
+function updateLogCount(side) {
+  const needle = filter[side].trim().toLowerCase()
+  const matched = needle === ''
+    ? logs[side].length
+    : logs[side].filter((entry) => entry.message.toLowerCase().includes(needle)
+      || entry.source.toLowerCase().includes(needle)).length
+  const installed = state.sides.get(side)?.pluginInstalled === true
+  const configured = state.sides.get(side)?.syncConfigured === true
+  $(`log-count-${side}`).textContent = `${logs[side].length} 条${needle === '' ? '' : ` · 匹配 ${matched}`}${installed ? ' · 插件已装' : ''}${configured ? ' · 同步已配' : ''}`
+}
+
+/** 只在 URL 变化时设置 iframe，避免轮询把页面反复刷新。 */
+function syncIframe(side) {
+  const frame = $(`iframe-${side.id}`)
+  const empty = $(`empty-${side.id}`)
+  if (side.url === null) {
+    if (frame.dataset.url !== '') {
+      frame.dataset.url = ''
+      frame.src = 'about:blank'
+    }
+    empty.classList.remove('hidden')
+    return
+  }
+  if (frame.dataset.url !== side.url) {
+    frame.dataset.url = side.url
+    frame.src = side.url
+    empty.classList.add('hidden')
+  }
+}
+
+/** 拉状态。 */
+async function refresh() {
+  try {
+    renderState(await api('/api/state'))
+  } catch (error) {
+    $('global-state').textContent = `控制台不可用：${error.message}`
+    $('global-state').className = 'global-state'
+  }
+}
+
+/** 触发一个操作并给出反馈。 */
+async function action(button, path) {
+  const old = button.textContent
+  button.disabled = true
+  button.textContent = '处理中…'
+  try {
+    await api(path, { method: 'POST' })
+    await refresh()
+  } catch (error) {
+    $('global-state').textContent = `操作失败：${error.message}`
+  } finally {
+    button.disabled = false
+    button.textContent = old
+  }
+}
+
+/** 按当前过滤条件重绘一侧日志。 */
+function renderLogs(side) {
+  const list = $(`log-${side}`)
+  const needle = filter[side].trim().toLowerCase()
+  const rows = logs[side].filter((entry) => needle === ''
+    || entry.message.toLowerCase().includes(needle)
+    || entry.source.toLowerCase().includes(needle))
+  const fragment = document.createDocumentFragment()
+  if (rows.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'log-empty'
+    empty.textContent = needle === '' ? '尚无日志。启动实例后，host stdout 和插件 dev sink 会出现在这里。' : '没有匹配的日志。'
+    fragment.append(empty)
+  } else {
+    for (const entry of rows) {
+      const line = document.createElement('div')
+      line.className = 'log-line'
+      line.dataset.level = entry.level
+      const time = document.createElement('span')
+      time.className = 'log-time'
+      time.textContent = timeOf(entry.time)
+      const source = document.createElement('span')
+      source.className = 'log-source'
+      source.textContent = entry.source
+      const message = document.createElement('span')
+      message.className = 'log-msg'
+      message.textContent = entry.message
+      line.append(time, source, message)
+      fragment.append(line)
+    }
+  }
+  list.replaceChildren(fragment)
+  updateLogCount(side)
+  if (!paused[side]) list.scrollTop = list.scrollHeight
+}
+
+/** 合并同一帧内的多次日志更新。 */
+function scheduleRender(side) {
+  if (renderQueued[side]) return
+  renderQueued[side] = true
+  requestAnimationFrame(() => {
+    renderQueued[side] = false
+    renderLogs(side)
+  })
+}
+
+/** 接一侧日志 SSE。 */
+function connectLogs(side) {
+  const source = new EventSource(`/api/logs/${side}`)
+  source.addEventListener('snapshot', (event) => {
+    logs[side] = JSON.parse(event.data)
+    scheduleRender(side)
+  })
+  source.addEventListener('log', (event) => {
+    logs[side].push(JSON.parse(event.data))
+    if (logs[side].length > 3000) logs[side].splice(0, logs[side].length - 3000)
+    scheduleRender(side)
+  })
+  source.addEventListener('clear', () => {
+    logs[side] = []
+    scheduleRender(side)
+  })
+  source.addEventListener('error', () => {
+    // EventSource 自动重连；页面状态由 /api/state 轮询维持。
+  })
+}
+
+/** 把文本复制到剪贴板。 */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const input = document.createElement('textarea')
+    input.value = text
+    input.style.position = 'fixed'
+    input.style.opacity = '0'
+    document.body.append(input)
+    input.select()
+    document.execCommand('copy')
+    input.remove()
+  }
+}
+
+/** 绑定按钮。 */
+/** 刷新服务端初始化密钥面板。 */
+async function refreshServerDialog() {
+  const summary = $('server-summary')
+  const hint = $('server-hint')
+  const codeRow = $('setup-code-row')
+  const code = $('setup-code')
+  const restart = $('sync-restart')
+  const admin = $('server-admin')
+  try {
+    const result = await api('/api/sync/setup-code')
+    const setup = result.setup
+    const mode = result.sync?.mode ?? setup.mode
+    const stateLabel = setup.initialized ? '已初始化' : setup.serverReachable ? '未初始化' : '未运行'
+    admin.href = setup.adminUrl || `${result.sync?.url ?? ''}/admin`
+    admin.hidden = admin.href === '/admin'
+    restart.disabled = mode !== 'local' || setup.initialized === true
+    summary.textContent = `${setup.adminUrl || result.sync?.url || '同步服务端'} · ${stateLabel}`
+    if (setup.available === true) {
+      code.textContent = setup.code
+      codeRow.hidden = false
+      hint.textContent = `有效期到 ${new Date(setup.expiresAt).toLocaleTimeString()}；仅用于首次初始化管理台。`
+    } else {
+      code.textContent = ''
+      codeRow.hidden = true
+      hint.textContent = setup.reason || '当前没有可用的初始化密钥。'
+    }
+  } catch (error) {
+    summary.textContent = '读取服务端状态失败'
+    hint.textContent = error.message
+    codeRow.hidden = true
+    restart.disabled = true
+  }
+}
+
+/** 打开同步服务端面板。 */
+async function openServerDialog() {
+  const dialog = $('server-dialog')
+  if (!dialog.open) dialog.showModal()
+  await refreshServerDialog()
+}
+
+function bindActions() {
+  $('sync-state').addEventListener('click', () => void openServerDialog())
+  $('setup-copy').addEventListener('click', () => {
+    const code = $('setup-code').textContent
+    if (code) void copyText(code)
+  })
+  $('sync-restart').addEventListener('click', async (event) => {
+    const button = event.currentTarget
+    const old = button.textContent
+    button.disabled = true
+    button.textContent = '重启中…'
+    try {
+      await api('/api/sync/restart', { method: 'POST' })
+      await refresh()
+      await refreshServerDialog()
+    } catch (error) {
+      $('server-hint').textContent = `重启失败：${error.message}`
+    } finally {
+      button.disabled = false
+      button.textContent = old
+    }
+  })
+  document.querySelectorAll('[data-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const side = button.dataset.side
+      const act = button.dataset.action
+      if (act === 'start') void action(button, `/api/start/${side}`)
+      else if (act === 'stop') void action(button, `/api/stop/${side}`)
+      else if (act === 'reload') {
+        const frame = $(`iframe-${side}`)
+        const url = frame.dataset.url
+        if (url) {
+          frame.src = 'about:blank'
+          setTimeout(() => { frame.src = url }, 30)
+        }
+      } else if (act === 'copy-url') {
+        const url = state.sides.get(side)?.url
+        if (url) void copyText(url)
+      } else if (act === 'clear-log') {
+        void api(`/api/clear/${side}`, { method: 'POST' }).then(() => refresh())
+      } else if (act === 'test-log') {
+        void api(`/api/log/${side}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            entries: [{ level: 'info', source: 'console', message: `测试日志 ${new Date().toLocaleTimeString()}` }],
+          }),
+        }).catch((error) => { $('global-state').textContent = `写日志失败：${error.message}` })
+      } else if (act === 'copy-ingest') {
+        void copyText(`${location.origin}/api/log/${side}`)
+      }
+    })
+  })
+
+  $('prepare-all').addEventListener('click', (event) => void action(event.currentTarget, '/api/prepare'))
+  $('start-all').addEventListener('click', (event) => void action(event.currentTarget, '/api/start'))
+  $('stop-all').addEventListener('click', (event) => void action(event.currentTarget, '/api/stop'))
+  $('restore').addEventListener('click', (event) => void action(event.currentTarget, '/api/restore'))
+  $('import-open').addEventListener('click', () => {
+    document.querySelectorAll('[data-import]').forEach((input) => {
+      input.checked = input.dataset.import === 'a'
+    })
+    $('import-dialog').showModal()
+  })
+  $('import-confirm').addEventListener('click', async (event) => {
+    const button = event.currentTarget
+    const selected = [...document.querySelectorAll('[data-import]')]
+      .filter((input) => input.checked)
+      .map((input) => input.dataset.import)
+    if (selected.length === 0) {
+      $('global-state').textContent = '请选择要导入的实例'
+      return
+    }
+    const old = button.textContent
+    button.disabled = true
+    button.textContent = '生成并导入…'
+    try {
+      await api('/api/import-large', {
+        method: 'POST',
+        body: JSON.stringify({ sides: selected }),
+      })
+      $('import-dialog').close()
+      await refresh()
+    } catch (error) {
+      $('global-state').textContent = `导入失败：${error.message}`
+    } finally {
+      button.disabled = false
+      button.textContent = old
+    }
+  })
+  $('clean-open').addEventListener('click', () => {
+    document.querySelectorAll('[data-clean]').forEach((input) => { input.checked = false })
+    $('clean-dialog').showModal()
+  })
+  $('clean-confirm').addEventListener('click', async (event) => {
+    const button = event.currentTarget
+    const selectedSides = [...document.querySelectorAll('[data-clean="a"], [data-clean="b"]')]
+      .filter((input) => input.checked)
+      .map((input) => input.dataset.clean)
+    const server = document.querySelector('[data-clean="server"]').checked
+    if (selectedSides.length === 0 && !server) {
+      $('global-state').textContent = '请选择要清理的数据'
+      return
+    }
+    const old = button.textContent
+    button.disabled = true
+    button.textContent = '清理中…'
+    try {
+      await api('/api/clean', {
+        method: 'POST',
+        body: JSON.stringify({ sides: selectedSides, server }),
+      })
+      $('clean-dialog').close()
+      await refresh()
+    } catch (error) {
+      $('global-state').textContent = `清理失败：${error.message}`
+    } finally {
+      button.disabled = false
+      button.textContent = old
+    }
+  })
+
+  for (const side of sideIds) {
+    $(`filter-${side}`).addEventListener('input', (event) => {
+      filter[side] = event.target.value
+      scheduleRender(side)
+    })
+    $(`pause-${side}`).addEventListener('change', (event) => {
+      paused[side] = event.target.checked
+    })
+  }
+}
+
+bindActions()
+for (const side of sideIds) connectLogs(side)
+void refresh()
+setInterval(() => { void refresh() }, 1000)
+</script>
+</body>
+</html>
