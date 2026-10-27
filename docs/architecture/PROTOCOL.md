@@ -8,6 +8,10 @@
 > 2026-10-23：会话租约升级为全局单写者 `sync` 租约；上传/创建/删除需要它，拉取不需要。
 >
 > **M3/M4 语义**：同步单位是**连续事件批次**；差异见文末「M3/M4 语义」。
+>
+> **版本基线（2026-10-27）**：`PROTOCOL_VERSION = 2`。Git 历史里的 `PROTOCOL_VERSION = 1` 只存在于初始提交，
+> 从未进入 v0.0.1–v0.0.3；因此没有需要兼容的 protocol 1 用户。protocol 2 是已发布基线，继续支持 `/v1`。
+> 新增 `/v2` 摘要/批量能力优先做成增量接口，用 capability 协商；只有旧 `/v1` 语义无法表达时才提升 `PROTOCOL_VERSION`。
 
 ## 认证
 
@@ -63,7 +67,7 @@
 | GET | `/v1/vault/cursor?since=<revision>` | 设备 | Vault 记录 cursor |
 | GET | `/v1/vault/stream/:writer?from=<seq>&limit=<n>` | 设备 | 某 writer 的 Vault 记录索引 |
 
-`/v1/health` 当前只返回服务端 `version`、`protocol` 和 `now`；没有插件版本范围或 capability 声明。P7/v2 协商所需的能力列表尚未实现。
+`/v1/health` 当前只返回服务端 `version`、`protocol` 和 `now`；没有插件版本范围或 capability 声明。客户端在 `/v1`、`/v2` 之间选择前应先使用无版本的 `/health` 做能力发现；`/v1/health` 仅保留给旧客户端。`/health` 尚未实现。
 
 ### lease 与 append
 
