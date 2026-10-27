@@ -36,3 +36,6 @@ jobs:
       - run: node --check packages/server/dist/index.js
       - run: npm pack --dry-run
         working-directory: packages/server
+      # Installer syntax checks (help exits before service/Node checks).
+      - run: bash -n scripts/install.sh
+      - run: pwsh -NoProfile -File scripts/install.ps1 -Help > /dev/null

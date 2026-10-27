@@ -61,7 +61,7 @@ jobs:
         run: |
           tarball="$(npm pack --silent)"
           archive="dscs-server-${{ steps.meta.outputs.version }}.tar.gz"
-          tar -czf "$archive" dist package.json README.md LICENSE
+          tar -czf "$archive" dist web package.json README.md LICENSE
           sha256sum "$tarball" "$archive" > SHA256SUMS
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
           echo "archive=${archive}" >> "$GITHUB_OUTPUT"
