@@ -1,6 +1,7 @@
 # 设计
 
-> 状态：M1/M2 已落地；M3 传输模型已定为事件批次并已实现；M4 客户端防护做收口。
+> 状态：M1/M2 已落地；服务端 0.1.0 已切 v2-only / protocol 3，插件 0.1.0 的 v2 迁移待完成；
+> M3 传输模型已定为事件批次并已实现；M4 客户端防护做收口。
 > L2/L3 的加密附加数据层与多工作区映射见 [VAULT.md](../sync/VAULT.md)（设计稿）。
 > cwd 处理见 [CWD.md](CWD.md)；会话身份与启动对账见 [RECONCILE.md](../sync/RECONCILE.md)；
 > 最终决策过程见 [DECISIONS.md](../plans/DECISIONS.md)；术语见 [GLOSSARY.md](../guides/GLOSSARY.md)。
@@ -112,7 +113,7 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 
 会话内容预览（网页读消息/工具/推理）是 **P2**，依赖“允许服务器解密”：开启后服务端能解**所有历史批次内容**；删除 keybox 不等于收回历史，必须轮换密钥，UI 必须明确警告。
 
-同步 API（`/v1/*`，设备 token）与管理台 API（`/admin/*`，cookie 会话）分开，互不复用认证。
+同步 API（`/v2/*`，设备 token）与管理台 API（`/admin/*`，cookie 会话）分开，互不复用认证。
 
 ## 首次启动与初始化
 

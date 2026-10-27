@@ -70,7 +70,7 @@ SessionPersistenceCorruptionError: current-generation delivery marker names the 
 ## M3 实现状态
 
 - 推送：枚举 → flush → 读事件 → 远端 manifest → 增量批次 → 上传 → 租约/append；
-- 拉取：`/v1/cursor` → manifest → 下载 header/批次 → 只 apply 到 `safeThroughSeq`；
+- 拉取：`/v2/changes` → manifest → 下载 header/批次 → 只 apply 到 `safeThroughSeq`；
 - 安全字段：append 请求已携带 `tailOpen` / `safeThroughSeq`，服务端存进 manifest；
 - 真实双 home 验收：临时服务端 + 两个临时 DSH home，合成会话 **11 个事件**在 A/B 逐事件一致（header 的 `cwd` 按设备映射，符合设计）；
 - 开放尾验收：120 个闭合事件 + 1 个开放事件推送后，新设备只 apply 到 `safeThroughSeq=119`；闭合事件到达后才补到 121；

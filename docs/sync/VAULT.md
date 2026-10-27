@@ -7,6 +7,8 @@
 > 会话身份与启动对账流程见 [RECONCILE.md](RECONCILE.md)，术语见 [GLOSSARY.md](../guides/GLOSSARY.md)。
 > 使用协议见 [USAGE-AGREEMENT.md](../guides/USAGE-AGREEMENT.md)：只改 DSH 必需的 cwd 元数据，
 > 不改消息与工具调用。
+>
+> 服务端 0.1.0 起 Vault 路径为 `/v2/vault/*`，旧的 `/v1/vault/*` 已移除。
 
 ## 1. 范围
 
@@ -37,7 +39,7 @@ Vault 负责同步**会话事件之外**的加密数据：
 ### V0/V1 范围
 
 - **V0**：只做本地密钥域、记录信封、AES-GCM/AAD、记录链与篡改/重放测试；不接服务端。
-- **V1**：服务端 `/v1/vault/append|cursor|stream`、最小设备台账、`workspace/profile` 同步；不做工作区落点改变。
+- **V1**：服务端 `/v2/vault/append|cursor|stream`、最小设备台账、`workspace/profile` 同步；不做工作区落点改变。
 - **V2**：会话 manifest 增加 `workspaceKey`、本机绑定、未映射阻断和映射 UI。
 - V3 工具链/版本匹配、V4 笔记/保留策略不在 V1 范围内。
 
@@ -366,19 +368,19 @@ session manifest
 - 错误映射的恢复方式是显式重置本地同步状态并重新拉取，属于破坏性操作，不在自动流程里；
 - 不实现工作区/会话文件迁移，也不改写已有会话 header cwd。
 
-## 6. Vault 协议（V1 已实现）
+## 6. Vault 协议（V1 已实现，服务端路径为 `/v2/vault/*`）
 
-复用现有 `/v1/blobs?kind=vault` 上传密文，然后：
+复用 `/v2/blobs?kind=vault` 或 `/v2/blobs/batch`（`kind=3`）上传密文，然后：
 
 ```text
-POST   /v1/vault/lease
-DELETE /v1/vault/lease
-POST   /v1/vault/append
-GET    /v1/vault/cursor?since=<revision>
-GET    /v1/vault/stream/:writer?from=<seq>&limit=<n>
+POST   /v2/vault/lease
+DELETE /v2/vault/lease
+POST   /v2/vault/append
+GET    /v2/vault/cursor?since=<revision>
+GET    /v2/vault/stream/:writer?from=<seq>&limit=<n>
 ```
 
-`POST/DELETE /v1/vault/lease` 需要 `X-Client-Id`；资源固定为
+`POST/DELETE /v2/vault/lease` 需要 `X-Client-Id`；资源固定为
 `vault-writer:<token 的 deviceId>`。append 也带同一个 header，服务端校验租约 owner。
 
 `append` 请求：

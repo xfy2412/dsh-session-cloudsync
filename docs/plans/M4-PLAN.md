@@ -48,7 +48,7 @@
 > - 工作区落点由 V2 的 `workspaceKey` 一次性绑定决定，M4 的单一 `workspacePath` 已删除。
 > - 启动对账（候选列表/确认/忽略）与 raw 前缀校验见 [RECONCILE.md](../sync/RECONCILE.md)；实现前不能把当前“自动拉取所有远端会话”当作最终 UX。
 > - 宿主每轮 status/setup/sync 都重新读取 `.volatile()` 引用的 `.get()`，所以设置页保存后不必重启插件即可生效。测试连接不走配置热更新：按钮直接把当前输入的 `serverUrl` 交给宿主探测。
-> - B4：`GET /status`、`GET /events`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 只请求公开的 `/v1/health`，验证地址可达、确认是本插件服务端；不读配置、不带 token、不校验口令。
+> - B4：`GET /status`、`GET /events`、`GET /setup`、`GET /workspaces`、`POST /test`、`POST /sync` 全部走 `ctx.connection.fetch`。`test` 只请求公开的 `/health`，验证地址可达、确认是本插件服务端；不读配置、不带 token、不校验口令。
 > - **B3/B5 已完成**：`client/index.js` 通过 `plugins.bundle.config` 渲染自定义设置页（表单来自 `ctx.configForms.get('session-cloudsync')`），`shell.overlay` 提供首启向导与顶部气泡；非敏感字段走 settings，token/passphrase 走 `remote.credentials`；首启完成后立即触发一轮同步。首启/设置页「测试连接」都直接测当前输入，不落盘、不需要 token；首启步骤切换带方向动画，并且一旦以未配置姿态打开，后续保存不会把向导抽掉。
 
 **官方前端接口（已确认，来自本地 DSH 源码/类型）：**
@@ -74,7 +74,7 @@
   - 用户主动打开或操作过气泡后，失焦 5 秒再自动收回；焦点/指针回到气泡会取消，焦点在气泡内时不收回；手动点图标可立即收起；
   - 顶部居中、避开窗口 chrome 与标题栏；`pointer-events` 只在气泡内；不抢焦点；
   - 窄屏切底部 sheet；`aria-live="polite"`。
-- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /events`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区候选、根会话列表（含子代理计数）、本地白名单、一次性绑定、未映射工作区与 `remoteWorkspaces`（本机/远端配对表的数据源）；选择粒度是根会话，子代理跟随根，不做工作区白名单。`test` 接收 `{ serverUrl }`，直接探测 `/v1/health`，不依赖已保存配置。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
+- **API**：`GET /api/session-cloudsync/setup`、`GET /status`、`GET /events`、`GET /workspaces`、`POST /test`、`POST /sync`；全部走 `connection.fetch`，不单独发 token。`workspaces` 返回工作区候选、根会话列表（含子代理计数）、本地白名单、一次性绑定、未映射工作区与 `remoteWorkspaces`（本机/远端配对表的数据源）；选择粒度是根会话，子代理跟随根，不做工作区白名单。`test` 接收 `{ serverUrl }`，直接探测 `/health`，不依赖已保存配置。非敏感配置写回走 `ctx.remote.settings`，token/passphrase 写回走 `ctx.remote.credentials`，不另开 `POST /setup`。
 - **刷新**：空闲只按 `nextRunAt`（略提前）或最长 55s 安全轮询 `/status`；手动同步或接近排期时打开 `/events?until=idle`，终态/空闲后关闭；SSE 失败退避 1s 轮询；页面隐藏断开。
 - **动效**：状态变化才动；微交互 120–180ms、面板 220–320ms、气泡进出 320–420ms；只动 `transform` / `opacity` / `grid-template-rows`，进度用 `linear`；必须支持 `prefers-reduced-motion`。详细约定见 [UI-GUIDELINES.md](../ui/UI-GUIDELINES.md)。
 
