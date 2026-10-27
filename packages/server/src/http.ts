@@ -13,6 +13,14 @@ import { join } from 'node:path'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { PROTOCOL_VERSION, errorBody, type DeviceRef } from '../../shared/src/protocol.ts'
 import { SyncError, statusOf } from '../../shared/src/wire.ts'
+import {
+  BLOB_BATCH_CONTENT_TYPE,
+  MAX_BATCH_BLOBS,
+  MAX_BATCH_BODY_BYTES,
+  decodeBlobBatch,
+  encodeBlobBatch,
+  type BlobKind,
+} from '../../shared/src/blob-batch.ts'
 import { deriveMasterKey, newSalt } from '../../shared/src/crypto.ts'
 import { hasBlob, putBlob, readBlob } from './blobs.ts'
 import {
@@ -38,8 +46,6 @@ import {
   deleteSession,
   getManifest,
   getV2SessionSummary,
-  listChanges,
-  listBatches,
   listV2Batches,
   listV2Changes,
   listV2Sessions,
@@ -451,21 +457,24 @@ function intParam(value: string | null, fallback: number, min: number, max: numb
   return Math.min(max, Math.max(min, parsed))
 }
 
-const SYNC_LEASE_PATH = /^\/v1\/sync\/lease$/u
-const APPEND_PATH = /^\/v1\/sessions\/([^/]+)\/append$/u
-const DELETE_PATH = /^\/v1\/sessions\/([^/]+)\/delete$/u
-const MANIFEST_PATH = /^\/v1\/sessions\/([^/]+)\/manifest$/u
-const BATCHES_PATH = /^\/v1\/sessions\/([^/]+)\/batches$/u
-const CURSOR_PATH = /^\/v1\/cursor$/u
+const SYNC_LEASE_PATH = /^\/v2\/sync\/lease$/u
 const V2_SESSIONS_PATH = /^\/v2\/sessions$/u
 const V2_CHANGES_PATH = /^\/v2\/changes$/u
 const V2_SUMMARY_PATH = /^\/v2\/sessions\/([^/]+)\/summary$/u
 const V2_BATCHES_PATH = /^\/v2\/sessions\/([^/]+)\/batches$/u
+const V2_MANIFEST_PATH = /^\/v2\/sessions\/([^/]+)\/manifest$/u
 const V2_APPEND_PATH = /^\/v2\/sessions\/([^/]+)\/append$/u
-const VAULT_APPEND_PATH = /^\/v1\/vault\/append$/u
-const VAULT_LEASE_PATH = /^\/v1\/vault\/lease$/u
-const VAULT_CURSOR_PATH = /^\/v1\/vault\/cursor$/u
-const VAULT_STREAM_PATH = /^\/v1\/vault\/stream\/([^/]+)$/u
+const V2_DELETE_PATH = /^\/v2\/sessions\/([^/]+)\/delete$/u
+const DEVICES_PATH = /^\/v2\/devices$/u
+const DEVICE_PATH = /^\/v2\/devices\/([0-9a-f]+)$/u
+const BLOB_PATH = /^\/v2\/blobs\/([0-9a-f]{64})$/u
+const BLOB_BATCH_PATH = /^\/v2\/blobs\/batch$/u
+const BLOB_BATCH_READ_PATH = /^\/v2\/blobs\/batch\/read$/u
+const ME_PATH = /^\/v2\/me$/u
+const VAULT_APPEND_PATH = /^\/v2\/vault\/append$/u
+const VAULT_LEASE_PATH = /^\/v2\/vault\/lease$/u
+const VAULT_CURSOR_PATH = /^\/v2\/vault\/cursor$/u
+const VAULT_STREAM_PATH = /^\/v2\/vault\/stream\/([^/]+)$/u
 const ADMIN_DEVICE_PATH = /^\/admin\/devices\/([0-9a-f]+)$/u
 
 /**
@@ -741,20 +750,18 @@ export function createHttpServer(options: ServerOptions): Server {
           ok: true,
           server: {
             version,
-            apiVersions: [1, 2],
+            apiVersions: [2],
             protocols: [PROTOCOL_VERSION],
             schemaVersion: SERVER_SCHEMA_VERSION,
-            capabilities: ['session-summary', 'changes-cursor', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches'],
+            capabilities: ['session-summary', 'changes-cursor', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame'],
+            limits: {
+              batchBytes: MAX_BATCH_BODY_BYTES,
+              batchBlobs: MAX_BATCH_BLOBS,
+              blobBytes: maxBlobBytes,
+            },
           },
           now: Date.now(),
         })
-      },
-    },
-    {
-      method: 'GET',
-      path: /^\/v1\/health$/,
-      handler: async (_req, res) => {
-        json(res, 200, { ok: true, version, protocol: PROTOCOL_VERSION, now: Date.now() })
       },
     },
     {
@@ -856,8 +863,31 @@ export function createHttpServer(options: ServerOptions): Server {
       },
     },
     {
+      method: 'GET',
+      path: V2_MANIFEST_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, V2_MANIFEST_PATH)
+        const found = getManifest(db, id)
+        if (found === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
+        return json(res, 200, { ok: true, value: withBatchFields(found) })
+      },
+    },
+    {
       method: 'POST',
-      path: /^\/v1\/devices$/,
+      path: V2_DELETE_PATH,
+      handler: async (req, res) => {
+        const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
+        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, V2_DELETE_PATH)
+        const body = await readJson(req)
+        if (!Number.isSafeInteger(body.createdAt)) throw new SyncError('bad-request', 'createdAt 必须是整数')
+        return json(res, 200, { ok: true, value: deleteSession(db, id, device.deviceId, clientId, Number(body.createdAt)) })
+      },
+    },
+    {
+      method: 'POST',
+      path: DEVICES_PATH,
       handler: async (req, res) => {
         const auth = authenticate(db, req)
         if (auth?.role !== 'admin') return json(res, 401, errorBody('unauthorized', '需要 setup token'))
@@ -869,7 +899,7 @@ export function createHttpServer(options: ServerOptions): Server {
     },
     {
       method: 'GET',
-      path: /^\/v1\/devices$/,
+      path: DEVICES_PATH,
       handler: async (req, res) => {
         const auth = authenticate(db, req)
         if (auth?.role !== 'admin') return json(res, 401, errorBody('unauthorized', '需要 setup token'))
@@ -878,11 +908,11 @@ export function createHttpServer(options: ServerOptions): Server {
     },
     {
       method: 'DELETE',
-      path: /^\/v1\/devices\/([0-9a-f]+)$/,
+      path: DEVICE_PATH,
       handler: async (req, res) => {
         const auth = authenticate(db, req)
         if (auth?.role !== 'admin') return json(res, 401, errorBody('unauthorized', '需要 setup token'))
-        const match = /^\/v1\/devices\/([0-9a-f]+)$/.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
+        const match = DEVICE_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
         if (match === null) return json(res, 404, errorBody('not-found', '没有这个设备'))
         const revoked = revokeDevice(db, match[1]!)
         return revoked
@@ -892,7 +922,86 @@ export function createHttpServer(options: ServerOptions): Server {
     },
     {
       method: 'POST',
-      path: /^\/v1\/blobs$/,
+      path: BLOB_BATCH_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const body = await readRaw(req, MAX_BATCH_BODY_BYTES)
+        const entries = decodeBlobBatch(body)
+        const results: Array<{ sha256: string; bytes: number; dedup: boolean }> = []
+        const fresh = new Map<string, { kind: BlobKind; data: Buffer }>()
+        for (const entry of entries) {
+          const actual = createHash('sha256').update(entry.data).digest('hex')
+          if (actual !== entry.sha256) {
+            throw new SyncError('bad-request', `批量 blob 的哈希不匹配：${entry.sha256}`)
+          }
+          const existing = blobRecord(db, actual)
+          if (existing !== undefined || fresh.has(actual)) {
+            results.push({ sha256: actual, bytes: entry.data.length, dedup: true })
+            continue
+          }
+          fresh.set(actual, { kind: entry.kind, data: entry.data })
+          results.push({ sha256: actual, bytes: entry.data.length, dedup: false })
+        }
+        const newBytes = [...fresh.values()].reduce((sum, entry) => sum + entry.data.length, 0)
+        const used = usedBlobBytes(db)
+        const limit = effectiveMaxBytes()
+        if (used + newBytes > limit) {
+          throw new SyncError('quota', `存储超额：已用 ${used} 字节，本批新增 ${newBytes} 字节，上限 ${limit} 字节`)
+        }
+        for (const [sha256, entry] of fresh) {
+          await putBlob(options.dataDir, entry.data)
+          recordBlob(db, sha256, entry.data.length, entry.kind)
+        }
+        return json(res, 200, { ok: true, value: { blobs: results } })
+      },
+    },
+    {
+      method: 'POST',
+      path: BLOB_BATCH_READ_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const body = await readJson(req)
+        const raw = body.sha256
+        if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_BATCH_BLOBS) {
+          throw new SyncError('bad-request', `sha256 必须是 1–${MAX_BATCH_BLOBS} 个数组项`)
+        }
+        const hashes: string[] = []
+        for (const value of raw) {
+          if (typeof value !== 'string' || !/^[0-9a-f]{64}$/u.test(value)) {
+            throw new SyncError('bad-request', 'sha256 必须是 64 位小写十六进制')
+          }
+          hashes.push(value)
+        }
+        const kinds: BlobKind[] = []
+        for (const sha256 of hashes) {
+          if (!(await hasBlob(options.dataDir, sha256))) return json(res, 404, errorBody('not-found', `没有这个 blob：${sha256}`))
+          const record = blobRecord(db, sha256)
+          if (record === undefined) return json(res, 404, errorBody('not-found', `没有这个 blob：${sha256}`))
+          if (record.kind !== 'frame' && record.kind !== 'attachment' && record.kind !== 'vault') {
+            throw new SyncError('bad-request', `blob 类别非法：${record.kind}`)
+          }
+          kinds.push(record.kind)
+        }
+        const blobs = []
+        for (let index = 0; index < hashes.length; index += 1) {
+          blobs.push({ kind: kinds[index]!, data: await readBlob(options.dataDir, hashes[index]!) })
+        }
+        let encoded: Buffer
+        try {
+          encoded = encodeBlobBatch(blobs)
+        } catch (error: unknown) {
+          throw new SyncError('bad-request', error instanceof Error ? error.message : String(error))
+        }
+        res.statusCode = 200
+        res.setHeader('content-type', BLOB_BATCH_CONTENT_TYPE)
+        res.setHeader('content-length', encoded.length)
+        res.setHeader('cache-control', 'no-store')
+        res.end(encoded)
+      },
+    },
+    {
+      method: 'POST',
+      path: /^\/v2\/blobs$/,
       handler: async (req, res) => {
         const auth = authenticate(db, req)
         if (auth === undefined) return json(res, 401, errorBody('unauthorized', '需要设备或 setup token'))
@@ -918,7 +1027,7 @@ export function createHttpServer(options: ServerOptions): Server {
     },
     {
       method: 'HEAD',
-      path: /^\/v1\/blobs\/([0-9a-f]{64})$/,
+      path: BLOB_PATH,
       handler: async (req, res) => {
         const auth = authenticate(db, req)
         if (auth === undefined) {
@@ -926,18 +1035,18 @@ export function createHttpServer(options: ServerOptions): Server {
           res.end()
           return
         }
-        const match = /^\/v1\/blobs\/([0-9a-f]{64})$/.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
+        const match = BLOB_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
         res.statusCode = match !== null && await hasBlob(options.dataDir, match[1]!) ? 200 : 404
         res.end()
       },
     },
     {
       method: 'GET',
-      path: /^\/v1\/blobs\/([0-9a-f]{64})$/,
+      path: BLOB_PATH,
       handler: async (req, res) => {
         const auth = authenticate(db, req)
         if (auth === undefined) return json(res, 401, errorBody('unauthorized', '需要设备或 setup token'))
-        const match = /^\/v1\/blobs\/([0-9a-f]{64})$/.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
+        const match = BLOB_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
         if (match === null) return json(res, 404, errorBody('not-found', '没有这个 blob'))
         const sha256 = match[1]!
         if (!(await hasBlob(options.dataDir, sha256))) return json(res, 404, errorBody('not-found', '没有这个 blob'))
@@ -964,65 +1073,6 @@ export function createHttpServer(options: ServerOptions): Server {
         const device = requireDevice(db, req)
         const clientId = clientIdFrom(req)
         return json(res, 200, { ok: true, value: { released: releaseLease(db, SYNC_RESOURCE, device.deviceId, clientId) } })
-      },
-    },
-    {
-      method: 'POST',
-      path: APPEND_PATH,
-      handler: async (req, res) => {
-        const device = requireDevice(db, req)
-        const clientId = clientIdFrom(req)
-        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, APPEND_PATH)
-        const body = await readJson(req, MAX_APPEND_BODY_BYTES)
-        const parsed = parseAppend(body)
-        const value = appendFrames(db, options.dataDir, { sessionId: id, deviceId: device.deviceId, clientId, ...parsed })
-        return json(res, 200, { ok: true, value: withBatchFields(value) })
-      },
-    },
-    {
-      method: 'POST',
-      path: DELETE_PATH,
-      handler: async (req, res) => {
-        const device = requireDevice(db, req)
-        const clientId = clientIdFrom(req)
-        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, DELETE_PATH)
-        const body = await readJson(req)
-        if (!Number.isSafeInteger(body.createdAt)) throw new SyncError('bad-request', 'createdAt 必须是整数')
-        return json(res, 200, { ok: true, value: deleteSession(db, id, device.deviceId, clientId, Number(body.createdAt)) })
-      },
-    },
-    {
-      method: 'GET',
-      path: MANIFEST_PATH,
-      handler: async (req, res) => {
-        requireDevice(db, req)
-        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, MANIFEST_PATH)
-        const found = getManifest(db, id)
-        if (found === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
-        return json(res, 200, { ok: true, value: withBatchFields(found) })
-      },
-    },
-    {
-      method: 'GET',
-      path: BATCHES_PATH,
-      handler: async (req, res) => {
-        requireDevice(db, req)
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const id = sessionIdFrom(url.pathname, BATCHES_PATH)
-        const found = listBatches(db, id, intParam(url.searchParams.get('from'), 0, 0, Number.MAX_SAFE_INTEGER), intParam(url.searchParams.get('limit'), 500, 1, 1000))
-        if (found === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
-        return json(res, 200, { ok: true, value: withBatchFields(found) })
-      },
-    },
-    {
-      method: 'GET',
-      path: CURSOR_PATH,
-      handler: async (req, res) => {
-        requireDevice(db, req)
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const since = intParam(url.searchParams.get('since'), 0, 0, Number.MAX_SAFE_INTEGER)
-        const limit = intParam(url.searchParams.get('limit'), 200, 1, 1000)
-        return json(res, 200, { ok: true, value: listChanges(db, since, limit) })
       },
     },
     {
@@ -1298,7 +1348,7 @@ export function createHttpServer(options: ServerOptions): Server {
     },
     {
       method: 'GET',
-      path: /^\/v1\/me$/,
+      path: ME_PATH,
       handler: async (req, res) => {
         const auth = authenticate(db, req)
         if (auth === undefined) return json(res, 401, errorBody('unauthorized', '未知 token'))

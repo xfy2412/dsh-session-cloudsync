@@ -64,14 +64,14 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       const refs = sealed.map((entry) => entry.ref)
 
       // 租约：A 先拿，B 被拒。
-      assert.equal((await call(base, `/v1/sync/lease`, { method: 'POST', token: deviceA.token })).status, 200)
-      const held = await call(base, `/v1/sync/lease`, { method: 'POST', token: deviceB.token })
+      assert.equal((await call(base, `/v2/sync/lease`, { method: 'POST', token: deviceA.token })).status, 200)
+      const held = await call(base, `/v2/sync/lease`, { method: 'POST', token: deviceB.token })
       assert.equal(held.status, 409)
       assert.equal(held.body.error.code, 'lease-held')
 
       // 上传全部封帧 blob。
       for (const entry of sealed) {
-        const uploaded = await call(base, '/v1/blobs?kind=frame', { method: 'POST', token: deviceA.token, body: entry.bytes })
+        const uploaded = await call(base, '/v2/blobs?kind=frame', { method: 'POST', token: deviceA.token, body: entry.bytes })
         assert.equal(uploaded.status, 201)
         assert.equal(uploaded.body.value.sha256, entry.ref.blobSha256)
       }
@@ -84,26 +84,37 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
         formatVersion: 4,
         batches: refs,
       }
-      const created = await call(base, `/v1/sessions/${sessionId}/append`, { method: 'POST', token: deviceA.token, json: createBody })
+      const created = await call(base, `/v2/sessions/${sessionId}/append`, {
+        method: 'POST',
+        token: deviceA.token,
+        headers: { 'idempotency-key': 'create-1' },
+        json: createBody,
+      })
       assert.equal(created.status, 200)
       assert.equal(created.body.value.batchCount, 4)
       assert.equal(created.body.value.headChainHash, refs[3].chainHash)
       assert.equal(created.body.value.lastSeq, refs[3].seqTo)
 
       // 释放租约后 append 被拒。
-      assert.equal((await call(base, `/v1/sync/lease`, { method: 'DELETE', token: deviceA.token })).status, 200)
-      const noLease = await call(base, `/v1/sessions/${sessionId}/append`, { method: 'POST', token: deviceA.token, json: createBody })
+      assert.equal((await call(base, `/v2/sync/lease`, { method: 'DELETE', token: deviceA.token })).status, 200)
+      const noLease = await call(base, `/v2/sessions/${sessionId}/append`, {
+        method: 'POST',
+        token: deviceA.token,
+        headers: { 'idempotency-key': 'no-lease-1' },
+        json: createBody,
+      })
       assert.equal(noLease.status, 409)
       assert.equal(noLease.body.error.code, 'lease-held')
       // 拉取/读 manifest 不需要全局租约。
-      const readWithoutLease = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: deviceA.token })
+      const readWithoutLease = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: deviceA.token })
       assert.equal(readWithoutLease.status, 200)
 
       // 重新拿租约；base 不匹配 → diverged。
-      assert.equal((await call(base, `/v1/sync/lease`, { method: 'POST', token: deviceA.token })).status, 200)
-      const badBase = await call(base, `/v1/sessions/${sessionId}/append`, {
+      assert.equal((await call(base, `/v2/sync/lease`, { method: 'POST', token: deviceA.token })).status, 200)
+      const badBase = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
+        headers: { 'idempotency-key': 'bad-base-1' },
         json: { baseIndex: 2, baseChainHash: refs[1].chainHash, createdAt: 1000, formatVersion: 4, batches: [refs[2]] },
       })
       assert.equal(badBase.status, 409)
@@ -113,10 +124,11 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       const mutatedTail = Buffer.from(splitFrames(readFileSync(join(fixtures, 'v4-coverage.jsonl.zstd')))[3])
       mutatedTail[mutatedTail.length - 1] ^= 0xff
       const tail = sealFrame(mutatedTail, { sessionId, index: 3, seqFrom: refs[3].seqFrom, seqTo: refs[3].seqTo }, key)
-      assert.equal((await call(base, '/v1/blobs?kind=frame', { method: 'POST', token: deviceA.token, body: tail.bytes })).status, 201)
-      const replaced = await call(base, `/v1/sessions/${sessionId}/append`, {
+      assert.equal((await call(base, '/v2/blobs?kind=frame', { method: 'POST', token: deviceA.token, body: tail.bytes })).status, 201)
+      const replaced = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
+        headers: { 'idempotency-key': 'replace-tail-1' },
         json: { baseIndex: 2, baseChainHash: refs[2].chainHash, createdAt: 1000, formatVersion: 4, batches: [tail.ref] },
       })
       assert.equal(replaced.status, 200)
@@ -124,43 +136,47 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
       assert.equal(replaced.body.value.headChainHash, tail.ref.chainHash)
 
       // manifest 与分页帧引用。
-      const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: deviceA.token })
+      const manifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: deviceA.token })
       assert.equal(manifest.status, 200)
       assert.equal(manifest.body.value.manifest.batches[3].chainHash, tail.ref.chainHash)
-      const page = await call(base, `/v1/sessions/${sessionId}/batches?from=2&limit=1`, { token: deviceA.token })
+      const page = await call(base, `/v2/sessions/${sessionId}/batches?from=2&limit=1`, { token: deviceA.token })
       assert.equal(page.status, 200)
       assert.equal(page.body.value.batchCount, 4)
       assert.equal(page.body.value.batches[0].index, 2)
 
       // 墓碑：删掉后同一生命周期 append → 410。
-      const deleted = await call(base, `/v1/sessions/${sessionId}/delete`, { method: 'POST', token: deviceA.token, json: { createdAt: 1000 } })
+      const deleted = await call(base, `/v2/sessions/${sessionId}/delete`, { method: 'POST', token: deviceA.token, json: { createdAt: 1000 } })
       assert.equal(deleted.status, 200)
       assert.equal(deleted.body.value.deletedAt > 0, true)
-      const gone = await call(base, `/v1/sessions/${sessionId}/append`, {
+      const gone = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
+        headers: { 'idempotency-key': 'gone-1' },
         json: { baseIndex: -1, baseChainHash: null, createdAt: 1000, formatVersion: 4, batches: refs },
       })
       assert.equal(gone.status, 410)
       assert.equal(gone.body.error.code, 'gone')
 
       // 同 id 的新生命周期可以重建。
-      const recreated = await call(base, `/v1/sessions/${sessionId}/append`, {
+      const recreated = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: deviceA.token,
+        headers: { 'idempotency-key': 'recreate-1' },
         json: { baseIndex: -1, baseChainHash: null, createdAt: 2000, formatVersion: 4, batches: refs },
       })
       assert.equal(recreated.status, 200)
 
-      // cursor：从 0 能看到会话与旧墓碑；用最新 revision 看不到增量。
-      const cursor = await call(base, '/v1/cursor?since=0', { token: deviceA.token })
-      assert.equal(cursor.status, 200)
-      assert.equal(cursor.body.value.sessions.length, 1)
-      assert.equal(cursor.body.value.sessions[0].sessionId, sessionId)
-      assert.equal(cursor.body.value.sessions[0].deletedAt, null)
-      assert.equal(cursor.body.value.tombstones.length, 1)
-      const current = await call(base, `/v1/cursor?since=${cursor.body.value.revision}`, { token: deviceA.token })
+      // v2 变更流：当前活跃会话 + 旧生命周期墓碑；推进游标后无增量。
+      const changes = await call(base, '/v2/changes?limit=10', { token: deviceA.token })
+      assert.equal(changes.status, 200)
+      assert.equal(changes.body.value.sessions.length, 1)
+      assert.equal(changes.body.value.sessions[0].sessionId, sessionId)
+      assert.equal(changes.body.value.sessions[0].deletedAt, null)
+      assert.equal(changes.body.value.tombstones.length, 1)
+      const current = await call(base, `/v2/changes?cursor=${encodeURIComponent(changes.body.value.nextCursor)}`, { token: deviceA.token })
+      assert.equal(current.status, 200)
       assert.equal(current.body.value.sessions.length, 0)
+      assert.equal(current.body.value.tombstones.length, 0)
     } finally {
       await close()
       db.close()
@@ -180,26 +196,28 @@ test('append 拒绝未上传的 blob、非法请求与错误的 X-Device-Id', as
       const sessionId = 'session-cloudsync-errors'
       const key = sessionKeyOf(Buffer.alloc(32, 6), sessionId)
       const sealed = sealFrames(2, sessionId, key)
-      assert.equal((await call(base, `/v1/sync/lease`, { method: 'POST', token: device.token })).status, 200)
+      assert.equal((await call(base, `/v2/sync/lease`, { method: 'POST', token: device.token })).status, 200)
 
       // 没有上传 blob 的帧。
-      const missing = await call(base, `/v1/sessions/${sessionId}/append`, {
+      const missing = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,
+        headers: { 'idempotency-key': 'missing-blob-1' },
         json: { baseIndex: -1, baseChainHash: null, createdAt: 1, formatVersion: 4, batches: sealed.map((entry) => entry.ref) },
       })
       assert.equal(missing.status, 400)
 
       // 非法 baseIndex。
-      const bad = await call(base, `/v1/sessions/${sessionId}/append`, {
+      const bad = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,
+        headers: { 'idempotency-key': 'bad-base-index-1' },
         json: { baseIndex: 'x', baseChainHash: null, createdAt: 1, formatVersion: 4, batches: [] },
       })
       assert.equal(bad.status, 400)
 
       // X-Device-Id 与 token 不一致。
-      const mismatched = await call(base, `/v1/sync/lease`, {
+      const mismatched = await call(base, `/v2/sync/lease`, {
         method: 'POST',
         token: device.token,
         headers: { 'x-device-id': 'deadbeefdeadbeef' },

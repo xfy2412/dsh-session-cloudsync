@@ -8,10 +8,10 @@
  */
 
 /** 所有 API 路由的前缀。 */
-export const API_PREFIX = '/v1'
+export const API_PREFIX = '/v2'
 
 /** 当前协议版本；端点契约变化时递增。 */
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 
 /** 健康探针的成功响应。 */
 export interface HealthResponse {

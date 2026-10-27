@@ -147,6 +147,15 @@ export function assertManifest(manifest: SessionManifest): void {
   manifest.frames.forEach((frame, position) => {
     if (frame.index !== position) throw new Error(`manifest 第 ${position} 条的 index 是 ${frame.index}`)
     if (!HASH_PATTERN.test(frame.chainHash) || !HASH_PATTERN.test(frame.blobSha256)) throw new Error(`manifest 第 ${position} 条的哈希非法`)
+    if (frame.compression === undefined) {
+      if (frame.sealedVersion !== 1 || frame.compressedHash !== undefined) throw new Error(`manifest 第 ${position} 条缺少压缩元数据`)
+    } else {
+      if (frame.compression !== 'zstd') throw new Error(`manifest 第 ${position} 条的压缩方式非法`)
+      if (frame.sealedVersion < 2) throw new Error(`manifest 第 ${position} 条的压缩帧版本非法`)
+      if (frame.compressedHash === undefined || !HASH_PATTERN.test(frame.compressedHash)) {
+        throw new Error(`manifest 第 ${position} 条的 compressedHash 非法`)
+      }
+    }
   })
   const last = manifest.frames[manifest.frames.length - 1]
   if ((last === undefined ? -1 : last.seqTo) !== manifest.lastSeq) throw new Error('manifest 的 lastSeq 与最后一帧不一致')
@@ -201,6 +210,9 @@ export function manifestDigest(manifest: SessionManifest): string {
       keyId: frame.keyId,
       seqFrom: frame.seqFrom,
       seqTo: frame.seqTo,
+      ...frame.compression === undefined
+        ? {}
+        : { compression: frame.compression, compressedHash: frame.compressedHash ?? null },
     })),
     deletedAt: manifest.deletedAt ?? null,
   }))

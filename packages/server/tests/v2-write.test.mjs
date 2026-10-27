@@ -75,7 +75,7 @@ test('v2 append 幂等重放不依赖租约，重复 key 不同内容返回 conf
     }
     const { base, close } = await listenServer(db, temp.dataDir)
     try {
-      const lease = await call(base, '/v1/sync/lease', { method: 'POST', token: device.token })
+      const lease = await call(base, '/v2/sync/lease', { method: 'POST', token: device.token })
       assert.equal(lease.status, 200)
 
       const first = await call(base, `/v2/sessions/${sessionId}/append`, {
@@ -90,7 +90,7 @@ test('v2 append 幂等重放不依赖租约，重复 key 不同内容返回 conf
       const firstRevision = first.body.value.revision
 
       // 释放租约后重放：原始请求已经成功，必须直接返回同一结果。
-      assert.equal((await call(base, '/v1/sync/lease', { method: 'DELETE', token: device.token })).status, 200)
+      assert.equal((await call(base, '/v2/sync/lease', { method: 'DELETE', token: device.token })).status, 200)
       const replay = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,
@@ -138,7 +138,7 @@ test('v2 append 幂等重放不依赖租约，重复 key 不同内容返回 conf
       assert.equal(invalid.status, 400)
 
       // 继续追加下一帧，然后重放旧 key，仍应返回旧结果而不是当前状态。
-      assert.equal((await call(base, '/v1/sync/lease', { method: 'POST', token: device.token })).status, 200)
+      assert.equal((await call(base, '/v2/sync/lease', { method: 'POST', token: device.token })).status, 200)
       const appended = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,

@@ -112,9 +112,19 @@ export function headerChainHash(meta: SessionHeaderMeta): string {
  * @param sessionKey - 会话密钥。
  * @returns 封好的头条目。
  */
-export function sealHeader(meta: SessionHeaderMeta, sessionId: string, sessionKey: Buffer): SealedFrame {
+export function sealHeader(
+  meta: SessionHeaderMeta,
+  sessionId: string,
+  sessionKey: Buffer,
+  compression: 'none' | 'zstd' = 'none',
+): SealedFrame {
   const plain = Buffer.from(stableStringify(meta), 'utf8')
-  return sealFrame(plain, { sessionId, index: HEADER_INDEX, seqFrom: HEADER_SEQ, seqTo: HEADER_SEQ }, sessionKey)
+  return sealFrame(
+    plain,
+    { sessionId, index: HEADER_INDEX, seqFrom: HEADER_SEQ, seqTo: HEADER_SEQ },
+    sessionKey,
+    compression === 'zstd' ? { compression: 'zstd' } : {},
+  )
 }
 
 /**
@@ -136,6 +146,8 @@ export function openHeader(sealed: Buffer, ref: SealedFrameRef, sessionId: strin
     seqFrom: ref.seqFrom,
     seqTo: ref.seqTo,
     chainHash: ref.chainHash,
+    ...ref.compression === undefined ? {} : { compression: ref.compression },
+    ...ref.compressedHash === undefined ? {} : { compressedHash: ref.compressedHash },
   }, sessionKey)
   return parseHeaderMeta(JSON.parse(plain.toString('utf8')))
 }
@@ -234,10 +246,16 @@ export function sealEventBatchFromText(
   seqFrom: number,
   seqTo: number,
   sessionKey: Buffer,
+  compression: 'none' | 'zstd' = 'none',
 ): SealedFrame {
   if (index < 1) throw new Error('事件批次的链下标必须 >= 1')
   if (seqFrom > seqTo) throw new Error('事件批次的 seq 区间非法')
-  return sealFrame(Buffer.from(text, 'utf8'), { sessionId, index, seqFrom, seqTo }, sessionKey)
+  return sealFrame(
+    Buffer.from(text, 'utf8'),
+    { sessionId, index, seqFrom, seqTo },
+    sessionKey,
+    compression === 'zstd' ? { compression: 'zstd' } : {},
+  )
 }
 
 /**
@@ -253,13 +271,14 @@ export function sealEventBatch(
   sessionId: string,
   index: number,
   sessionKey: Buffer,
+  compression: 'none' | 'zstd' = 'none',
 ): SealedFrame {
   if (index < 1) throw new Error('事件批次的链下标必须 >= 1')
   if (events.length === 0) throw new Error('不能封空批次')
   const seqFrom = events[0]!.seq
   const seqTo = events[events.length - 1]!.seq
   assertContiguous(events, seqFrom, seqTo)
-  return sealEventBatchFromText(serializeEventBatch(events), sessionId, index, seqFrom, seqTo, sessionKey)
+  return sealEventBatchFromText(serializeEventBatch(events), sessionId, index, seqFrom, seqTo, sessionKey, compression)
 }
 
 /**
@@ -283,6 +302,8 @@ export function openEventBatch(
     seqFrom: ref.seqFrom,
     seqTo: ref.seqTo,
     chainHash: ref.chainHash,
+    ...ref.compression === undefined ? {} : { compression: ref.compression },
+    ...ref.compressedHash === undefined ? {} : { compressedHash: ref.compressedHash },
   }, sessionKey)
   const events = parseEvents(JSON.parse(plain.toString('utf8')))
   if (events.length !== ref.seqTo - ref.seqFrom + 1) throw new Error('批次事件数与 seq 区间不符')

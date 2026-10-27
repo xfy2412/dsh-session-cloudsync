@@ -1,4 +1,5 @@
 export * from './batches.ts'
+export * from './blob-batch.ts'
 export * from './chain.ts'
 export * from './crypto.ts'
 export * from './frames.ts'

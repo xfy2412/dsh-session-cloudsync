@@ -78,6 +78,18 @@ function assertRef(frame: SealedFrameRef, expectedIndex: number): void {
   if (!KEY_ID.test(frame.keyId)) throw new SyncError('bad-request', `帧 ${expectedIndex} 的 keyId 非法`)
   if (!Number.isSafeInteger(frame.bytes) || frame.bytes <= 0) throw new SyncError('bad-request', `帧 ${expectedIndex} 的字节数非法`)
   if (!Number.isSafeInteger(frame.sealedVersion) || frame.sealedVersion < 1) throw new SyncError('bad-request', `帧 ${expectedIndex} 的封帧版本非法`)
+  if (frame.compression === undefined) {
+    if (frame.sealedVersion !== 1 || frame.compressedHash !== undefined) {
+      throw new SyncError('bad-request', `帧 ${expectedIndex} 缺少压缩元数据`)
+    }
+  } else {
+    if (frame.compression !== 'zstd' || frame.sealedVersion < 2) {
+      throw new SyncError('bad-request', `帧 ${expectedIndex} 的压缩元数据非法`)
+    }
+    if (typeof frame.compressedHash !== 'string' || !HASH.test(frame.compressedHash)) {
+      throw new SyncError('bad-request', `帧 ${expectedIndex} 的 compressedHash 非法`)
+    }
+  }
   if (!Number.isSafeInteger(frame.seqFrom) || !Number.isSafeInteger(frame.seqTo)) throw new SyncError('bad-request', `帧 ${expectedIndex} 的 seq 非法`)
 }
 

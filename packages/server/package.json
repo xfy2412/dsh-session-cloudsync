@@ -1,6 +1,6 @@
 {
   "name": "dscs-server",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": false,
   "type": "module",
   "description": "DSH Session CloudSync self-hosted server.",

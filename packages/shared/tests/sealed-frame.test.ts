@@ -3,11 +3,14 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { zstdCompressSync } from 'node:zlib'
 import { deriveMasterKey, sha256 } from '../src/crypto.ts'
 import { splitFrames } from '../src/frames.ts'
 import {
   SEALED_HEADER_BYTES,
   SEALED_VERSION,
+  SEALED_VERSION_ZSTD,
+  frameKeyOf,
   keyIdOf,
   openSealedFrame,
   parseSealedHeader,
@@ -122,8 +125,65 @@ test('AAD 坐标不一致就解不开（挪帧/改序号/换会话/换哈希）'
 test('未知封帧版本被拒绝，而不是猜', () => {
   const sealed = sealFrame(frames[6]!, positionOf(6), SESSION_KEY)
   const future = Buffer.from(sealed.bytes)
-  future.writeUInt8(SEALED_VERSION + 1, 4)
+  future.writeUInt8(99, 4)
   assert.throws(() => parseSealedHeader(future), /不支持的封帧版本/)
+})
+
+test('v2 zstd 帧：明文哈希不变，密文/帧密钥与未压缩不同', () => {
+  const position = positionOf(7)
+  const plain = Buffer.from(JSON.stringify(Array.from({ length: 100 }, (_, index) => ({ seq: index, text: 'repeatable-payload' }))))
+  const uncompressed = sealFrame(plain, position, SESSION_KEY)
+  const compressed = sealFrame(plain, position, SESSION_KEY, { compression: 'zstd' })
+  const compressedHash = compressed.ref.compressedHash
+  assert.ok(compressedHash !== undefined)
+  assert.equal(compressed.ref.chainHash, uncompressed.ref.chainHash)
+  assert.notEqual(compressed.ref.blobSha256, uncompressed.ref.blobSha256)
+  assert.equal(compressed.ref.sealedVersion, SEALED_VERSION_ZSTD)
+  assert.equal(compressed.ref.compression, 'zstd')
+  assert.ok(compressed.bytes.length < uncompressed.bytes.length)
+  assert.equal(compressedHash, sha256(zstdCompressSync(plain)))
+  assert.notDeepEqual(
+    frameKeyOf(SESSION_KEY, compressed.ref.chainHash, 'zstd', compressedHash),
+    frameKeyOf(SESSION_KEY, compressed.ref.chainHash),
+  )
+  const opened = openSealedFrame(compressed.bytes, {
+    ...position,
+    chainHash: compressed.ref.chainHash,
+    compression: 'zstd',
+    compressedHash,
+  }, SESSION_KEY)
+  assert.deepEqual(opened, plain)
+})
+
+test('v2 zstd 帧缺少压缩元数据或压缩哈希被改时拒绝', () => {
+  const position = positionOf(8)
+  const compressed = sealFrame(Buffer.from('compressible '.repeat(100)), position, SESSION_KEY, { compression: 'zstd' })
+  const compressedHash = compressed.ref.compressedHash
+  assert.ok(compressedHash !== undefined)
+  assert.throws(
+    () => openSealedFrame(compressed.bytes, { ...position, chainHash: compressed.ref.chainHash }, SESSION_KEY),
+    /缺少压缩元数据/,
+  )
+  assert.throws(
+    () => openSealedFrame(compressed.bytes, {
+      ...position,
+      chainHash: compressed.ref.chainHash,
+      compression: 'zstd',
+      compressedHash: sha256('wrong'),
+    }, SESSION_KEY),
+    /认证失败|压缩明文哈希/,
+  )
+  const tampered = Buffer.from(compressed.bytes)
+  tampered[tampered.length - 1]! ^= 0xff
+  assert.throws(
+    () => openSealedFrame(tampered, {
+      ...position,
+      chainHash: compressed.ref.chainHash,
+      compression: 'zstd',
+      compressedHash,
+    }, SESSION_KEY),
+    /认证失败/,
+  )
 })
 
 test('口令派生：同盐同结果，不同盐不同结果', () => {

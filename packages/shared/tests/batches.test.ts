@@ -31,6 +31,19 @@ function events(count: number): SyncEvent[] {
   }))
 }
 
+test('批次：zstd 封帧可解回原事件，且带压缩元数据', () => {
+  const meta = headerMetaOf({ version: 4, createdAt: 456, isSeeded: false, delegationDepth: 0 })
+  const header = sealHeader(meta, SESSION, KEY, 'zstd')
+  assert.equal(openHeader(header.bytes, header.ref, SESSION, KEY).createdAt, 456)
+  assert.equal(header.ref.compression, 'zstd')
+
+  const batch = events(50)
+  const sealed = sealEventBatch(batch, SESSION, 1, KEY, 'zstd')
+  assert.equal(sealed.ref.compression, 'zstd')
+  assert.equal(sealed.ref.chainHash, eventBatchHash(batch))
+  assert.deepEqual(openEventBatch(sealed.bytes, sealed.ref, SESSION, KEY), batch)
+})
+
 test('会话头：cwd 不参与哈希，封开稳定', () => {
   const a = { version: 4, createdAt: 123, isSeeded: false, delegationDepth: 0, agentPreset: 'standard', cwd: 'D:/a' }
   const b = { ...a, cwd: 'D:/b' }

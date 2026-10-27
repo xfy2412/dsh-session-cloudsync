@@ -51,7 +51,7 @@ test('Vault writer 租约、append、幂等、cursor 与 stream', async () => {
         vaultKey,
       })
 
-      assert.equal((await call(base, '/v1/blobs?kind=vault', { method: 'POST', token: deviceA.token, body: first.bytes })).status, 201)
+      assert.equal((await call(base, '/v2/blobs?kind=vault', { method: 'POST', token: deviceA.token, body: first.bytes })).status, 201)
 
       const body = {
         writer,
@@ -64,30 +64,30 @@ test('Vault writer 租约、append、幂等、cursor 与 stream', async () => {
       }
 
       // 没有租约不能 append。
-      const noLease = await call(base, '/v1/vault/append', { method: 'POST', token: deviceA.token, json: body })
+      const noLease = await call(base, '/v2/vault/append', { method: 'POST', token: deviceA.token, json: body })
       assert.equal(noLease.status, 409)
       assert.equal(noLease.body.error.code, 'lease-held')
 
       // 同一 token 的第二个 client 不能抢 writer 租约。
-      assert.equal((await call(base, '/v1/vault/lease', { method: 'POST', token: deviceA.token, clientId: CLIENT_A })).status, 200)
-      const held = await call(base, '/v1/vault/lease', { method: 'POST', token: deviceA.token, clientId: CLIENT_B })
+      assert.equal((await call(base, '/v2/vault/lease', { method: 'POST', token: deviceA.token, clientId: CLIENT_A })).status, 200)
+      const held = await call(base, '/v2/vault/lease', { method: 'POST', token: deviceA.token, clientId: CLIENT_B })
       assert.equal(held.status, 409)
       assert.equal(held.body.error.code, 'lease-held')
 
-      const created = await call(base, '/v1/vault/append', { method: 'POST', token: deviceA.token, json: body })
+      const created = await call(base, '/v2/vault/append', { method: 'POST', token: deviceA.token, json: body })
       assert.equal(created.status, 200)
       assert.equal(created.body.value.seq, 1)
       assert.equal(created.body.value.dedup, false)
       assert.match(created.body.value.recordHash, /^[0-9a-f]{64}$/)
 
       // 相同内容重试是幂等的。
-      const replay = await call(base, '/v1/vault/append', { method: 'POST', token: deviceA.token, json: body })
+      const replay = await call(base, '/v2/vault/append', { method: 'POST', token: deviceA.token, json: body })
       assert.equal(replay.status, 200)
       assert.equal(replay.body.value.dedup, true)
       assert.equal(replay.body.value.recordHash, created.body.value.recordHash)
 
       // 同 seq 不同内容拒绝。
-      const conflict = await call(base, '/v1/vault/append', {
+      const conflict = await call(base, '/v2/vault/append', {
         method: 'POST',
         token: deviceA.token,
         json: { ...body, createdAt: 1001 },
@@ -96,11 +96,11 @@ test('Vault writer 租约、append、幂等、cursor 与 stream', async () => {
       assert.equal(conflict.body.error.code, 'conflict')
 
       // cursor / stream 都能看到这条记录。
-      const cursor = await call(base, '/v1/vault/cursor?since=0', { token: deviceA.token })
+      const cursor = await call(base, '/v2/vault/cursor?since=0', { token: deviceA.token })
       assert.equal(cursor.status, 200)
       assert.equal(cursor.body.value.records.length, 1)
       assert.equal(cursor.body.value.records[0].recordHash, created.body.value.recordHash)
-      const stream = await call(base, `/v1/vault/stream/${writer}?from=1`, { token: deviceA.token })
+      const stream = await call(base, `/v2/vault/stream/${writer}?from=1`, { token: deviceA.token })
       assert.equal(stream.status, 200)
       assert.equal(stream.body.value.records[0].seq, 1)
 
@@ -117,9 +117,9 @@ test('Vault writer 租约、append、幂等、cursor 与 stream', async () => {
         data: { name: 'B' },
         vaultKey,
       })
-      assert.equal((await call(base, '/v1/blobs?kind=vault', { method: 'POST', token: deviceB.token, body: firstB.bytes })).status, 201)
-      assert.equal((await call(base, '/v1/vault/lease', { method: 'POST', token: deviceB.token })).status, 200)
-      const createdB = await call(base, '/v1/vault/append', {
+      assert.equal((await call(base, '/v2/blobs?kind=vault', { method: 'POST', token: deviceB.token, body: firstB.bytes })).status, 201)
+      assert.equal((await call(base, '/v2/vault/lease', { method: 'POST', token: deviceB.token })).status, 200)
+      const createdB = await call(base, '/v2/vault/append', {
         method: 'POST',
         token: deviceB.token,
         json: {
@@ -133,11 +133,11 @@ test('Vault writer 租约、append、幂等、cursor 与 stream', async () => {
         },
       })
       assert.equal(createdB.status, 200)
-      const cursorB = await call(base, '/v1/vault/cursor?since=0', { token: deviceB.token })
+      const cursorB = await call(base, '/v2/vault/cursor?since=0', { token: deviceB.token })
       assert.equal(cursorB.body.value.records.length, 2)
 
       // 第二个设备不能替 A 写 A 的 stream。
-      const spoof = await call(base, '/v1/vault/append', {
+      const spoof = await call(base, '/v2/vault/append', {
         method: 'POST',
         token: deviceB.token,
         json: { ...body, seq: 2, prevHash: created.body.value.recordHash },
@@ -146,7 +146,7 @@ test('Vault writer 租约、append、幂等、cursor 与 stream', async () => {
       assert.equal(spoof.body.error.code, 'bad-request')
 
       // 缺 X-Client-Id 的 lease 被拒。
-      const noClient = await fetch(`${base}/v1/vault/lease`, {
+      const noClient = await fetch(`${base}/v2/vault/lease`, {
         method: 'POST',
         headers: { authorization: `Bearer ${deviceA.token}` },
       })

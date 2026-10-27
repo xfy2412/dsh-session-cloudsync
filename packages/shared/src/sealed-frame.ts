@@ -1,35 +1,36 @@
 /**
- * 封帧（Sealed Frame）v1：把一帧明文装进可上传的密文 blob。
+ * 封帧（Sealed Frame）：把一帧明文装进可上传的密文 blob。
  *
- * 设计要点：
- * - 每帧用 HKDF 派生一把唯一密钥，nonce 固定为 0 —— 同一明文在任何设备上
- *   封出的字节完全一致，服务端可以按密文哈希去重；
- * - 明文 = 从会话日志里原样切出的 zstd 帧字节，绝不解码/重编码；
- * - AAD 把密文绑定到「会话 + 帧序号 + seq 区间 + 明文哈希」，挪帧/换序号/
- *   换会话都会导致认证失败；
- * - `chainHash`（明文哈希）用于帧链比对，`blobSha256`（密文哈希）用于
- *   服务端寻址，两者都写进清单条目。
+ * v1 是未压缩格式；v2 在加密前对明文做 zstd。两者共用 26 字节固定头，
+ * 版本号区分：
  *
- * 线上布局（大端）：
  * ```text
  * 0   4   magic "DSHF"
- * 4   1   sealedVersion = 1
+ * 4   1   sealedVersion（1=未压缩，2=zstd）
  * 5   1   flags
  * 6   8   keyId
- * 14  12  nonce（v1 全 0，保留）
+ * 14  12  nonce（全 0）
  * 26  N   密文 + 16 字节 tag
  * ```
  *
+ * 压缩只发生在客户端加密前；服务端仍只存密文。`chainHash` 始终绑定
+ * **未压缩明文**；压缩帧额外用压缩明文的哈希派生帧密钥，避免不同压缩结果
+ * 复用同一个 key + nonce。
+ *
  * @module @dsh-session-cloudsync/shared/sealed-frame
  */
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { createCipheriv, createDecipheriv } from 'node:crypto'
 import { deriveSubkey, sha256, TAG_BYTES, KEY_BYTES, NONCE_BYTES } from './crypto.ts'
 
 /** 封帧魔数。 */
 export const SEALED_MAGIC = Buffer.from('DSHF', 'ascii')
 
-/** 当前封帧格式版本。 */
+/** v1（未压缩）封帧版本。 */
 export const SEALED_VERSION = 1
+
+/** v2（zstd 压缩）封帧版本。 */
+export const SEALED_VERSION_ZSTD = 2
 
 /** keyId 长度（字节）。 */
 export const KEY_ID_BYTES = 8
@@ -37,14 +38,17 @@ export const KEY_ID_BYTES = 8
 /** 固定头长度：magic + version + flags + keyId + nonce。 */
 export const SEALED_HEADER_BYTES = 4 + 1 + 1 + KEY_ID_BYTES + NONCE_BYTES
 
-/** v1 固定 nonce（每帧密钥唯一，因此 nonce 无需变化）。 */
+/** 固定 nonce（每帧密钥唯一，因此 nonce 无需变化）。 */
 const FIXED_NONCE = Buffer.alloc(NONCE_BYTES)
+
+/** 明文压缩方式。 */
+export type FrameCompression = 'none' | 'zstd'
 
 /** 清单里的封帧条目。 */
 export interface SealedFrameRef {
   /** 帧在链中的下标（0 是 header 帧）。 */
   readonly index: number
-  /** 明文帧的 SHA-256（小写十六进制），用于链比对。 */
+  /** 未压缩明文帧的 SHA-256（小写十六进制），用于链比对。 */
   readonly chainHash: string
   /** 封帧字节的 SHA-256（小写十六进制），用于服务端寻址/去重。 */
   readonly blobSha256: string
@@ -58,6 +62,10 @@ export interface SealedFrameRef {
   readonly seqFrom: number
   /** 帧内最后一条事件的序号（含）。 */
   readonly seqTo: number
+  /** v2 的压缩方式；v1 省略。 */
+  readonly compression?: 'zstd'
+  /** v2 压缩后明文的 SHA-256；用于派生帧密钥并校验压缩结果。 */
+  readonly compressedHash?: string
 }
 
 /** 一次封帧的产物。 */
@@ -74,9 +82,17 @@ export interface FramePosition {
   readonly seqTo: number
 }
 
-/** 解帧需要的上下文；另加清单里的明文哈希。 */
+/** 解帧需要的上下文；另加清单里的未压缩明文哈希与压缩元数据。 */
 export interface OpenPosition extends FramePosition {
   readonly chainHash: string
+  readonly compression?: 'zstd'
+  readonly compressedHash?: string
+}
+
+/** 封帧选项。 */
+export interface SealFrameOptions {
+  /** 默认不压缩；设为 zstd 时启用 v2 压缩帧。 */
+  readonly compression?: 'zstd'
 }
 
 /**
@@ -91,11 +107,27 @@ export function sessionKeyOf(master: Buffer, sessionId: string): Buffer {
 
 /**
  * 由会话密钥派生某帧的密钥。
+ *
+ * v1 只用未压缩 `chainHash`；v2 还必须带压缩明文哈希，避免不同的 zstd
+ * 输出在同一个 chainHash 下复用 key + nonce。
  * @param sessionKey - 会话密钥。
- * @param chainHash - 明文帧哈希（十六进制）。
+ * @param chainHash - 未压缩明文帧哈希（十六进制）。
+ * @param compression - 压缩方式，默认 none。
+ * @param compressedHash - 压缩后明文哈希；zstd 必填。
  * @returns 32 字节帧密钥。
  */
-export function frameKeyOf(sessionKey: Buffer, chainHash: string): Buffer {
+export function frameKeyOf(
+  sessionKey: Buffer,
+  chainHash: string,
+  compression: FrameCompression = 'none',
+  compressedHash?: string,
+): Buffer {
+  if (compression === 'zstd') {
+    if (compressedHash === undefined || !/^[0-9a-f]{64}$/u.test(compressedHash)) {
+      throw new Error('zstd 帧缺少合法的 compressedHash')
+    }
+    return deriveSubkey(sessionKey, `v2|frame:zstd:${compressedHash}:${chainHash}`)
+  }
   return deriveSubkey(sessionKey, `v1|frame:${chainHash}`)
 }
 
@@ -137,21 +169,31 @@ function buildAad(header: Buffer, position: OpenPosition): Buffer {
 
 /**
  * 封装一帧明文。
- * @param plain - 原始 zstd 帧字节。
+ * @param plain - 未压缩明文帧字节（同步层是规范 JSON）。
  * @param position - 会话 id、帧下标与 seq 区间。
  * @param sessionKey - 会话密钥（{@link sessionKeyOf}）。
+ * @param options - 压缩方式；默认 none。
  * @returns 封帧字节与清单条目。
  */
-export function sealFrame(plain: Buffer, position: FramePosition, sessionKey: Buffer): SealedFrame {
+export function sealFrame(
+  plain: Buffer,
+  position: FramePosition,
+  sessionKey: Buffer,
+  options: SealFrameOptions = {},
+): SealedFrame {
   if (sessionKey.length !== KEY_BYTES) throw new Error(`会话密钥必须是 ${KEY_BYTES} 字节`)
   if (!Number.isSafeInteger(position.index) || position.index < 0) throw new Error('帧下标必须是非负整数')
+  const compression = options.compression ?? 'none'
   const chainHash = sha256(plain)
-  const frameKey = frameKeyOf(sessionKey, chainHash)
+  const payload = compression === 'zstd' ? zstdCompressSync(plain) : plain
+  const compressedHash = compression === 'zstd' ? sha256(payload) : undefined
+  const frameKey = frameKeyOf(sessionKey, chainHash, compression, compressedHash)
   const keyId = keyIdOf(sessionKey)
+  const version = compression === 'zstd' ? SEALED_VERSION_ZSTD : SEALED_VERSION
 
   const header = Buffer.alloc(SEALED_HEADER_BYTES)
   SEALED_MAGIC.copy(header, 0)
-  header.writeUInt8(SEALED_VERSION, 4)
+  header.writeUInt8(version, 4)
   header.writeUInt8(0, 5)
   keyId.copy(header, 6)
   FIXED_NONCE.copy(header, 14)
@@ -159,7 +201,7 @@ export function sealFrame(plain: Buffer, position: FramePosition, sessionKey: Bu
   const aad = buildAad(header, { ...position, chainHash })
   const cipher = createCipheriv('aes-256-gcm', frameKey, FIXED_NONCE)
   cipher.setAAD(aad)
-  const body = Buffer.concat([cipher.update(plain), cipher.final()])
+  const body = Buffer.concat([cipher.update(payload), cipher.final()])
   const bytes = Buffer.concat([header, body, cipher.getAuthTag()])
 
   return {
@@ -169,10 +211,13 @@ export function sealFrame(plain: Buffer, position: FramePosition, sessionKey: Bu
       chainHash,
       blobSha256: sha256(bytes),
       bytes: bytes.length,
-      sealedVersion: SEALED_VERSION,
+      sealedVersion: version,
       keyId: keyId.toString('hex'),
       seqFrom: position.seqFrom,
       seqTo: position.seqTo,
+      ...compression === 'zstd'
+        ? { compression: 'zstd' as const, compressedHash: compressedHash! }
+        : {},
     },
   }
 }
@@ -187,7 +232,9 @@ export function parseSealedHeader(sealed: Buffer): { version: number; flags: num
   if (sealed.length < SEALED_HEADER_BYTES + TAG_BYTES) throw new Error('封帧字节被截断')
   if (!sealed.subarray(0, 4).equals(SEALED_MAGIC)) throw new Error('不是 DSHF 封帧')
   const version = sealed.readUInt8(4)
-  if (version !== SEALED_VERSION) throw new Error(`不支持的封帧版本：${version}`)
+  if (version !== SEALED_VERSION && version !== SEALED_VERSION_ZSTD) {
+    throw new Error(`不支持的封帧版本：${version}`)
+  }
   return {
     version,
     flags: sealed.readUInt8(5),
@@ -211,21 +258,42 @@ export function openSealedFrame(sealed: Buffer, position: OpenPosition, sessionK
     throw new Error('封帧的 keyId 与当前密钥不符（请确认各设备同步口令、服务端地址与 salt 一致）')
   }
 
+  const compression: FrameCompression = header.version === SEALED_VERSION_ZSTD ? 'zstd' : 'none'
+  if (compression === 'zstd') {
+    if (position.compression !== 'zstd' || position.compressedHash === undefined) {
+      throw new Error('zstd 封帧缺少压缩元数据')
+    }
+  } else if (position.compression !== undefined || position.compressedHash !== undefined) {
+    throw new Error('未压缩封帧不应带压缩元数据')
+  }
+
   const headerBytes = sealed.subarray(0, SEALED_HEADER_BYTES)
   const aad = buildAad(headerBytes, position)
   const body = sealed.subarray(SEALED_HEADER_BYTES, sealed.length - TAG_BYTES)
   const tag = sealed.subarray(sealed.length - TAG_BYTES)
-  const frameKey = frameKeyOf(sessionKey, position.chainHash)
+  const frameKey = frameKeyOf(sessionKey, position.chainHash, compression, position.compressedHash)
 
   const decipher = createDecipheriv('aes-256-gcm', frameKey, header.nonce)
   decipher.setAAD(aad)
   decipher.setAuthTag(tag)
-  let plain: Buffer
+  let payload: Buffer
   try {
-    plain = Buffer.concat([decipher.update(body), decipher.final()])
+    payload = Buffer.concat([decipher.update(body), decipher.final()])
   } catch {
     throw new Error('封帧认证失败（密文、AAD 或密钥不匹配）')
   }
-  if (sha256(plain) !== position.chainHash) throw new Error('明文哈希与清单不符')
-  return plain
+
+  if (compression === 'zstd') {
+    if (sha256(payload) !== position.compressedHash) throw new Error('压缩明文哈希与清单不符')
+    let plain: Buffer
+    try {
+      plain = zstdDecompressSync(payload)
+    } catch {
+      throw new Error('zstd 解压失败')
+    }
+    if (sha256(plain) !== position.chainHash) throw new Error('解压后的明文哈希与清单不符')
+    return plain
+  }
+  if (sha256(payload) !== position.chainHash) throw new Error('明文哈希与清单不符')
+  return payload
 }

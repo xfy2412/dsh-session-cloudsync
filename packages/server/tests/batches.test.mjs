@@ -61,22 +61,23 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
       const refs = [header.ref, ...batches.map((batch) => batch.ref)]
 
       for (const sealed of [header, ...batches]) {
-        const uploaded = await call(base, '/v1/blobs?kind=frame', { method: 'POST', token: device.token, body: sealed.bytes })
+        const uploaded = await call(base, '/v2/blobs?kind=frame', { method: 'POST', token: device.token, body: sealed.bytes })
         assert.equal(uploaded.status, 201)
         assert.equal(uploaded.body.value.sha256, sealed.ref.blobSha256)
       }
 
-      assert.equal((await call(base, '/v1/sync/lease', { method: 'POST', token: device.token })).status, 200)
-      const created = await call(base, `/v1/sessions/${sessionId}/append`, {
+      assert.equal((await call(base, '/v2/sync/lease', { method: 'POST', token: device.token })).status, 200)
+      const created = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,
+        headers: { 'idempotency-key': 'batches-create-1' },
         json: { baseIndex: -1, baseChainHash: null, createdAt, formatVersion: 4, batches: refs },
       })
       assert.equal(created.status, 200)
       assert.equal(created.body.value.batchCount, 4)
       assert.equal(created.body.value.lastSeq, 119)
 
-      const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      const manifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.status, 200)
       assert.equal(manifest.body.value.manifest.batches[0].seqFrom, -1)
       assert.equal(manifest.body.value.manifest.batches[0].seqTo, -1)
@@ -88,11 +89,12 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
       const [tailPlan] = planEventBatches(tail, 119)
       assert.ok(tailPlan !== undefined)
       const tailBatch = sealEventBatch(tailPlan.events, sessionId, 4, key)
-      const uploaded = await call(base, '/v1/blobs?kind=frame', { method: 'POST', token: device.token, body: tailBatch.bytes })
+      const uploaded = await call(base, '/v2/blobs?kind=frame', { method: 'POST', token: device.token, body: tailBatch.bytes })
       assert.equal(uploaded.status, 201)
-      const appended = await call(base, `/v1/sessions/${sessionId}/append`, {
+      const appended = await call(base, `/v2/sessions/${sessionId}/append`, {
         method: 'POST',
         token: device.token,
+        headers: { 'idempotency-key': 'batches-append-1' },
         json: {
           baseIndex: 3,
           baseChainHash: refs[3].chainHash,
@@ -105,7 +107,7 @@ test('服务端接受 header(entry 0) + 事件批次链，并能继续追加', a
       assert.equal(appended.body.value.batchCount, 5)
       assert.equal(appended.body.value.lastSeq, 149)
 
-      const batchesPage = await call(base, `/v1/sessions/${sessionId}/batches?from=0&limit=10`, { token: device.token })
+      const batchesPage = await call(base, `/v2/sessions/${sessionId}/batches?from=0&limit=10`, { token: device.token })
       assert.equal(batchesPage.status, 200)
       assert.equal(batchesPage.body.value.batches.length, 5)
       assert.equal(batchesPage.body.value.batches[4].seqFrom, 120)

@@ -112,7 +112,7 @@ function insertTombstone(db, sessionId, createdAt, deletedAt) {
     .run(sessionId, createdAt, deletedAt)
 }
 
-test('v2 全量快照分页完整，且 v1 响应形状不变', async () => {
+test('v2 全量快照分页完整，且 v1 路由已移除', async () => {
   const temp = createTempHome('server-v2-snapshot')
   try {
     const db = openDatabase(temp.dataDir)
@@ -155,19 +155,13 @@ test('v2 全量快照分页完整，且 v1 响应形状不变', async () => {
       assert.equal(first.body.value.sessions[0].tailOpen, true)
       assert.equal(first.body.value.sessions[0].safeThroughSeq, 9)
 
-      const v1 = await call(base, '/v1/cursor?since=0&limit=2', { token: device.token })
-      assert.equal(v1.status, 200)
-      assert.equal(Object.hasOwn(v1.body.value, 'nextCursor'), false)
-      assert.equal(Object.hasOwn(v1.body.value, 'hasMore'), true)
-      assert.equal(v1.body.value.sessions.length, 2)
-      assert.equal(Object.hasOwn(v1.body.value.sessions[0], 'workspaceKey'), false)
+      const removedCursor = await call(base, '/v1/cursor?since=0&limit=2', { token: device.token })
+      assert.equal(removedCursor.status, 404)
 
       const health = await call(base, '/health')
-      assert.deepEqual(health.body.server.apiVersions, [1, 2])
+      assert.deepEqual(health.body.server.apiVersions, [2])
+      assert.deepEqual(health.body.server.protocols, [3])
       assert.ok(health.body.server.capabilities.includes('session-summary'))
-      const v1Health = await call(base, '/v1/health')
-      assert.equal(v1Health.body.protocol, 2)
-      assert.equal(Object.hasOwn(v1Health.body, 'apiVersions'), false)
 
       const malformed = await call(base, '/v2/sessions?cursor=not-a-cursor', { token: device.token })
       assert.equal(malformed.status, 400)
