@@ -53,9 +53,11 @@ test('数据库迁移：v2 → v4 保留会话/墓碑并新增 Vault 与幂等�
     try {
       const version = db.handle.prepare('PRAGMA user_version').get()
       assert.equal(version.user_version, SERVER_SCHEMA_VERSION)
-      const session = db.handle.prepare('SELECT session_id, last_seq FROM sessions').get()
+      const session = db.handle.prepare('SELECT session_id, last_seq, compression, stored_bytes FROM sessions').get()
       assert.equal(session.session_id, 'kept-session')
       assert.equal(session.last_seq, 2)
+      assert.equal(session.compression, 'none')
+      assert.equal(session.stored_bytes, 0)
       const tombstone = db.handle.prepare('SELECT session_id FROM tombstones').get()
       assert.equal(tombstone.session_id, 'kept-session')
       assert.ok(db.handle.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vault_records'").get())
@@ -64,6 +66,31 @@ test('数据库迁移：v2 → v4 保留会话/墓碑并新增 Vault 与幂等�
       assert.ok(leaseColumns.includes('resource'))
       assert.ok(leaseColumns.includes('client_id'))
       assert.ok(readdirSync(dir).some((name) => name.startsWith('db.sqlite.bak-v2-')))
+    } finally {
+      db.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('数据库迁移：回填混合压缩状态与密文字节数', () => {
+  const dir = tempDir()
+  try {
+    createV2Database(dir)
+    const raw = new DatabaseSync(join(dir, 'db.sqlite'))
+    raw.prepare(`INSERT INTO sessions
+      (dataset, session_id, created_at, format_version, last_seq, frame_count,
+       head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at)
+      VALUES ('default', 'mixed-session', 1, 4, 0, 2, 'head', ?, 'digest', 1, 1, NULL)`)
+      .run(JSON.stringify({ frames: [{ bytes: 10 }, { bytes: 20, compression: 'zstd' }] }))
+    raw.close()
+
+    const db = openDatabase(dir)
+    try {
+      const row = db.handle.prepare('SELECT compression, stored_bytes FROM sessions WHERE session_id = ?').get('mixed-session')
+      assert.equal(row.compression, 'mixed')
+      assert.equal(row.stored_bytes, 30)
     } finally {
       db.close()
     }

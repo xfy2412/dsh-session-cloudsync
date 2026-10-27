@@ -154,6 +154,8 @@ test('v2 全量快照分页完整，且 v1 路由已移除', async () => {
       assert.equal(first.body.value.sessions[0].workspaceKey, 'workspace-0')
       assert.equal(first.body.value.sessions[0].tailOpen, true)
       assert.equal(first.body.value.sessions[0].safeThroughSeq, 9)
+      assert.equal(first.body.value.sessions[0].compression, 'none')
+      assert.equal(first.body.value.sessions[0].storedBytes, 0)
 
       const removedCursor = await call(base, '/v1/cursor?since=0&limit=2', { token: device.token })
       assert.equal(removedCursor.status, 404)

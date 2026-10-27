@@ -20,6 +20,9 @@ import { requireLease as requireResourceLease, SYNC_RESOURCE } from './leases.ts
 /** 单个 append 请求体上限（万帧会话首次同步约 1.5 MB）。 */
 export const MAX_APPEND_BODY_BYTES = 8 * 1024 * 1024
 
+/** 会话的压缩状态。 */
+export type SessionCompression = 'none' | 'zstd' | 'mixed'
+
 interface SessionRow {
   readonly created_at: number
   readonly format_version: number
@@ -31,6 +34,8 @@ interface SessionRow {
   readonly revision: number
   readonly updated_at: number
   readonly deleted_at: number | null
+  readonly compression: string
+  readonly stored_bytes: number
 }
 
 /** append 的入参。 */
@@ -61,6 +66,8 @@ export interface SessionSummary {
   readonly lastSeq: number
   readonly updatedAt: number
   readonly deletedAt: number | null
+  readonly compression: SessionCompression
+  readonly storedBytes: number
 }
 
 const HASH = /^[0-9a-f]{64}$/u
@@ -110,7 +117,7 @@ function toChain(frames: readonly SealedFrameRef[]): ChainFrame[] {
  */
 function sessionRow(db: ServerDb, sessionId: string): SessionRow | undefined {
   return db.handle
-    .prepare('SELECT created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at FROM sessions WHERE dataset = ? AND session_id = ?')
+    .prepare('SELECT created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at, compression, stored_bytes FROM sessions WHERE dataset = ? AND session_id = ?')
     .get(DEFAULT_DATASET, sessionId) as SessionRow | undefined
 }
 
@@ -149,6 +156,33 @@ function manifestOf(
     ...workspaceKey === undefined ? {} : { workspaceKey },
   })
   return { manifest, digest: manifestDigest(manifest), headChainHash: frames[frames.length - 1]!.chainHash }
+}
+
+/**
+ * 把数据库里的压缩状态归一到有限集合。
+ * @param value - 数据库值。
+ * @returns 合法状态。
+ */
+function compressionOf(value: unknown): SessionCompression {
+  return value === 'zstd' || value === 'mixed' ? value : 'none'
+}
+
+/**
+ * 计算会话的压缩状态与密文总字节。
+ * @param frames - 完整批次链。
+ * @returns 聚合字段。
+ */
+function statsOf(frames: readonly SealedFrameRef[]): { compression: SessionCompression; storedBytes: number } {
+  let compressed = 0
+  let storedBytes = 0
+  for (const frame of frames) {
+    if (frame.compression === 'zstd') compressed += 1
+    storedBytes += frame.bytes
+  }
+  return {
+    compression: compressed === 0 ? 'none' : compressed === frames.length ? 'zstd' : 'mixed',
+    storedBytes,
+  }
 }
 
 /**
@@ -254,15 +288,17 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
       workspaceKey,
     )
     const revision = bumpRevision(db)
+    const stats = statsOf(combined)
     db.handle
-      .prepare(`INSERT INTO sessions (dataset, session_id, created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+      .prepare(`INSERT INTO sessions (dataset, session_id, created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at, compression, stored_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 ON CONFLICT(dataset, session_id) DO UPDATE SET
                   created_at = excluded.created_at, format_version = excluded.format_version, last_seq = excluded.last_seq,
                   frame_count = excluded.frame_count, head_chain_hash = excluded.head_chain_hash,
                   manifest_json = excluded.manifest_json, manifest_digest = excluded.manifest_digest,
-                  revision = excluded.revision, updated_at = excluded.updated_at, deleted_at = NULL`)
-      .run(DEFAULT_DATASET, input.sessionId, createdAt, formatVersion, manifest.lastSeq, combined.length, headChainHash, JSON.stringify(manifest), digest, revision, now)
+                  revision = excluded.revision, updated_at = excluded.updated_at, deleted_at = NULL,
+                  compression = excluded.compression, stored_bytes = excluded.stored_bytes`)
+      .run(DEFAULT_DATASET, input.sessionId, createdAt, formatVersion, manifest.lastSeq, combined.length, headChainHash, JSON.stringify(manifest), digest, revision, now, stats.compression, stats.storedBytes)
     const summary: SessionSummary = {
       sessionId: input.sessionId,
       revision,
@@ -272,6 +308,8 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
       lastSeq: manifest.lastSeq,
       updatedAt: now,
       deletedAt: null,
+      compression: stats.compression,
+      storedBytes: stats.storedBytes,
     }
     if (idempotencyKey !== undefined && requestHash !== undefined) {
       writeAppendRequest(
@@ -310,7 +348,18 @@ export function deleteSession(db: ServerDb, sessionId: string, deviceId: string,
     db.handle
       .prepare('INSERT OR REPLACE INTO tombstones (dataset, session_id, created_at, deleted_at, deleted_by) VALUES (?, ?, ?, ?, ?)')
       .run(DEFAULT_DATASET, sessionId, createdAt, now, deviceId)
-    return { sessionId, revision, batchCount: row.frame_count, headChainHash: row.head_chain_hash, manifestDigest: row.manifest_digest, lastSeq: row.last_seq, updatedAt: now, deletedAt: now }
+    return {
+      sessionId,
+      revision,
+      batchCount: row.frame_count,
+      headChainHash: row.head_chain_hash,
+      manifestDigest: row.manifest_digest,
+      lastSeq: row.last_seq,
+      updatedAt: now,
+      deletedAt: now,
+      compression: compressionOf(row.compression),
+      storedBytes: row.stored_bytes,
+    }
   })
 }
 
@@ -358,6 +407,10 @@ export interface V2SessionSummary {
   readonly tailOpen: boolean
   readonly updatedAt: number
   readonly deletedAt: number | null
+  /** 整个会话的压缩状态。 */
+  readonly compression: SessionCompression
+  /** 会话所有封帧的密文字节总和。 */
+  readonly storedBytes: number
 }
 
 interface V2SummaryRow {
@@ -371,6 +424,8 @@ interface V2SummaryRow {
   readonly revision: number
   readonly updated_at: number
   readonly deleted_at: number | null
+  readonly compression: string
+  readonly stored_bytes: number
   readonly workspace_key: string | null
   readonly tail_open: number | null
   readonly safe_through_seq: number | null
@@ -378,6 +433,7 @@ interface V2SummaryRow {
 
 const V2_SUMMARY_SELECT = `s.session_id, s.created_at, s.format_version, s.last_seq, s.frame_count,
   s.head_chain_hash, s.manifest_digest, s.revision, s.updated_at, s.deleted_at,
+  s.compression, s.stored_bytes,
   json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key,
   json_extract(s.manifest_json, '$.tailOpen') AS tail_open,
   json_extract(s.manifest_json, '$.safeThroughSeq') AS safe_through_seq`
@@ -405,6 +461,8 @@ function mapV2Summary(row: V2SummaryRow): V2SessionSummary {
     tailOpen: Number(row.tail_open) === 1,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    compression: compressionOf(row.compression),
+    storedBytes: Number.isSafeInteger(row.stored_bytes) ? row.stored_bytes : 0,
   }
 }
 

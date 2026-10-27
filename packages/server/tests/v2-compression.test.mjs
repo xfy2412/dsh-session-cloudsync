@@ -89,6 +89,25 @@ test('v2 服务端接受 zstd 封帧并保留压缩元数据', async () => {
       })
       assert.equal(appended.status, 200, JSON.stringify(appended.body))
       assert.equal(appended.body.value.batchCount, 2)
+      assert.equal(appended.body.value.compression, 'zstd')
+      assert.equal(appended.body.value.storedBytes, header.bytes.length + batch.bytes.length)
+
+      const summary = await call(base, `/v2/sessions/${sessionId}/summary`, { token: device.token })
+      assert.equal(summary.status, 200)
+      assert.equal(summary.body.value.compression, 'zstd')
+      assert.equal(summary.body.value.storedBytes, header.bytes.length + batch.bytes.length)
+
+      const list = await call(base, '/v2/sessions', { token: device.token })
+      assert.equal(list.status, 200)
+      const listed = list.body.value.sessions.find((session) => session.sessionId === sessionId)
+      assert.equal(listed.compression, 'zstd')
+      assert.equal(listed.storedBytes, header.bytes.length + batch.bytes.length)
+
+      const changes = await call(base, '/v2/changes', { token: device.token })
+      assert.equal(changes.status, 200)
+      const changed = changes.body.value.sessions.find((session) => session.sessionId === sessionId)
+      assert.equal(changed.compression, 'zstd')
+      assert.equal(changed.storedBytes, header.bytes.length + batch.bytes.length)
 
       const manifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.status, 200)

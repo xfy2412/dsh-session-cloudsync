@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   revision INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
+  compression TEXT NOT NULL DEFAULT 'none',
+  stored_bytes INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (dataset, session_id)
 );
 
@@ -151,10 +153,61 @@ function backupBeforeMigration(handle: DatabaseSync, dataDir: string, version: n
 }
 
 /**
+ * 从 manifest JSON 回填会话压缩聚合字段。
+ * @param handle - 已打开的数据库。
+ */
+function backfillSessionStats(handle: DatabaseSync): void {
+  const rows = handle.prepare('SELECT session_id, manifest_json FROM sessions').all() as Array<{
+    session_id: string
+    manifest_json: string
+  }>
+  const update = handle.prepare('UPDATE sessions SET compression = ?, stored_bytes = ? WHERE dataset = ? AND session_id = ?')
+  for (const row of rows) {
+    let compression = 'none'
+    let storedBytes = 0
+    try {
+      const manifest = JSON.parse(row.manifest_json) as { frames?: unknown }
+      const frames = Array.isArray(manifest.frames) ? manifest.frames : []
+      let compressed = 0
+      for (const frame of frames) {
+        if (frame === null || typeof frame !== 'object') continue
+        const record = frame as Record<string, unknown>
+        if (record['compression'] === 'zstd') compressed += 1
+        if (typeof record['bytes'] === 'number' && Number.isSafeInteger(record['bytes'])) storedBytes += record['bytes']
+      }
+      compression = compressed === 0 ? 'none' : compressed === frames.length ? 'zstd' : 'mixed'
+    } catch {
+      // 损坏的旧 manifest 不能阻断启动；按未压缩/0 字节保守回填。
+    }
+    update.run(compression, storedBytes, DEFAULT_DATASET, row.session_id)
+  }
+}
+
+/**
+ * 确保 v4 的会话压缩聚合列存在；旧 v4 开发库也要补齐并回填。
+ * @param handle - 已打开的数据库。
+ * @returns 是否新增了列。
+ */
+function ensureSessionStatsColumns(handle: DatabaseSync): boolean {
+  const columns = tableColumns(handle, 'sessions')
+  let added = false
+  if (!columns.has('compression')) {
+    handle.exec("ALTER TABLE sessions ADD COLUMN compression TEXT NOT NULL DEFAULT 'none'")
+    added = true
+  }
+  if (!columns.has('stored_bytes')) {
+    handle.exec('ALTER TABLE sessions ADD COLUMN stored_bytes INTEGER NOT NULL DEFAULT 0')
+    added = true
+  }
+  if (added) backfillSessionStats(handle)
+  return added
+}
+
+/**
  * 迁移旧库；只迁移明确支持的版本，不删除会话/墓碑/Vault。
  *
  * v2 → v3：租约是 60s 的瞬时状态，允许重建；新增 vault_records。
- * v3 → v4：新增 append_requests（v2 append 的幂等记录）；不重写旧表。
+ * v3 → v4：新增 append_requests、会话压缩聚合列；不重写旧表。
  * v0 → v4：只接受没有旧表、或已是 v2 形状的库；v1 的 frames/session_frames 直接拒绝。
  */
 function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number): void {
@@ -163,6 +216,18 @@ function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number)
   }
   if (version === SCHEMA_VERSION) {
     handle.exec(SCHEMA)
+    const columns = tableColumns(handle, 'sessions')
+    if (!columns.has('compression') || !columns.has('stored_bytes')) {
+      backupBeforeMigration(handle, dataDir, version)
+      handle.exec('BEGIN IMMEDIATE')
+      try {
+        ensureSessionStatsColumns(handle)
+        handle.exec('COMMIT')
+      } catch (error: unknown) {
+        handle.exec('ROLLBACK')
+        throw error
+      }
+    }
     return
   }
 
@@ -198,6 +263,7 @@ function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number)
       handle.exec('DROP TABLE IF EXISTS leases')
     }
     handle.exec(SCHEMA)
+    ensureSessionStatsColumns(handle)
     handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
     handle.exec('COMMIT')
   } catch (error: unknown) {
