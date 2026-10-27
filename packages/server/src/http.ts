@@ -37,9 +37,14 @@ import {
   appendFrames,
   deleteSession,
   getManifest,
+  getV2SessionSummary,
   listChanges,
   listBatches,
+  listV2Batches,
+  listV2Changes,
+  listV2Sessions,
   sessionCounts,
+  type V2TombstoneCursor,
 } from './sessions.ts'
 import { acquireLease, releaseLease, SYNC_RESOURCE, vaultResource } from './leases.ts'
 import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
@@ -252,6 +257,8 @@ function clientIdFrom(req: IncomingMessage): string {
   return value
 }
 
+const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u
+
 /**
  * 从路径里取会话 id。
  * @param pathname - 请求路径。
@@ -263,8 +270,109 @@ function sessionIdFrom(pathname: string, pattern: RegExp): string {
   const match = pattern.exec(pathname)
   if (match === null) throw new SyncError('bad-request', '会话 id 缺失')
   const id = decodeURIComponent(match[1]!)
-  if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(id)) throw new SyncError('bad-request', `会话 id 非法：${id}`)
+  if (!SESSION_ID_PATTERN.test(id)) throw new SyncError('bad-request', `会话 id 非法：${id}`)
   return id
+}
+
+/** 不透明分页游标的最大长度。 */
+const MAX_CURSOR_LENGTH = 512
+
+/**
+ * 把服务端游标编码成 URL 安全的 opaque 字符串。
+ * @param value - 游标内容。
+ * @returns base64url 字符串。
+ */
+function encodeCursor(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url')
+}
+
+/**
+ * 解出不透明游标对象。
+ * @param raw - 查询参数里的值。
+ * @returns 游标对象；没有游标时返回 undefined。
+ * @throws 游标过长、不是合法 base64url 或不是 JSON 对象时抛出 `bad-request`。
+ */
+function decodeCursorObject(raw: string | null): Record<string, unknown> | undefined {
+  if (raw === null || raw === '') return undefined
+  if (raw.length > MAX_CURSOR_LENGTH || !/^[A-Za-z0-9_-]+$/u.test(raw)) {
+    throw new SyncError('bad-request', 'cursor 非法')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
+  } catch {
+    throw new SyncError('bad-request', 'cursor 非法')
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new SyncError('bad-request', 'cursor 非法')
+  }
+  return parsed as Record<string, unknown>
+}
+
+/**
+ * 解出 v2 全量快照游标。
+ * @param raw - 查询参数里的值。
+ * @returns 上一页最后一个 sessionId，或 undefined。
+ * @throws 游标形状非法时抛出 `bad-request`。
+ */
+function decodeSessionsCursor(raw: string | null): string | undefined {
+  const value = decodeCursorObject(raw)
+  if (value === undefined) return undefined
+  if (value['v'] !== 2 || typeof value['after'] !== 'string' || !SESSION_ID_PATTERN.test(value['after'])) {
+    throw new SyncError('bad-request', 'cursor 非法')
+  }
+  return value['after']
+}
+
+/**
+ * 解出 v2 变更流游标。
+ * @param raw - 查询参数里的值。
+ * @returns 已处理到的 revision 与墓碑游标；没有游标时都从 0 开始。
+ * @throws 游标形状非法时抛出 `bad-request`。
+ */
+function decodeChangesCursor(raw: string | null): { revision: number; tombstone: V2TombstoneCursor } {
+  const value = decodeCursorObject(raw)
+  if (value === undefined) {
+    return { revision: 0, tombstone: { deletedAt: 0, sessionId: '', createdAt: 0 } }
+  }
+  const revision = value['revision']
+  const tombstone = value['tombstone']
+  if (
+    value['v'] !== 2
+    || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0
+    || tombstone === null || typeof tombstone !== 'object' || Array.isArray(tombstone)
+  ) {
+    throw new SyncError('bad-request', 'cursor 非法')
+  }
+  const record = tombstone as Record<string, unknown>
+  const deletedAt = record['deletedAt']
+  const sessionId = record['sessionId']
+  const createdAt = record['createdAt']
+  const empty = deletedAt === 0 && sessionId === '' && createdAt === 0
+  if (
+    typeof deletedAt !== 'number' || !Number.isSafeInteger(deletedAt) || deletedAt < 0
+    || typeof sessionId !== 'string' || (!empty && !SESSION_ID_PATTERN.test(sessionId))
+    || typeof createdAt !== 'number' || !Number.isSafeInteger(createdAt) || createdAt < 0
+  ) {
+    throw new SyncError('bad-request', 'cursor 非法')
+  }
+  return { revision, tombstone: { deletedAt, sessionId, createdAt } }
+}
+
+/**
+ * 判断 If-None-Match 是否命中当前摘要。
+ * @param header - 请求头，可能是字符串或字符串数组。
+ * @param digest - manifest 摘要（小写十六进制）。
+ * @returns 命中时返回 true。
+ */
+function etagMatches(header: string | string[] | undefined, digest: string): boolean {
+  const raw = Array.isArray(header) ? header.join(',') : header
+  if (raw === undefined) return false
+  const target = `"${digest}"`
+  return raw.split(',').some((entry) => {
+    const value = entry.trim()
+    return value === '*' || value === target || value === `W/${target}`
+  })
 }
 
 /**
@@ -334,6 +442,10 @@ const DELETE_PATH = /^\/v1\/sessions\/([^/]+)\/delete$/u
 const MANIFEST_PATH = /^\/v1\/sessions\/([^/]+)\/manifest$/u
 const BATCHES_PATH = /^\/v1\/sessions\/([^/]+)\/batches$/u
 const CURSOR_PATH = /^\/v1\/cursor$/u
+const V2_SESSIONS_PATH = /^\/v2\/sessions$/u
+const V2_CHANGES_PATH = /^\/v2\/changes$/u
+const V2_SUMMARY_PATH = /^\/v2\/sessions\/([^/]+)\/summary$/u
+const V2_BATCHES_PATH = /^\/v2\/sessions\/([^/]+)\/batches$/u
 const VAULT_APPEND_PATH = /^\/v1\/vault\/append$/u
 const VAULT_LEASE_PATH = /^\/v1\/vault\/lease$/u
 const VAULT_CURSOR_PATH = /^\/v1\/vault\/cursor$/u
@@ -613,10 +725,10 @@ export function createHttpServer(options: ServerOptions): Server {
           ok: true,
           server: {
             version,
-            apiVersions: [1],
+            apiVersions: [1, 2],
             protocols: [PROTOCOL_VERSION],
             schemaVersion: SERVER_SCHEMA_VERSION,
-            capabilities: ['manifest-digest', 'batches'],
+            capabilities: ['session-summary', 'changes-cursor', 'conditional-get', 'manifest-digest', 'batches'],
           },
           now: Date.now(),
         })
@@ -627,6 +739,84 @@ export function createHttpServer(options: ServerOptions): Server {
       path: /^\/v1\/health$/,
       handler: async (_req, res) => {
         json(res, 200, { ok: true, version, protocol: PROTOCOL_VERSION, now: Date.now() })
+      },
+    },
+    {
+      method: 'GET',
+      path: V2_SESSIONS_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const after = decodeSessionsCursor(url.searchParams.get('cursor'))
+        const limit = intParam(url.searchParams.get('limit'), 200, 1, 1000)
+        const page = listV2Sessions(db, after, limit)
+        return json(res, 200, {
+          ok: true,
+          value: {
+            sessions: page.sessions,
+            nextCursor: page.nextSessionId === null
+              ? null
+              : encodeCursor({ v: 2, after: page.nextSessionId }),
+          },
+        })
+      },
+    },
+    {
+      method: 'GET',
+      path: V2_CHANGES_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const cursor = decodeChangesCursor(url.searchParams.get('cursor'))
+        const limit = intParam(url.searchParams.get('limit'), 200, 1, 1000)
+        const page = listV2Changes(db, cursor.revision, cursor.tombstone, limit)
+        return json(res, 200, {
+          ok: true,
+          value: {
+            sessions: page.sessions,
+            tombstones: page.tombstones,
+            nextCursor: encodeCursor({ v: 2, revision: page.nextRevision, tombstone: page.nextTombstone }),
+            hasMore: page.hasMore,
+          },
+        })
+      },
+    },
+    {
+      method: 'GET',
+      path: V2_SUMMARY_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, V2_SUMMARY_PATH)
+        const summary = getV2SessionSummary(db, id)
+        if (summary === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
+        res.setHeader('etag', `"${summary.manifestDigest}"`)
+        if (etagMatches(req.headers['if-none-match'], summary.manifestDigest)) {
+          res.statusCode = 304
+          res.end()
+          return
+        }
+        return json(res, 200, { ok: true, value: summary })
+      },
+    },
+    {
+      method: 'GET',
+      path: V2_BATCHES_PATH,
+      handler: async (req, res) => {
+        requireDevice(db, req)
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const id = sessionIdFrom(url.pathname, V2_BATCHES_PATH)
+        const from = intParam(url.searchParams.get('from'), 0, 0, Number.MAX_SAFE_INTEGER)
+        const limit = intParam(url.searchParams.get('limit'), 500, 1, 1000)
+        const expected = url.searchParams.get('expectedManifestDigest')
+        if (expected !== null && !/^[0-9a-f]{64}$/u.test(expected)) {
+          throw new SyncError('bad-request', 'expectedManifestDigest 必须是 64 位十六进制')
+        }
+        const page = listV2Batches(db, id, from, limit)
+        if (page === undefined) return json(res, 404, errorBody('not-found', `没有会话 ${id}`))
+        if (expected !== null && expected !== page.manifestDigest) {
+          throw new SyncError('conflict', 'manifest 已变化，请重新读取摘要')
+        }
+        return json(res, 200, { ok: true, value: page })
       },
     },
     {

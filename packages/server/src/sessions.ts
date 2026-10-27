@@ -282,6 +282,235 @@ export function listBatches(db: ServerDb, sessionId: string, from: number, limit
   return { batches: manifest.frames.slice(from, from + limit), batchCount: manifest.frames.length, revision: row.revision }
 }
 
+/** v2 会话摘要；不包含 manifest 里的完整批次列表。 */
+export interface V2SessionSummary {
+  readonly sessionId: string
+  readonly revision: number
+  readonly formatVersion: number
+  readonly createdAt: number
+  readonly batchCount: number
+  readonly lastSeq: number
+  readonly headChainHash: string
+  readonly manifestDigest: string
+  /** manifest 里的 opaque workspaceKey；子代理或旧 manifest 为 null。 */
+  readonly workspaceKey: string | null
+  /** 已闭合到的事件序号；没有显式值时等于 lastSeq。 */
+  readonly safeThroughSeq: number
+  readonly tailOpen: boolean
+  readonly updatedAt: number
+  readonly deletedAt: number | null
+}
+
+interface V2SummaryRow {
+  readonly session_id: string
+  readonly created_at: number
+  readonly format_version: number
+  readonly last_seq: number
+  readonly frame_count: number
+  readonly head_chain_hash: string
+  readonly manifest_digest: string
+  readonly revision: number
+  readonly updated_at: number
+  readonly deleted_at: number | null
+  readonly workspace_key: string | null
+  readonly tail_open: number | null
+  readonly safe_through_seq: number | null
+}
+
+const V2_SUMMARY_SELECT = `s.session_id, s.created_at, s.format_version, s.last_seq, s.frame_count,
+  s.head_chain_hash, s.manifest_digest, s.revision, s.updated_at, s.deleted_at,
+  json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key,
+  json_extract(s.manifest_json, '$.tailOpen') AS tail_open,
+  json_extract(s.manifest_json, '$.safeThroughSeq') AS safe_through_seq`
+
+/**
+ * 把数据库行映射成 v2 摘要。
+ * @param row - 查询结果。
+ * @returns v2 摘要。
+ */
+function mapV2Summary(row: V2SummaryRow): V2SessionSummary {
+  const safe = typeof row.safe_through_seq === 'number' && Number.isSafeInteger(row.safe_through_seq)
+    ? row.safe_through_seq
+    : row.last_seq
+  return {
+    sessionId: row.session_id,
+    revision: row.revision,
+    formatVersion: row.format_version,
+    createdAt: row.created_at,
+    batchCount: row.frame_count,
+    lastSeq: row.last_seq,
+    headChainHash: row.head_chain_hash,
+    manifestDigest: row.manifest_digest,
+    workspaceKey: typeof row.workspace_key === 'string' && row.workspace_key !== '' ? row.workspace_key : null,
+    safeThroughSeq: safe,
+    tailOpen: Number(row.tail_open) === 1,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
+  }
+}
+
+/**
+ * 列出 v2 全量会话快照（只含未删除会话）。
+ *
+ * 用 `session_id` 做 keyset 分页，避免用全局 revision 当页游标；这与 v1 的
+ * change feed 无关，v1 行为保持不变。
+ * @param db - 已打开的数据库。
+ * @param after - 上一页最后一个 sessionId；第一页为 undefined。
+ * @param limit - 本页最多返回条数。
+ * @returns 摘要与下一页游标。
+ */
+export function listV2Sessions(
+  db: ServerDb,
+  after: string | undefined,
+  limit: number,
+): { sessions: V2SessionSummary[]; nextSessionId: string | null } {
+  const rows = db.handle
+    .prepare(`SELECT ${V2_SUMMARY_SELECT}
+              FROM sessions s
+              WHERE s.dataset = ? AND s.deleted_at IS NULL AND s.session_id > ?
+              ORDER BY s.session_id ASC LIMIT ?`)
+    .all(DEFAULT_DATASET, after ?? '', limit + 1) as unknown as V2SummaryRow[]
+  const visible = rows.slice(0, limit)
+  const last = visible[visible.length - 1]
+  return {
+    sessions: visible.map(mapV2Summary),
+    nextSessionId: rows.length > limit && last !== undefined ? last.session_id : null,
+  }
+}
+
+/** v2 变更流里的墓碑。 */
+export interface V2Tombstone {
+  readonly sessionId: string
+  readonly createdAt: number
+  readonly deletedAt: number
+}
+
+/** v2 墓碑分页游标；同毫秒删除靠 sessionId/createdAt 保持稳定顺序。 */
+export interface V2TombstoneCursor {
+  readonly deletedAt: number
+  readonly sessionId: string
+  readonly createdAt: number
+}
+
+/**
+ * 读取 v2 变更流。
+ *
+ * 会话变更按全局 `revision` 推进；墓碑仍按 `deleted_at` 推进。两路各自
+ * 使用自己的高水位，避免 v1 里“两路共用一个 limit/游标”造成的漏项。
+ * `highWater` 在查询前读取，保证并发写入不会被本页跳过。
+ * @param db - 已打开的数据库。
+ * @param sinceRevision - 客户端已处理到的会话 revision。
+ * @param sinceTombstone - 客户端已处理到的墓碑游标。
+ * @param limit - 每路最多返回条数。
+ * @returns 变更摘要、墓碑、下一页游标与是否还有更多。
+ */
+export function listV2Changes(
+  db: ServerDb,
+  sinceRevision: number,
+  sinceTombstone: V2TombstoneCursor,
+  limit: number,
+): {
+  sessions: V2SessionSummary[]
+  tombstones: V2Tombstone[]
+  nextRevision: number
+  nextTombstone: V2TombstoneCursor
+  hasMore: boolean
+} {
+  const highWater = Math.max(sinceRevision, readRevision(db))
+  const rows = db.handle
+    .prepare(`SELECT ${V2_SUMMARY_SELECT}
+              FROM sessions s
+              WHERE s.dataset = ? AND s.deleted_at IS NULL AND s.revision > ? AND s.revision <= ?
+              ORDER BY s.revision ASC LIMIT ?`)
+    .all(DEFAULT_DATASET, sinceRevision, highWater, limit + 1) as unknown as V2SummaryRow[]
+  const tombstoneRows = db.handle
+    .prepare(`SELECT session_id, created_at, deleted_at FROM tombstones
+              WHERE dataset = ? AND (
+                deleted_at > ? OR
+                (deleted_at = ? AND session_id > ?) OR
+                (deleted_at = ? AND session_id = ? AND created_at > ?)
+              )
+              ORDER BY deleted_at ASC, session_id ASC, created_at ASC LIMIT ?`)
+    .all(
+      DEFAULT_DATASET,
+      sinceTombstone.deletedAt,
+      sinceTombstone.deletedAt,
+      sinceTombstone.sessionId,
+      sinceTombstone.deletedAt,
+      sinceTombstone.sessionId,
+      sinceTombstone.createdAt,
+      limit + 1,
+    ) as unknown as Array<{
+    session_id: string
+    created_at: number
+    deleted_at: number
+  }>
+  const visible = rows.slice(0, limit)
+  const visibleTombstones = tombstoneRows.slice(0, limit)
+  const last = visible[visible.length - 1]
+  const lastTombstone = visibleTombstones[visibleTombstones.length - 1]
+  const hasMore = rows.length > limit || tombstoneRows.length > limit
+  return {
+    sessions: visible.map(mapV2Summary),
+    tombstones: visibleTombstones.map((row) => ({
+      sessionId: row.session_id,
+      createdAt: row.created_at,
+      deletedAt: row.deleted_at,
+    })),
+    // 会话已经全部扫到 highWater 时才推进到高水位；只有墓碑还有更多时，
+    // 不能把会话游标也提前推进，否则会漏掉后续会话。
+    nextRevision: rows.length > limit && last !== undefined ? last.revision : highWater,
+    nextTombstone: lastTombstone === undefined
+      ? sinceTombstone
+      : {
+        deletedAt: lastTombstone.deleted_at,
+        sessionId: lastTombstone.session_id,
+        createdAt: lastTombstone.created_at,
+      },
+    hasMore,
+  }
+}
+
+/**
+ * 读单个 v2 会话摘要。
+ * @param db - 已打开的数据库。
+ * @param sessionId - 会话 id。
+ * @returns 摘要，或 undefined。
+ */
+export function getV2SessionSummary(db: ServerDb, sessionId: string): V2SessionSummary | undefined {
+  const row = db.handle
+    .prepare(`SELECT ${V2_SUMMARY_SELECT}
+              FROM sessions s
+              WHERE s.dataset = ? AND s.session_id = ?`)
+    .get(DEFAULT_DATASET, sessionId) as unknown as V2SummaryRow | undefined
+  return row === undefined ? undefined : mapV2Summary(row)
+}
+
+/**
+ * 分页读 v2 批次引用，并带上 manifest 摘要供条件请求校验。
+ * @param db - 已打开的数据库。
+ * @param sessionId - 会话 id。
+ * @param from - 起始下标。
+ * @param limit - 每页条数。
+ * @returns 批次引用、总数、revision 与 manifestDigest，或 undefined。
+ */
+export function listV2Batches(
+  db: ServerDb,
+  sessionId: string,
+  from: number,
+  limit: number,
+): { batches: SealedFrameRef[]; batchCount: number; revision: number; manifestDigest: string } | undefined {
+  const row = sessionRow(db, sessionId)
+  if (row === undefined) return undefined
+  const manifest = JSON.parse(row.manifest_json) as SessionManifest
+  return {
+    batches: manifest.frames.slice(from, from + limit),
+    batchCount: manifest.frames.length,
+    revision: row.revision,
+    manifestDigest: row.manifest_digest,
+  }
+}
+
 /**
  * 管理台用的会话行。
  */
