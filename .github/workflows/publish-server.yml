@@ -1,0 +1,98 @@
+# Release dscs-server via npm trusted publishing (GitHub OIDC), and attach the
+# exact npm tarball + standalone archive + checksums to a GitHub Release.
+#
+# First release only (the npm package name must exist before npm can attach a
+# trusted publisher):
+#
+#   cd packages/server
+#   npm login
+#   npm publish
+#   npm trust github dscs-server \
+#     --repo xfy2412/dsh-session-sync --file publish-server.yml --allow-publish
+#
+# Later releases: bump packages/server/package.json, commit, tag
+# `server-v<version>`, and push the tag. `npm publish` performs the OIDC
+# exchange because npm 11.5.1+ supports it.
+name: publish-server
+
+on:
+  push:
+    tags: ['server-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  # Required for the npm OIDC exchange.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - run: node packages/server/scripts/build.mjs
+      - run: node --check packages/server/dist/index.js
+
+      - id: meta
+        working-directory: packages/server
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/server-v* ]]; then
+            expected="server-v${version}"
+            if [[ "${GITHUB_REF_NAME}" != "$expected" ]]; then
+              echo "tag ${GITHUB_REF_NAME} does not match server version ${expected}" >&2
+              exit 1
+            fi
+          fi
+
+      - id: package
+        working-directory: packages/server
+        run: |
+          tarball="$(npm pack --silent)"
+          archive="dscs-server-${{ steps.meta.outputs.version }}.tar.gz"
+          tar -czf "$archive" dist package.json README.md LICENSE
+          sha256sum "$tarball" "$archive" > SHA256SUMS
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+
+      # A tag-triggered run publishes; workflow_dispatch only builds/checks.
+      - id: published
+        if: startsWith(github.ref, 'refs/tags/server-v')
+        working-directory: packages/server
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          if npm view "dscs-server@${version}" version >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "dscs-server@${version} is already on the registry; nothing to publish."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: startsWith(github.ref, 'refs/tags/server-v') && steps.published.outputs.skip != 'true'
+        working-directory: packages/server
+        run: npm publish
+
+      - if: startsWith(github.ref, 'refs/tags/server-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: packages/server
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" \
+            "${{ steps.package.outputs.tarball }}" \
+            "${{ steps.package.outputs.archive }}" \
+            SHA256SUMS \
+            --clobber

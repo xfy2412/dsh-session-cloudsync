@@ -1,5 +1,5 @@
-# Release via npm trusted publishing (GitHub OIDC): push a `v*` tag, or run
-# this workflow by hand.  No long-lived NPM_TOKEN is stored in the repository.
+# Release via npm trusted publishing (GitHub OIDC), and attach the exact npm
+# tarball to the matching GitHub Release.
 #
 # First release only (the package name must exist before npm can attach a
 # trusted publisher):
@@ -10,18 +10,17 @@
 #   npm trust github dsh-session-cloudsync \
 #     --repo xfy2412/dsh-session-cloudsync --file publish.yml --allow-publish
 #
-# Later releases: bump packages/plugin/package.json, commit, tag `v<version>`,
-# and push the tag.  `npm publish` performs the OIDC exchange because npm
-# 11.5.1+ supports it; do not replace it with `pnpm publish` here.
-name: publish
+# Later releases: bump packages/plugin/package.json, commit, tag
+# `v<version>` or `plugin-v<version>`, and push the tag.
+name: publish-plugin
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v*', 'plugin-v*']
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   # Required for the npm OIDC exchange.
   id-token: write
 
@@ -45,7 +44,9 @@ jobs:
       - if: startsWith(github.ref, 'refs/tags/')
         run: |
           version="v$(node -p 'require("./packages/plugin/package.json").version')"
-          if [ "$version" != "${GITHUB_REF_NAME}" ]; then
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" == plugin-v* ]]; then tag="v${tag#plugin-v}"; fi
+          if [[ "$version" != "$tag" ]]; then
             echo "tag ${GITHUB_REF_NAME} does not match package version ${version}" >&2
             exit 1
           fi
@@ -62,7 +63,23 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      # `prepack` builds lib/ from src/; npm publishes the tarball, not the repo.
+      # Build the exact tarball once; prepack builds lib/ and client assets.
+      - id: package
+        working-directory: packages/plugin
+        run: |
+          tarball="$(npm pack --silent)"
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
       - if: steps.published.outputs.skip != 'true'
         working-directory: packages/plugin
         run: npm publish
+      # Attach the same tarball to the GitHub Release. Re-runs replace assets.
+      - if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: packages/plugin
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" "${{ steps.package.outputs.tarball }}" --clobber

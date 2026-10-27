@@ -1,9 +1,9 @@
 {
   "name": "dscs-server",
   "version": "0.0.0",
-  "private": true,
+  "private": false,
   "type": "module",
-  "description": "DSH Session CloudSync self-hosted server (no runtime dependencies).",
+  "description": "DSH Session CloudSync self-hosted server.",
   "license": "AGPL-3.0-only",
   "bin": {
     "dscs-server": "./dist/index.js"
@@ -11,9 +11,7 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md",
-    "install.sh",
-    "install.ps1"
+    "README.md"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

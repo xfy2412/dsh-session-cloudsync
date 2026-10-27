@@ -30,3 +30,9 @@ jobs:
       - run: node --check packages/plugin/client/index.js
       - run: npm pack --dry-run
         working-directory: packages/plugin
+      # The server is a separate publishable package; build the exact JS
+      # artifact and inspect its tarball on every CI run.
+      - run: node packages/server/scripts/build.mjs
+      - run: node --check packages/server/dist/index.js
+      - run: npm pack --dry-run
+        working-directory: packages/server
