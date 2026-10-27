@@ -1,12 +1,23 @@
 {
-  "name": "@dsh-session-cloudsync/server",
+  "name": "dscs-server",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Self-hosted sync server for dsh-session-cloudsync (no runtime dependencies).",
+  "description": "DSH Session CloudSync self-hosted server (no runtime dependencies).",
   "license": "AGPL-3.0-only",
   "bin": {
-    "dsh-session-cloudsync-server": "./src/index.ts"
+    "dscs-server": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "install.sh",
+    "install.ps1"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "node scripts/build.mjs"
   },
   "engines": {
     "node": ">=24"
