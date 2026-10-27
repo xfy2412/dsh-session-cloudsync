@@ -50,7 +50,7 @@
 | POST | `/v1/blobs?kind=frame\|attachment\|vault` | 设备 | 上传密文；返回 `{sha256, bytes, dedup}`；同内容重复上传返回 200 + `dedup: true` |
 | HEAD | `/v1/blobs/:sha256` | 设备 | 判断密文是否存在（上传去重） |
 | GET | `/v1/blobs/:sha256` | 设备 | 下载密文 |
-| GET | `/v1/cursor?since=<revision>` | 设备 | 自某 revision 以来的变更**摘要** |
+| GET | `/v1/cursor?since=<revision>` | 设备 | 变更流摘要；不是全量会话快照 |
 | GET | `/v1/sessions/:id/manifest` | 设备 | 完整 manifest（大会话只在需要时拉） |
 | GET | `/v1/sessions/:id/batches?from=<index>&limit=<n>` | 设备 | 批次引用分页（默认 500/页） |
 | POST | `/v1/sync/lease` | 设备 | 申请/续租全局单写者租约（带 `X-Client-Id`） |
@@ -62,6 +62,8 @@
 | POST | `/v1/vault/append` | 设备 | 追加 Vault 记录索引 |
 | GET | `/v1/vault/cursor?since=<revision>` | 设备 | Vault 记录 cursor |
 | GET | `/v1/vault/stream/:writer?from=<seq>&limit=<n>` | 设备 | 某 writer 的 Vault 记录索引 |
+
+`/v1/health` 当前只返回服务端 `version`、`protocol` 和 `now`；没有插件版本范围或 capability 声明。P7/v2 协商所需的能力列表尚未实现。
 
 ### lease 与 append
 
@@ -111,7 +113,7 @@
 }
 ```
 
-客户端先比 `batchCount + headChainHash`，一致就跳过；不一致再按页拉 `batches` 找公共前缀。响应里仍带 `frameCount` / `frames` 作为旧字段别名。
+当前客户端尚未实现“先比摘要、再按页拉 batches”的跳过逻辑；push/pull 仍按会话拉完整 manifest。`manifestDigest` 已由服务端返回，但客户端尚未用于条件请求。`/v1/cursor` 是变更流，不是全量会话快照；当前 `readRemoteInventory()` 从 `since=0` 翻页并用全局 `revision` 推进 since，超过一页时会漏会话。v2 计划改为独立的会话快照/摘要接口和真正的 next cursor。
 
 > Vault（设备台账 / 工作区映射 / 笔记）的 `/v1/vault/*` 已在 V1 实现，
 > 设计见 [VAULT.md](../sync/VAULT.md)；记录封帧、cursor、writer 租约和配额以该文为准。

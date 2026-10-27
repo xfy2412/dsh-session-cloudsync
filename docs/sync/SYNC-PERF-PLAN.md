@@ -398,7 +398,7 @@ Discussions      enabled
 
 ## 6. 分阶段实施
 
-### P0：观测与基准（已完成大半）
+### P0：观测与基准（本机可观测部分已完成）
 
 现有实测已经覆盖了最关键的阶段：读取、`planEventBatches`、封帧、sealed 字节、批次数、峰值 RSS。**不再要求从零加一套全量观测，也不把 P0 当作 P1 的前置阻塞项。**
 
@@ -409,10 +409,10 @@ Discussions      enabled
 - 1,509 批次与 267MB payload 的基线；
 - 与官方首屏 264 事件 / 1.05MB 的对照。
 
-只需补齐：
+仍缺：
 
-- Gateway WebSocket 断连次数/时间戳（用于验证 4s 心跳规则，而不是猜“被掐死”）；
-- 每轮请求数、字节数、批次数的持久化诊断；
+- Gateway WebSocket 直连断连次数/时间戳（现在只能用 event-loop 延迟与客户端 SSE 指标代理）；
+- 每轮请求数（当前只记录字节/批次数，没有逐次 HTTP 请求计数）；
 - 把临时脚本固化成可重复基准（只使用事件形状/计数，不把真实会话内容带进仓库）。
 
 实施记录（2026-10-26）：
@@ -501,7 +501,7 @@ Vault 的 `vaultKeyForConfig` 仍走同步派生，后续单独处理。
 
 - 用 snapshot 的 `eventCount` / `sizeBytes` 在读取前给出进度估算；JSONL 当前通常只有 `sizeBytes`，`eventCount` 缺失时不要伪造事件百分比。
 - 读取完成后立刻用 `events.length` / `localLast + 1` 发布**精确总数**和 `planning` 阶段，再开始规划；不要等封完才发 `totalEvents`。
-- 用 `stat.revision` 判断会话是否变化；未变化的会话跳过读取。
+- 用 `stat.revision` 只能作为“可能未变”的提示；不能单独用它跳过完整读取（反例见 §P5 / #10373）。未变化判定必须同时绑定 header/lifecycle；需要时可回退完整读取。
 - 首次读取完成后，规划、封帧、上传形成有界流水线：
   ```text
   read once
