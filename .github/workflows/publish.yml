@@ -67,7 +67,12 @@ jobs:
       - id: package
         working-directory: packages/plugin
         run: |
-          tarball="$(npm pack --silent)"
+          # prepack shares stdout; the tarball name is the final output line.
+          tarball="$(npm pack --silent | tail -n 1)"
+          if [[ ! -f "$tarball" ]]; then
+            echo "npm pack did not create a tarball (got: $tarball)" >&2
+            exit 1
+          fi
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
       - if: steps.published.outputs.skip != 'true'
         working-directory: packages/plugin

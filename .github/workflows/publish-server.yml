@@ -59,7 +59,13 @@ jobs:
       - id: package
         working-directory: packages/server
         run: |
-          tarball="$(npm pack --silent)"
+          # npm lifecycle output (prepack) shares stdout; the tarball name is
+          # the final line, so do not capture the whole output as a filename.
+          tarball="$(npm pack --silent | tail -n 1)"
+          if [[ ! -f "$tarball" ]]; then
+            echo "npm pack did not create a tarball (got: $tarball)" >&2
+            exit 1
+          fi
           archive="dscs-server-${{ steps.meta.outputs.version }}.tar.gz"
           tar -czf "$archive" dist web package.json README.md LICENSE
           sha256sum "$tarball" "$archive" > SHA256SUMS
