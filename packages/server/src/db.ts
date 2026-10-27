@@ -19,7 +19,7 @@ import { DatabaseSync } from 'node:sqlite'
 export const DEFAULT_DATASET = 'default'
 
 /** 当前库结构版本；结构有破坏性变化时递增。 */
-export const SERVER_SCHEMA_VERSION = 3
+export const SERVER_SCHEMA_VERSION = 4
 
 const SCHEMA_VERSION = SERVER_SCHEMA_VERSION
 
@@ -61,6 +61,17 @@ CREATE TABLE IF NOT EXISTS blobs (
   bytes INTEGER NOT NULL,
   kind TEXT NOT NULL,
   created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS append_requests (
+  dataset TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (dataset, device_id, session_id, idempotency_key)
 );
 
 CREATE TABLE IF NOT EXISTS leases (
@@ -143,7 +154,8 @@ function backupBeforeMigration(handle: DatabaseSync, dataDir: string, version: n
  * 迁移旧库；只迁移明确支持的版本，不删除会话/墓碑/Vault。
  *
  * v2 → v3：租约是 60s 的瞬时状态，允许重建；新增 vault_records。
- * v0 → v3：只接受没有旧表、或已是 v2 形状的库；v1 的 frames/session_frames 直接拒绝。
+ * v3 → v4：新增 append_requests（v2 append 的幂等记录）；不重写旧表。
+ * v0 → v4：只接受没有旧表、或已是 v2 形状的库；v1 的 frames/session_frames 直接拒绝。
  */
 function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number): void {
   if (version > SCHEMA_VERSION) {
@@ -317,6 +329,58 @@ export function readMaxBytes(db: ServerDb, fallback: number): number {
  */
 export function writeMaxBytes(db: ServerDb, maxBytes: number): void {
   writeMeta(db, 'max_bytes', String(maxBytes))
+}
+
+/** 一条 v2 append 幂等记录。 */
+export interface AppendRequestRecord {
+  readonly requestHash: string
+  readonly resultJson: string
+}
+
+/**
+ * 读取一条 v2 append 幂等记录。
+ * @param db - 已打开的数据库。
+ * @param deviceId - 发起 append 的设备。
+ * @param sessionId - 会话 id。
+ * @param key - 客户端的 Idempotency-Key。
+ * @returns 记录，或 undefined。
+ */
+export function readAppendRequest(
+  db: ServerDb,
+  deviceId: string,
+  sessionId: string,
+  key: string,
+): AppendRequestRecord | undefined {
+  const row = db.handle
+    .prepare('SELECT request_hash, result_json FROM append_requests WHERE dataset = ? AND device_id = ? AND session_id = ? AND idempotency_key = ?')
+    .get(DEFAULT_DATASET, deviceId, sessionId, key) as { request_hash?: string; result_json?: string } | undefined
+  return row === undefined
+    ? undefined
+    : { requestHash: String(row.request_hash), resultJson: String(row.result_json) }
+}
+
+/**
+ * 写入一条 v2 append 幂等记录；必须和 append 在同一个事务里。
+ * @param db - 已打开的数据库。
+ * @param deviceId - 发起 append 的设备。
+ * @param sessionId - 会话 id。
+ * @param key - 客户端的 Idempotency-Key。
+ * @param requestHash - 请求内容的稳定哈希。
+ * @param resultJson - 成功响应的摘要 JSON。
+ * @param createdAt - 记录时间。
+ */
+export function writeAppendRequest(
+  db: ServerDb,
+  deviceId: string,
+  sessionId: string,
+  key: string,
+  requestHash: string,
+  resultJson: string,
+  createdAt: number,
+): void {
+  db.handle
+    .prepare('INSERT INTO append_requests (dataset, device_id, session_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(DEFAULT_DATASET, deviceId, sessionId, key, requestHash, resultJson, createdAt)
 }
 
 /**

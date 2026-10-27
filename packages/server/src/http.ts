@@ -257,6 +257,21 @@ function clientIdFrom(req: IncomingMessage): string {
   return value
 }
 
+/**
+ * 读取 v2 append 的幂等键。
+ * @param req - 收到的请求。
+ * @returns 幂等键。
+ * @throws 缺失或形状非法时抛出 `bad-request`。
+ */
+function idempotencyKeyFrom(req: IncomingMessage): string {
+  const raw = req.headers['idempotency-key']
+  const value = Array.isArray(raw) ? raw[0] ?? '' : String(raw ?? '')
+  if (!/^[A-Za-z0-9._:-]{1,255}$/u.test(value)) {
+    throw new SyncError('bad-request', '需要 1–255 位合法 Idempotency-Key')
+  }
+  return value
+}
+
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u
 
 /**
@@ -446,6 +461,7 @@ const V2_SESSIONS_PATH = /^\/v2\/sessions$/u
 const V2_CHANGES_PATH = /^\/v2\/changes$/u
 const V2_SUMMARY_PATH = /^\/v2\/sessions\/([^/]+)\/summary$/u
 const V2_BATCHES_PATH = /^\/v2\/sessions\/([^/]+)\/batches$/u
+const V2_APPEND_PATH = /^\/v2\/sessions\/([^/]+)\/append$/u
 const VAULT_APPEND_PATH = /^\/v1\/vault\/append$/u
 const VAULT_LEASE_PATH = /^\/v1\/vault\/lease$/u
 const VAULT_CURSOR_PATH = /^\/v1\/vault\/cursor$/u
@@ -728,7 +744,7 @@ export function createHttpServer(options: ServerOptions): Server {
             apiVersions: [1, 2],
             protocols: [PROTOCOL_VERSION],
             schemaVersion: SERVER_SCHEMA_VERSION,
-            capabilities: ['session-summary', 'changes-cursor', 'conditional-get', 'manifest-digest', 'batches'],
+            capabilities: ['session-summary', 'changes-cursor', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches'],
           },
           now: Date.now(),
         })
@@ -817,6 +833,26 @@ export function createHttpServer(options: ServerOptions): Server {
           throw new SyncError('conflict', 'manifest 已变化，请重新读取摘要')
         }
         return json(res, 200, { ok: true, value: page })
+      },
+    },
+    {
+      method: 'POST',
+      path: V2_APPEND_PATH,
+      handler: async (req, res) => {
+        const device = requireDevice(db, req)
+        const clientId = clientIdFrom(req)
+        const idempotencyKey = idempotencyKeyFrom(req)
+        const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, V2_APPEND_PATH)
+        const body = await readJson(req, MAX_APPEND_BODY_BYTES)
+        const parsed = parseAppend(body)
+        const value = appendFrames(db, options.dataDir, {
+          sessionId: id,
+          deviceId: device.deviceId,
+          clientId,
+          idempotencyKey,
+          ...parsed,
+        })
+        return json(res, 200, { ok: true, value })
       },
     },
     {

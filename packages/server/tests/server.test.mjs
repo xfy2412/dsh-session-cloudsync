@@ -32,6 +32,7 @@ test('健康检查不需要 token，并报告协议版本', async () => {
       assert.equal(typeof info.server.schemaVersion, 'number')
       assert.ok(Array.isArray(info.server.capabilities))
       assert.ok(info.server.capabilities.includes('session-summary'))
+      assert.ok(info.server.capabilities.includes('idempotent-append'))
       assert.equal(discovery.headers.get('cache-control'), 'no-store')
     } finally {
       await close()

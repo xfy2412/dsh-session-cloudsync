@@ -45,7 +45,7 @@ function createV2Database(dir) {
   raw.close()
 }
 
-test('数据库迁移：v2 → v3 保留会话/墓碑并新增 Vault，重建瞬时租约', () => {
+test('数据库迁移：v2 → v4 保留会话/墓碑并新增 Vault 与幂等表，重建瞬时租约', () => {
   const dir = tempDir()
   try {
     createV2Database(dir)
@@ -59,6 +59,7 @@ test('数据库迁移：v2 → v3 保留会话/墓碑并新增 Vault，重建瞬
       const tombstone = db.handle.prepare('SELECT session_id FROM tombstones').get()
       assert.equal(tombstone.session_id, 'kept-session')
       assert.ok(db.handle.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vault_records'").get())
+      assert.ok(db.handle.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='append_requests'").get())
       const leaseColumns = db.handle.prepare('PRAGMA table_info(leases)').all().map((row) => row.name)
       assert.ok(leaseColumns.includes('resource'))
       assert.ok(leaseColumns.includes('client_id'))
@@ -71,7 +72,31 @@ test('数据库迁移：v2 → v3 保留会话/墓碑并新增 Vault，重建瞬
   }
 })
 
-test('数据库迁移：新库直接创建 v3', () => {
+test('数据库迁移：v3 → v4 只新增幂等表，不动旧数据', () => {
+  const dir = tempDir()
+  try {
+    const first = openDatabase(dir)
+    try {
+      first.handle.exec('DROP TABLE IF EXISTS append_requests')
+      first.handle.exec('PRAGMA user_version = 3')
+    } finally {
+      first.close()
+    }
+    const db = openDatabase(dir)
+    try {
+      const version = db.handle.prepare('PRAGMA user_version').get()
+      assert.equal(version.user_version, SERVER_SCHEMA_VERSION)
+      assert.ok(db.handle.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='append_requests'").get())
+      assert.ok(readdirSync(dir).some((name) => name.startsWith('db.sqlite.bak-v3-')))
+    } finally {
+      db.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('数据库迁移：新库直接创建 v4', () => {
   const dir = tempDir()
   try {
     const db = openDatabase(dir)
@@ -79,6 +104,7 @@ test('数据库迁移：新库直接创建 v3', () => {
       const version = db.handle.prepare('PRAGMA user_version').get()
       assert.equal(version.user_version, SERVER_SCHEMA_VERSION)
       assert.ok(db.handle.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").get())
+      assert.ok(db.handle.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='append_requests'").get())
     } finally {
       db.close()
     }

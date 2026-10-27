@@ -7,13 +7,14 @@
  * @module @dsh-session-cloudsync/server/sessions
  */
 import { existsSync } from 'node:fs'
-import { assertChain, buildManifest, manifestDigest } from '../../shared/src/chain.ts'
+import { assertChain, buildManifest, manifestDigest, stableStringify } from '../../shared/src/chain.ts'
 import type { ChainFrame } from '../../shared/src/chain.ts'
+import { sha256 } from '../../shared/src/crypto.ts'
 import type { SessionManifest } from '../../shared/src/protocol.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 import { SyncError } from '../../shared/src/wire.ts'
 import { blobPath } from './blobs.ts'
-import { DEFAULT_DATASET, bumpRevision, readRevision, withTransaction, type ServerDb } from './db.ts'
+import { DEFAULT_DATASET, bumpRevision, readAppendRequest, readRevision, withTransaction, writeAppendRequest, type ServerDb } from './db.ts'
 import { requireLease as requireResourceLease, SYNC_RESOURCE } from './leases.ts'
 
 /** 单个 append 请求体上限（万帧会话首次同步约 1.5 MB）。 */
@@ -46,6 +47,8 @@ export interface AppendInput {
   readonly safeThroughSeq?: number
   /** 根/worktree 的逻辑工作区 key；子代理继承。 */
   readonly workspaceKey?: string
+  /** v2 客户端的幂等键；v1 不设置。 */
+  readonly idempotencyKey?: string
 }
 
 /** append / delete 之后返回的会话摘要。 */
@@ -137,6 +140,25 @@ function manifestOf(
 }
 
 /**
+ * 计算 append 请求内容的稳定哈希，用于发现 Idempotency-Key 被复用于不同内容。
+ * @param input - append 入参。
+ * @returns 小写十六进制 SHA-256。
+ */
+function appendRequestHash(input: AppendInput): string {
+  return sha256(stableStringify({
+    sessionId: input.sessionId,
+    baseIndex: input.baseIndex,
+    baseChainHash: input.baseChainHash,
+    createdAt: input.createdAt,
+    formatVersion: input.formatVersion,
+    frames: input.frames,
+    tailOpen: input.tailOpen ?? null,
+    safeThroughSeq: input.safeThroughSeq ?? null,
+    workspaceKey: input.workspaceKey ?? null,
+  }))
+}
+
+/**
  * 提交新帧（首次创建或前缀延续）。
  * @param db - 已打开的数据库。
  * @param dataDir - 数据目录（检查 blob 是否已上传）。
@@ -147,6 +169,19 @@ function manifestOf(
  */
 export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, now = Date.now()): SessionSummary {
   return withTransaction(db, () => {
+    const idempotencyKey = input.idempotencyKey
+    const requestHash = idempotencyKey === undefined ? undefined : appendRequestHash(input)
+    if (idempotencyKey !== undefined && requestHash !== undefined) {
+      // 幂等重放必须发生在租约检查之前：原始请求成功后，租约可能已经过期
+      // 或已释放，但客户端仍应拿到同一个成功结果。
+      const existing = readAppendRequest(db, input.deviceId, input.sessionId, idempotencyKey)
+      if (existing !== undefined) {
+        if (existing.requestHash !== requestHash) {
+          throw new SyncError('conflict', 'Idempotency-Key 已用于不同的 append 请求')
+        }
+        return JSON.parse(existing.resultJson) as SessionSummary
+      }
+    }
     requireResourceLease(db, SYNC_RESOURCE, input.deviceId, input.clientId, now)
     const row = sessionRow(db, input.sessionId)
     let combined: SealedFrameRef[]
@@ -216,7 +251,7 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
                   manifest_json = excluded.manifest_json, manifest_digest = excluded.manifest_digest,
                   revision = excluded.revision, updated_at = excluded.updated_at, deleted_at = NULL`)
       .run(DEFAULT_DATASET, input.sessionId, createdAt, formatVersion, manifest.lastSeq, combined.length, headChainHash, JSON.stringify(manifest), digest, revision, now)
-    return {
+    const summary: SessionSummary = {
       sessionId: input.sessionId,
       revision,
       batchCount: combined.length,
@@ -226,6 +261,18 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
       updatedAt: now,
       deletedAt: null,
     }
+    if (idempotencyKey !== undefined && requestHash !== undefined) {
+      writeAppendRequest(
+        db,
+        input.deviceId,
+        input.sessionId,
+        idempotencyKey,
+        requestHash,
+        JSON.stringify(summary),
+        now,
+      )
+    }
+    return summary
   })
 }
 
