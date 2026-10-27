@@ -19,7 +19,9 @@ import { DatabaseSync } from 'node:sqlite'
 export const DEFAULT_DATASET = 'default'
 
 /** 当前库结构版本；结构有破坏性变化时递增。 */
-const SCHEMA_VERSION = 3
+export const SERVER_SCHEMA_VERSION = 3
+
+const SCHEMA_VERSION = SERVER_SCHEMA_VERSION
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -102,27 +104,117 @@ export interface ServerDb {
   close(): void
 }
 
+function tableExists(handle: DatabaseSync, table: string): boolean {
+  const row = handle.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get(table) as { name?: string } | undefined
+  return row !== undefined
+}
+
+function tableColumns(handle: DatabaseSync, table: string): Set<string> {
+  const rows = handle.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>
+  return new Set(rows.map((row) => row.name).filter((name): name is string => typeof name === 'string'))
+}
+
+function anyUserTable(handle: DatabaseSync): boolean {
+  const row = handle.prepare(
+    "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+  ).get() as { count?: number } | undefined
+  return Number(row?.count ?? 0) > 0
+}
+
+function assertV2Sessions(handle: DatabaseSync): void {
+  const columns = tableColumns(handle, 'sessions')
+  const required = ['created_at', 'format_version', 'last_seq', 'frame_count', 'head_chain_hash', 'manifest_json', 'manifest_digest', 'revision', 'updated_at']
+  const missing = required.filter((column) => !columns.has(column))
+  if (missing.length > 0) {
+    throw new Error(
+      `不支持的旧数据库：sessions 缺少 ${missing.join(', ')}；请先导出现有数据，再用新数据目录重建。`,
+    )
+  }
+}
+
+function backupBeforeMigration(handle: DatabaseSync, dataDir: string, version: number): void {
+  const target = join(dataDir, `db.sqlite.bak-v${version}-${Date.now()}`)
+  handle.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`)
+}
+
+/**
+ * 迁移旧库；只迁移明确支持的版本，不删除会话/墓碑/Vault。
+ *
+ * v2 → v3：租约是 60s 的瞬时状态，允许重建；新增 vault_records。
+ * v0 → v3：只接受没有旧表、或已是 v2 形状的库；v1 的 frames/session_frames 直接拒绝。
+ */
+function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number): void {
+  if (version > SCHEMA_VERSION) {
+    throw new Error(`数据库结构版本 ${version} 高于服务端支持的 ${SCHEMA_VERSION}；请升级服务端，不要降级覆盖。`)
+  }
+  if (version === SCHEMA_VERSION) {
+    handle.exec(SCHEMA)
+    return
+  }
+
+  let sourceVersion = version
+  if (version === 0) {
+    if (!anyUserTable(handle)) {
+      handle.exec(SCHEMA)
+      handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+      return
+    }
+    if (tableExists(handle, 'frames') || tableExists(handle, 'session_frames')) {
+      throw new Error('检测到未版本化的旧帧结构（frames/session_frames）；该结构未作为发布版本支持，拒绝自动迁移。请导出数据后重建。')
+    }
+    if (!tableExists(handle, 'sessions')) {
+      handle.exec(SCHEMA)
+      handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+      return
+    }
+    sourceVersion = 2
+  }
+
+  if (sourceVersion !== 2 && sourceVersion !== 3) {
+    throw new Error(`不支持的数据库结构版本 ${sourceVersion}；请使用对应版本的服务端迁移。`)
+  }
+
+  assertV2Sessions(handle)
+  backupBeforeMigration(handle, dataDir, sourceVersion)
+  handle.exec('BEGIN IMMEDIATE')
+  try {
+    const leaseColumns = tableColumns(handle, 'leases')
+    if (!leaseColumns.has('resource') || !leaseColumns.has('client_id')) {
+      // 60s 租约是瞬时状态，不可恢复；重建它不会丢失会话/墓碑/Vault。
+      handle.exec('DROP TABLE IF EXISTS leases')
+    }
+    handle.exec(SCHEMA)
+    handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+    handle.exec('COMMIT')
+  } catch (error: unknown) {
+    handle.exec('ROLLBACK')
+    throw error
+  }
+}
+
 /**
  * 打开（并初始化）服务端数据库。
  *
- * 结构版本落后时只重建会话/租约/墓碑相关表；设备与 blob 记录保留。
+ * 结构版本落后时执行增量迁移；迁移前用 `VACUUM INTO` 留本地备份。
+ * 不支持的旧结构直接报错，不删除会话、墓碑或 Vault。
  * @param dataDir - 存放 `db.sqlite` 的目录。
  * @returns 已打开的数据库。
  */
 export function openDatabase(dataDir: string): ServerDb {
   mkdirSync(dataDir, { recursive: true })
   const handle = new DatabaseSync(join(dataDir, 'db.sqlite'))
-  handle.exec('PRAGMA journal_mode = WAL')
-  handle.exec('PRAGMA foreign_keys = ON')
-  const versionRow = handle.prepare('PRAGMA user_version').get() as { user_version?: number } | undefined
-  const version = Number(versionRow?.user_version ?? 0)
-  if (version < SCHEMA_VERSION) {
-    // M2 之前没有真实部署；旧结构直接重建（设备、blob、meta 不受影响）。
-    handle.exec('DROP TABLE IF EXISTS session_frames; DROP TABLE IF EXISTS frames; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS leases; DROP TABLE IF EXISTS tombstones; DROP TABLE IF EXISTS vault_records;')
-    handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+  try {
+    handle.exec('PRAGMA journal_mode = WAL')
+    handle.exec('PRAGMA foreign_keys = ON')
+    const versionRow = handle.prepare('PRAGMA user_version').get() as { user_version?: number } | undefined
+    migrateDatabase(handle, dataDir, Number(versionRow?.user_version ?? 0))
+    return { handle, close: () => handle.close() }
+  } catch (error: unknown) {
+    handle.close()
+    throw error
   }
-  handle.exec(SCHEMA)
-  return { handle, close: () => handle.close() }
 }
 
 /**

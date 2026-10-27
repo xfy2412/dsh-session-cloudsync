@@ -17,6 +17,7 @@ import { deriveMasterKey, newSalt } from '../../shared/src/crypto.ts'
 import { hasBlob, putBlob, readBlob } from './blobs.ts'
 import {
   DEFAULT_DATASET,
+  SERVER_SCHEMA_VERSION,
   adminPassword,
   blobRecord,
   isAdminInitialized,
@@ -44,8 +45,17 @@ import { acquireLease, releaseLease, SYNC_RESOURCE, vaultResource } from './leas
 import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 
-/** `/v1/health` 报告的版本。 */
-export const SERVER_VERSION = '0.0.0'
+/** `/health` 报告的服务端版本；从 package.json 读取，避免手写漂移。 */
+function readServerVersion(): string {
+  try {
+    const raw = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: unknown }
+    return typeof raw.version === 'string' && raw.version !== '' ? raw.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+export const SERVER_VERSION = readServerVersion()
 
 /** 默认存储上限：10 GiB。 */
 export const DEFAULT_MAX_BYTES = 10 * 1024 * 1024 * 1024
@@ -595,6 +605,23 @@ export function createHttpServer(options: ServerOptions): Server {
   }
 
   const routes: Array<{ method: string; path: RegExp; handler: Handler }> = [
+    {
+      method: 'GET',
+      path: /^\/health$/,
+      handler: async (_req, res) => {
+        json(res, 200, {
+          ok: true,
+          server: {
+            version,
+            apiVersions: [1],
+            protocols: [PROTOCOL_VERSION],
+            schemaVersion: SERVER_SCHEMA_VERSION,
+            capabilities: ['manifest-digest', 'batches'],
+          },
+          now: Date.now(),
+        })
+      },
+    },
     {
       method: 'GET',
       path: /^\/v1\/health$/,

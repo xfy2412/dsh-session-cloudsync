@@ -21,6 +21,17 @@ test('健康检查不需要 token，并报告协议版本', async () => {
       assert.equal(body.ok, true)
       assert.equal(body.protocol, PROTOCOL_VERSION)
       assert.equal(typeof body.now, 'number')
+
+      const discovery = await fetch(`${base}/health`)
+      assert.equal(discovery.status, 200)
+      const info = await discovery.json()
+      assert.equal(info.ok, true)
+      assert.equal(typeof info.server.version, 'string')
+      assert.deepEqual(info.server.apiVersions, [1])
+      assert.ok(info.server.protocols.includes(PROTOCOL_VERSION))
+      assert.equal(typeof info.server.schemaVersion, 'number')
+      assert.ok(Array.isArray(info.server.capabilities))
+      assert.equal(discovery.headers.get('cache-control'), 'no-store')
     } finally {
       await close()
       db.close()

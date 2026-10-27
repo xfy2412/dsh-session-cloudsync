@@ -46,7 +46,8 @@
 
 | 方法 | 路径 | 角色 | 作用 |
 |---|---|---|---|
-| GET | `/v1/health` | 公开 | 版本、协议号、当前时间 |
+| GET | `/health` | 公开 | 无版本能力发现：服务端版本、apiVersions、protocols、schemaVersion、capabilities |
+| GET | `/v1/health` | 公开 | 旧客户端兼容：版本、协议号、当前时间 |
 | POST | `/v1/devices` | setup | 签发设备 token（明文只返回一次） |
 | GET | `/v1/devices` | setup | 列出未吊销设备 |
 | DELETE | `/v1/devices/:id` | setup | 吊销设备 token |
@@ -67,7 +68,7 @@
 | GET | `/v1/vault/cursor?since=<revision>` | 设备 | Vault 记录 cursor |
 | GET | `/v1/vault/stream/:writer?from=<seq>&limit=<n>` | 设备 | 某 writer 的 Vault 记录索引 |
 
-`/v1/health` 当前只返回服务端 `version`、`protocol` 和 `now`；没有插件版本范围或 capability 声明。客户端在 `/v1`、`/v2` 之间选择前应先使用无版本的 `/health` 做能力发现；`/v1/health` 仅保留给旧客户端。`/health` 尚未实现。
+`/health` 已实现，返回 `server.version / apiVersions / protocols / schemaVersion / capabilities`；`/v1/health` 仅保留给旧客户端，仍返回旧字段。
 
 ### lease 与 append
 
