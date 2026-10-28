@@ -458,52 +458,43 @@ export function apply(ctx: Context, config: Config): void {
     if (remoteInventory?.identity !== identity) remoteLastSeq.clear()
     const byKey = new Map<string, string[]>()
     try {
-      let since = 0
+      let cursor: string | undefined
       for (let page = 0; page < 50; page += 1) {
-        const response = await fetch(`${base}/v1/cursor?since=${since}&limit=200`, {
+        const query = cursor === undefined
+          ? 'limit=200'
+          : `cursor=${encodeURIComponent(cursor)}&limit=200`
+        const response = await fetch(`${base}/v2/sessions?${query}`, {
           headers: { authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(engineConfig.requestTimeoutMs ?? 10_000),
         })
         if (!response.ok) break
         const body = await response.json() as {
           readonly value?: {
-            readonly revision?: number
-            readonly sessions?: readonly { readonly sessionId?: string; readonly deletedAt?: number | null }[]
-            readonly hasMore?: boolean
+            readonly nextCursor?: unknown
+            readonly sessions?: readonly {
+              readonly sessionId?: string
+              readonly workspaceKey?: unknown
+              readonly lastSeq?: unknown
+            }[]
           }
         }
         const sessions = body.value?.sessions ?? []
-        for (const change of sessions) {
-          if (change.deletedAt !== null && change.deletedAt !== undefined) continue
-          const sessionId = change.sessionId
+        for (const session of sessions) {
+          const sessionId = session.sessionId
+          const workspaceKey = session.workspaceKey
           if (typeof sessionId !== 'string' || sessionId === '') continue
-          const manifestResponse = await fetch(`${base}/v1/sessions/${encodeURIComponent(sessionId)}/manifest`, {
-            headers: { authorization: `Bearer ${token}` },
-            signal: AbortSignal.timeout(engineConfig.requestTimeoutMs ?? 10_000),
-          })
-          if (!manifestResponse.ok) continue
-          const manifestBody = await manifestResponse.json() as {
-            readonly value?: {
-              readonly manifest?: {
-                readonly workspaceKey?: unknown
-                readonly deletedAt?: unknown
-                readonly lastSeq?: unknown
-              }
-            }
+          if (typeof workspaceKey !== 'string' || workspaceKey === '') continue
+          if (typeof session.lastSeq === 'number' && Number.isFinite(session.lastSeq)) {
+            remoteLastSeq.set(sessionId, session.lastSeq)
           }
-          const manifest = manifestBody.value?.manifest
-          if (manifest === undefined || typeof manifest.workspaceKey !== 'string' || manifest.workspaceKey === '') continue
-          if (manifest.deletedAt !== undefined) continue
-          if (typeof manifest.lastSeq === 'number' && Number.isFinite(manifest.lastSeq)) {
-            remoteLastSeq.set(sessionId, manifest.lastSeq)
-          }
-          const list = byKey.get(manifest.workspaceKey) ?? []
+          const list = byKey.get(workspaceKey) ?? []
           list.push(sessionId)
-          byKey.set(manifest.workspaceKey, list)
+          byKey.set(workspaceKey, list)
         }
-        const revision = typeof body.value?.revision === 'number' ? body.value.revision : since
-        since = Math.max(since, revision)
-        if (body.value?.hasMore !== true || revision <= 0) break
+        cursor = typeof body.value?.nextCursor === 'string' && body.value.nextCursor !== ''
+          ? body.value.nextCursor
+          : undefined
+        if (cursor === undefined) break
       }
     } catch (error: unknown) {
       logger.warn(`dsh-session-cloudsync: 读取远端会话清单失败：${error instanceof Error ? error.message : String(error)}`)
@@ -714,6 +705,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     initial: {
       revision: initialJournal.revision,
+      ...initialJournal.cursor === undefined ? {} : { cursor: initialJournal.cursor },
       ...initialJournal.pending === undefined ? {} : { pending: initialJournal.pending },
       ...initialJournal.cwdPending === undefined ? {} : { cwdPending: initialJournal.cwdPending },
       ...initialJournal.blocked === undefined ? {} : { blocked: initialJournal.blocked },

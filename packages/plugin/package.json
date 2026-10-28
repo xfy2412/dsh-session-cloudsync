@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-cloudsync",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "private": false,
   "type": "module",
   "description": "DSH 会话云同步插件：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。",
@@ -36,6 +36,7 @@
   },
   "files": [
     "lib/**/*.js",
+    "lib/agreement.md",
     "client/**/*.js",
     "assets/**/*",
     "cordis.patch.yml",

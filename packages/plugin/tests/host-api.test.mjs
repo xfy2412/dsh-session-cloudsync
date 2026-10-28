@@ -107,12 +107,13 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/perf/config/events/setup/workspaces/test/sync/cwd/blocked/replace/bind 十二条精确路由', () => {
+test('宿主 API：注册 status/perf/config/agreement/events/setup/workspaces/test/sync/cwd/blocked/replace/bind 十三条精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-cloudsync/status', ['GET'], 'buffered'],
     ['/api/session-cloudsync/perf', ['GET'], 'buffered'],
     ['/api/session-cloudsync/config', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/agreement', ['GET'], 'buffered'],
     ['/api/session-cloudsync/events', ['GET'], 'buffered'],
     ['/api/session-cloudsync/setup', ['GET'], 'buffered'],
     ['/api/session-cloudsync/workspaces', ['GET'], 'buffered'],
@@ -134,6 +135,18 @@ test('宿主 API：config 返回单一快照', async () => {
   const body = await bodyOf(response)
   assert.equal(body.value.schemaVersion, 2)
   assert.deepEqual(body.value.selection, { uploadRootIds: [], pull: { mode: 'bound-workspaces' } })
+})
+
+test('宿主 API：agreement 返回文档 hash、生效日期和正文', async () => {
+  const routes = createHostApi(control())
+  const response = await route(routes, '/api/session-cloudsync/agreement').fetch(
+    new Request('http://host/api/session-cloudsync/agreement'),
+  )
+  assert.equal(response.status, 200)
+  const body = await bodyOf(response)
+  assert.match(body.value.hash, /^[a-f0-9]{64}$/)
+  assert.equal(body.value.version, '2026-10-28')
+  assert.match(body.value.markdown, /dsh-session-cloudsync 使用协议/)
 })
 
 test('宿主 API：status 返回快照且禁止缓存', async () => {

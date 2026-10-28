@@ -26,6 +26,8 @@ URL          http://127.0.0.1:8787
 凭据文件     .tmp/dev-console/sync-credentials.json（0600）
 ```
 
+- 服务端为 v0.1.0 v2-only；控制台用 `/health` 探活，并在服务端面板显示
+  protocol 与 `batch-upload` / `batch-download` / `zstd-frame` 能力；
 - 首次准备时用服务端 CLI 给 A/B 各签发一个设备 token；
 - 生成一个 A/B 共享的随机同步口令；
 - 在启动 A/B 时通过环境变量注入：

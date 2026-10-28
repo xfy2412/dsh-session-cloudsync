@@ -84,6 +84,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
     '/api/session-cloudsync/status',
     '/api/session-cloudsync/perf',
     '/api/session-cloudsync/config',
+    '/api/session-cloudsync/agreement',
     '/api/session-cloudsync/events',
     '/api/session-cloudsync/setup',
     '/api/session-cloudsync/workspaces',

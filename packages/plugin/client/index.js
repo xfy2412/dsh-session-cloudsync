@@ -30,6 +30,8 @@ window.__ModuleLoader__.load({
       { ms: 300000, label: '5 分钟' },
     ]
     var ONBOARD_DISMISSED = 'dsh-session-cloudsync.onboarding.dismissed'
+    var AGREEMENT_ACCEPTED_KEY = 'dsh-session-cloudsync.agreement.accepted'
+    var AGREEMENT_DOC_BASE = 'https://github.com/xfy2412/dsh-session-cloudsync/blob/main/docs/guides/'
     var OPEN_GUARD_MARK = '__dshSessionCloudsyncOpenGuard'
 
     var CSS = [
@@ -157,6 +159,19 @@ window.__ModuleLoader__.load({
       '.dssync-wizard-icon{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:var(--dssync-accent-soft);color:#b9ccff;flex:0 0 auto}',
       '.dssync-wizard h2{margin:0;font-size:22px;line-height:1.25;font-weight:600}',
       '.dssync-wizard p{margin:5px 0 0;color:var(--dssync-muted);font-size:13px}',
+      '.dssync-agreement{max-height:42vh;overflow:auto;padding:12px 14px;border:1px solid var(--dssync-line);border-radius:10px;background:rgba(0,0,0,.14);font-size:12.5px;line-height:1.65}',
+      '.dssync-agreement h3,.dssync-agreement h4{margin:10px 0 6px;color:var(--dssync-text);font-size:13px;line-height:1.35}',
+      '.dssync-agreement h3:first-child,.dssync-agreement h4:first-child{margin-top:0}',
+      '.dssync-agreement p{margin:0 0 8px;color:var(--dssync-muted);font-size:12.5px;line-height:1.65}',
+      '.dssync-agreement p:last-child{margin-bottom:0}',
+      '.dssync-agreement ul{margin:0 0 8px;padding-left:18px;color:var(--dssync-muted)}',
+      '.dssync-agreement li{margin:3px 0}',
+      '.dssync-agreement blockquote{margin:8px 0;padding:5px 10px;border-left:2px solid var(--dssync-line-strong);color:var(--dssync-faint)}',
+      '.dssync-agreement code{padding:1px 4px;border-radius:4px;background:rgba(127,127,127,.16);font-size:11.5px}',
+      '.dssync-agreement pre{overflow:auto;padding:8px;border-radius:6px;background:rgba(0,0,0,.2);font-size:11.5px}',
+      '.dssync-agreement a{color:#b9ccff;text-decoration:underline}',
+      '.dssync-agree{display:flex;align-items:flex-start;gap:8px;color:var(--dssync-muted);font-size:12.5px;line-height:1.5;cursor:pointer}',
+      '.dssync-agree input{margin:2px 0 0;flex:0 0 auto}',
       '.dssync-close{position:absolute;right:0;top:0;width:30px;height:30px;border:0;border-radius:8px;background:transparent;color:var(--dssync-muted);cursor:pointer;font-size:18px;line-height:1}',
       '.dssync-close:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}',
       '.dssync-steps{display:flex;align-items:center;gap:8px;margin:0 0 22px;list-style:none;padding:0}',
@@ -671,6 +686,10 @@ window.__ModuleLoader__.load({
         return fetchJson('/test', { method: 'POST', body: JSON.stringify({ serverUrl: serverUrl }) })
       }
 
+      async function agreement() {
+        return fetchJson('/agreement')
+      }
+
       async function correctCwd(sessionId, action) {
         var result = await fetchJson('/cwd', {
           method: 'POST',
@@ -755,6 +774,7 @@ window.__ModuleLoader__.load({
         refreshWorkspaces: refreshWorkspaces,
         syncNow: syncNow,
         testConnection: testConnection,
+        agreement: agreement,
         correctCwd: correctCwd,
         resolveBlocked: resolveBlocked,
         prepareReplace: prepareReplace,
@@ -921,7 +941,7 @@ window.__ModuleLoader__.load({
     function sessionState(status, sessionId) {
       if (status === null) return {
         pending: false, tail: false, lag: false, cwd: false, blocked: false,
-        blockedReason: '', unmapped: false, live: false,
+        blockedReason: '', unmapped: false, live: false, compression: undefined,
       }
       var session = findSession(status, sessionId)
       var pending = status.pending !== null && status.pending !== undefined && status.pending.sessionId === sessionId
@@ -934,6 +954,7 @@ window.__ModuleLoader__.load({
         blockedReason: session && session.blocked && session.blocked.message ? session.blocked.message : '',
         unmapped: session ? session.unmapped !== undefined : false,
         live: session ? session.live === true : false,
+        compression: session ? session.compression : undefined,
       }
     }
 
@@ -1691,6 +1712,122 @@ window.__ModuleLoader__.load({
       try { sessionStorage.setItem(ONBOARD_DISMISSED, '1') } catch (ignored) { /* 隐私模式 */ }
     }
 
+    function readAcceptedAgreement() {
+      try { return String(localStorage.getItem(AGREEMENT_ACCEPTED_KEY) || '') } catch (ignored) { return '' }
+    }
+
+    function saveAcceptedAgreement(hash) {
+      try { if (hash) localStorage.setItem(AGREEMENT_ACCEPTED_KEY, String(hash)) } catch (ignored) { /* 隐私模式 */ }
+    }
+
+    /** 协议里的轻量内联格式：粗体、代码、链接。 */
+    function agreementInline(text) {
+      var parts = String(text).split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g)
+      return parts.map(function (part, index) {
+        if (part === '') return null
+        if (part.slice(0, 2) === '**' && part.slice(-2) === '**') {
+          return h('strong', { key: index }, part.slice(2, -2))
+        }
+        if (part.charAt(0) === '`' && part.charAt(part.length - 1) === '`') {
+          return h('code', { key: index }, part.slice(1, -1))
+        }
+        var link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part)
+        if (link) {
+          var href = link[2]
+          if (!/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(href)) {
+            try { href = new URL(href, AGREEMENT_DOC_BASE).toString() } catch (ignored) { /* 保留原文 */ }
+          }
+          return h('a', { key: index, href: href, target: '_blank', rel: 'noreferrer' }, link[1])
+        }
+        return part
+      }).filter(function (part) { return part !== null })
+    }
+
+    /** 只覆盖使用协议用到的 Markdown 子集，避免引入渲染依赖。 */
+    function AgreementContent(props) {
+      var lines = String(props.markdown || '').split('\n')
+      var blocks = []
+      var paragraph = []
+      var list = []
+      var code = []
+      var inCode = false
+
+      function flushParagraph() {
+        if (paragraph.length === 0) return
+        blocks.push(h('p', { key: 'agreement-p-' + blocks.length }, agreementInline(paragraph.join(' '))))
+        paragraph = []
+      }
+      function flushList() {
+        if (list.length === 0) return
+        blocks.push(h('ul', { key: 'agreement-ul-' + blocks.length }, list.map(function (item, index) {
+          return h('li', { key: index }, agreementInline(item))
+        })))
+        list = []
+      }
+      function flushCode() {
+        if (code.length === 0) return
+        blocks.push(h('pre', { key: 'agreement-pre-' + blocks.length }, code.join('\n')))
+        code = []
+      }
+
+      lines.forEach(function (raw) {
+        var line = String(raw)
+        if (line.trim().indexOf('```') === 0) {
+          if (inCode) { flushCode(); inCode = false } else { flushParagraph(); flushList(); inCode = true }
+          return
+        }
+        if (inCode) { code.push(line); return }
+        var trimmed = line.trim()
+        if (trimmed === '') { flushParagraph(); flushList(); return }
+        var heading = /^(#{1,4})\s+(.*)$/.exec(trimmed)
+        if (heading) {
+          flushParagraph(); flushList()
+          var level = heading[1].length
+          blocks.push(h(level <= 2 ? 'h3' : 'h4', { key: 'agreement-h-' + blocks.length }, agreementInline(heading[2])))
+          return
+        }
+        if (/^>\s?/.test(trimmed)) {
+          flushParagraph(); flushList()
+          blocks.push(h('blockquote', { key: 'agreement-q-' + blocks.length }, agreementInline(trimmed.replace(/^>\s?/, ''))))
+          return
+        }
+        var item = /^[-*]\s+(.*)$/.exec(trimmed)
+        if (item) { flushParagraph(); list.push(item[1]); return }
+        if (list.length > 0 && /^\s+/.test(line)) {
+          list[list.length - 1] += ' ' + trimmed
+          return
+        }
+        flushList()
+        paragraph.push(trimmed)
+      })
+      flushParagraph(); flushList(); flushCode()
+      return h('div', { className: 'dssync-agreement' }, blocks)
+    }
+
+    function AgreementPanel(props) {
+      if (!props.agreement) {
+        return h('div', { className: 'dssync-note warn' }, props.error || '正在读取使用须知…')
+      }
+      var version = props.agreement.version || String(props.agreement.hash || '').slice(0, 12)
+      return h('div', { className: 'dssync-agreement-wrap' },
+        h('div', { className: 'dssync-note' }, '生效日期 ' + version + ' · 内容版本 ' + String(props.agreement.hash || '').slice(0, 12)),
+        h(AgreementContent, { markdown: props.agreement.markdown }))
+    }
+
+    function AgreementUpdateDialog(props) {
+      return h('div', { className: 'dssync dssync-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': '使用须知已更新' },
+        h('div', { className: 'dssync-wizard' },
+          h('div', { className: 'dssync-wizard-head' },
+            h('div', { className: 'dssync-wizard-icon' }, shieldIcon()),
+            h('div', null, h('h2', null, '使用须知已更新'), h('p', null, '开始同步前，请重新阅读并确认当前版本。')),
+            h('button', { className: 'dssync-close', type: 'button', 'aria-label': '稍后', onClick: props.onLater }, '×')),
+          h('div', { className: 'dssync-wizard-body' }, h(AgreementPanel, { agreement: props.agreement })),
+          h('div', { className: 'dssync-wizard-foot' },
+            h('button', { className: 'dssync-pill', type: 'button', onClick: props.onLater }, '稍后'),
+            h('span', { className: 'spacer' }),
+            h('button', { className: 'dssync-pill primary', type: 'button', onClick: props.onAccept }, '我已阅读并同意'))))
+    }
+
     function Onboarding(props) {
       var model = props.model
       var state = useModel(model)
@@ -1722,9 +1859,33 @@ window.__ModuleLoader__.load({
       var messageState = useState(null)
       var message = messageState[0]
       var setMessage = messageState[1]
+      var agreementState = useState(null)
+      var agreement = agreementState[0]
+      var setAgreement = agreementState[1]
+      var agreementErrorState = useState(null)
+      var agreementError = agreementErrorState[0]
+      var setAgreementError = agreementErrorState[1]
+      var acceptedState = useState(readAcceptedAgreement)
+      var accepted = acceptedState[0]
+      var setAccepted = acceptedState[1]
+      var agreedState = useState(false)
+      var agreed = agreedState[0]
+      var setAgreed = agreedState[1]
+      var updateDismissedState = useState(false)
+      var updateDismissed = updateDismissedState[0]
+      var setUpdateDismissed = updateDismissedState[1]
       var mappingRefreshed = useRef(false)
 
       useEffect(function () { model.refreshAll() }, [model])
+      useEffect(function () {
+        var live = true
+        model.agreement().then(function (value) {
+          if (live) setAgreement(value)
+        }, function (error) {
+          if (live) setAgreementError(errorText(error))
+        })
+        return function () { live = false }
+      }, [model])
       useEffect(function () {
         if (setup === null) return
         // 一旦以“未配置”姿态打开，后续步骤保存让 setup 变成已配置时也不能
@@ -1749,7 +1910,16 @@ window.__ModuleLoader__.load({
         if (setup && step === 0) setFields(fieldsFrom(null, setup))
       }, [setup && setup.serverUrl])
 
-      if (hidden || setup === null || !active) return null
+      if (setup === null) return null
+      if (!active) {
+        if (updateDismissed || agreement === null || accepted === agreement.hash) return null
+        return h(AgreementUpdateDialog, {
+          agreement: agreement,
+          onAccept: acceptAgreement,
+          onLater: function () { setUpdateDismissed(true) },
+        })
+      }
+      if (hidden) return null
 
       function set(key, value) {
         setFields(function (previous) {
@@ -1822,6 +1992,13 @@ window.__ModuleLoader__.load({
         }
       }
 
+      function acceptAgreement() {
+        if (!agreement || !agreement.hash) return
+        saveAcceptedAgreement(agreement.hash)
+        setAccepted(agreement.hash)
+        setAgreed(true)
+      }
+
       async function next() {
         setDir('next')
         setMessage(null)
@@ -1882,6 +2059,19 @@ window.__ModuleLoader__.load({
           setStep(4)
           return
         }
+        if (step === 4) {
+          if (!agreement || !agreement.hash) {
+            setMessage({ bad: true, text: agreementError || '使用须知尚未加载，请稍后重试' })
+            return
+          }
+          if (!agreed) {
+            setMessage({ bad: true, text: '请先阅读并勾选同意使用协议' })
+            return
+          }
+          acceptAgreement()
+          setStep(5)
+          return
+        }
         setBusy('finish')
         try {
           var result = await model.syncNow()
@@ -1904,7 +2094,7 @@ window.__ModuleLoader__.load({
       var sessions = workspaces && Array.isArray(workspaces.sessions) ? workspaces.sessions : []
       var selectedIds = fields.syncSessionIds || []
       var includedCount = sessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
-      var steps = ['连接', '凭据', '会话', '映射', '完成']
+      var steps = ['连接', '凭据', '会话', '映射', '须知', '完成']
       var body
       if (step === 0) {
         body = [
@@ -1971,6 +2161,18 @@ window.__ModuleLoader__.load({
             compact: true,
             onRetry: function () { model.refreshWorkspaces() },
           }),
+          message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
+        ]
+      } else if (step === 4) {
+        body = [
+          h('div', { className: 'dssync-note' }, '开始同步前请阅读以下使用协议；它说明插件会修改什么、服务端能看到什么，以及跨设备恢复的风险。'),
+          h(AgreementPanel, { agreement: agreement, error: agreementError }),
+          h('label', { className: 'dssync-agree' },
+            h('input', {
+              type: 'checkbox', checked: agreed, disabled: !agreement,
+              onChange: function (event) { setAgreed(event.target.checked) },
+            }),
+            h('span', null, '我已阅读并同意使用协议，理解同步不是备份、跨设备恢复和分叉风险。')),
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else {
@@ -2522,6 +2724,8 @@ window.__ModuleLoader__.load({
         } else if (session.pending && session.pending.download > 0) {
           counts.push('↓ ' + session.pending.download)
         }
+        if (session.compression === 'zstd') counts.push('zstd')
+        else if (session.compression === 'mixed') counts.push('zstd 混合')
         var attention = tag === '远端领先' || tag === '已加载' || tag === '待映射' || tag === 'cwd 外'
         var queued = tag === '本地领先' || tag === '远端领先' || tag === '待拉取' || tag === '待上传'
         var stateClass = isBlocked || session.phase === 'failed' ? 'bad'
@@ -2663,8 +2867,12 @@ window.__ModuleLoader__.load({
       var sessionId = props.sessionId ? String(props.sessionId) : ''
       if (sessionId === '') return null
       var reason = sessionBlockReason(state.status, sessionId)
-      if (reason === null) return null
-      return h('div', { className: 'dssync-hovernote' }, '会话同步：', reason)
+      var sync = sessionState(state.status, sessionId)
+      var compressed = sync.compression === 'zstd' || sync.compression === 'mixed'
+      if (reason === null && !compressed) return null
+      return h('div', { className: 'dssync-hovernote' },
+        reason === null ? null : h('div', null, '会话同步：', reason),
+        compressed ? h('div', null, '封帧压缩：' + (sync.compression === 'mixed' ? 'zstd 混合' : 'zstd')) : null)
     }
 
     /* ---------- 插件入口 ---------- */

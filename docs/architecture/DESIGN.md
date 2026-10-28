@@ -1,6 +1,6 @@
 # 设计
 
-> 状态：M1/M2 已落地；服务端 0.1.0 已切 v2-only / protocol 3，插件 0.1.0 的 v2 迁移待完成；
+> 状态：M1/M2 已落地；服务端 0.1.0 已切 v2-only / protocol 3，插件 0.1.0 已迁移 v2、批量 blob 与 zstd 写入；
 > M3 传输模型已定为事件批次并已实现；M4 客户端防护做收口。
 > L2/L3 的加密附加数据层与多工作区映射见 [VAULT.md](../sync/VAULT.md)（设计稿）。
 > cwd 处理见 [CWD.md](CWD.md)；会话身份与启动对账见 [RECONCILE.md](../sync/RECONCILE.md)；

@@ -6,7 +6,7 @@
  *
  * @module dsh-session-cloudsync/status
  */
-import type { PendingApply, SyncErrorKind, SyncStage } from './engine.ts'
+import type { PendingApply, SessionCompression, SyncErrorKind, SyncStage } from './engine.ts'
 
 /** 一个方向的稳定阶段。 */
 export type SyncDirectionPhase =
@@ -44,6 +44,8 @@ export interface SyncDirectionStatus {
   readonly applied?: number
   /** 推送的密文字节数。 */
   readonly bytes?: number
+  /** 会话封帧的压缩状态。 */
+  readonly compression?: SessionCompression
   /** 本地尾巴是否有未闭合的 turn。 */
   readonly tailOpen?: boolean
   /** 最后 cwd 是否在工作区外；只做本地警告，不影响哈希/同步身份。 */
@@ -90,6 +92,8 @@ export interface SyncSessionStatus {
   readonly tailOpen: boolean
   /** 推送是否看到远端领先。 */
   readonly remoteAhead: boolean
+  /** 会话封帧的压缩状态。 */
+  readonly compression?: SessionCompression
   /** 是否等待 cwd 决策。 */
   readonly cwdPending: boolean
   /** 未映射的远端工作区。 */

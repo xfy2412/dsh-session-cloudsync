@@ -67,6 +67,7 @@ const sync = {
   credentials: undefined,
   prepare: null,
   patch: undefined,
+  health: undefined,
   buffers: { stdout: '', stderr: '' },
   stopping: false,
 }
@@ -230,7 +231,7 @@ function capture(command, args, env = { ...process.env }, timeoutMs = 30_000) {
 /** 查服务端健康状态；不可达返回 undefined。 */
 async function checkHealth(url) {
   try {
-    const response = await fetch(`${url}/v1/health`, { signal: AbortSignal.timeout(1500) })
+    const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(1500) })
     if (!response.ok) return undefined
     const body = await response.json()
     return body?.ok === true ? body : undefined
@@ -346,13 +347,17 @@ function externalSyncCredentials() {
 /** 等服务端健康检查通过。 */
 async function waitForSyncHealth() {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (await checkHealth(syncUrl) !== undefined) return
+    const health = await checkHealth(syncUrl)
+    if (health !== undefined) {
+      sync.health = health
+      return
+    }
     await new Promise((resolvePromise) => {
       const timer = setTimeout(resolvePromise, 250)
       timer.unref?.()
     })
   }
-  throw new Error(`同步服务端在 10s 内没有通过 /v1/health：${syncUrl}`)
+  throw new Error(`同步服务端在 10s 内没有通过 /health：${syncUrl}`)
 }
 
 /** 启动本地同步服务端。 */
@@ -384,6 +389,7 @@ function startSyncServer() {
     sync.stopping = false
     sync.child = null
     sync.ready = false
+    sync.health = undefined
     if (wasStopping) {
       sync.status = 'idle'
       return
@@ -410,6 +416,7 @@ async function ensureSync() {
     sync.status = 'starting'
     sync.error = null
     const existing = await checkHealth(syncUrl)
+    if (existing !== undefined) sync.health = existing
     if (sync.mode === 'external') {
       sync.credentials = externalSyncCredentials()
       if (existing === undefined) throw new Error(`外部同步服务端不可达：${syncUrl}`)
@@ -953,6 +960,7 @@ function state() {
       status: sync.status,
       ready: sync.ready,
       error: sync.error,
+      ...sync.health === undefined ? {} : { health: sync.health },
       ...sync.mode === 'local' ? { dataDir: syncDataDir } : {},
     },
     importTrace: {

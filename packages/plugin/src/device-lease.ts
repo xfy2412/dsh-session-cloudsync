@@ -283,7 +283,7 @@ export class DeviceLeaseKeeper {
     const fetchImpl = this.options.fetch ?? fetch
     const timeout = config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     try {
-      const response = await fetchImpl(`${base}/v1/sync/lease`, {
+      const response = await fetchImpl(`${base}/v2/sync/lease`, {
         method,
         headers: {
           authorization: `Bearer ${config.token}`,

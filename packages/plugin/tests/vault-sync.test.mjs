@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
 import { syncVault, readWorkspaceProfileLabels } from '../src/vault-sync.ts'
 import { vaultRecordHashOf } from '../../shared/src/vault.ts'
+import { decodeBlobBatch, encodeBlobBatch } from '../../shared/src/blob-batch.ts'
 
 const CLIENT_ID = '0123456789abcdef'
 const WRITER = 'device-vault-1'
@@ -22,42 +23,61 @@ function fakeServer() {
     const path = url.pathname
     const method = init.method ?? 'GET'
     calls.push(`${method} ${path}`)
-    if (path === '/v1/me') {
+    if (path === '/v2/me') {
       return Response.json({ ok: true, value: { role: 'device', device: { deviceId: WRITER, label: 'Writer' } } })
     }
-    if (path === '/v1/vault/stream/device-vault-1') {
+    if (path === '/v2/vault/stream/device-vault-1') {
       const from = Number(url.searchParams.get('from') ?? 1)
       const matching = records.filter((record) => record.seq >= from)
       return Response.json({ ok: true, value: { writer: WRITER, records: matching, hasMore: false } })
     }
-    if (path === '/v1/vault/lease' && method === 'POST') {
+    if (path === '/v2/vault/lease' && method === 'POST') {
       const client = String(init.headers?.['x-client-id'] ?? '')
       if (lease !== null && lease !== client) return Response.json({ ok: false, error: { code: 'lease-held', message: 'held' } }, { status: 409 })
       lease = client
       return Response.json({ ok: true, value: { resource: 'vault-writer:test', acquired: true } })
     }
-    if (path === '/v1/vault/lease' && method === 'DELETE') {
+    if (path === '/v2/vault/lease' && method === 'DELETE') {
       lease = null
       return Response.json({ ok: true, value: { released: true } })
     }
-    if (path === '/v1/blobs' && method === 'POST') {
+    if (path === '/v2/blobs' && method === 'POST') {
       const bytes = Buffer.from(init.body)
       const sha256 = (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex')
       blobs.set(sha256, bytes)
       return Response.json({ ok: true, value: { sha256, bytes: bytes.length, dedup: false } }, { status: 201 })
     }
-    if (path.startsWith('/v1/blobs/') && method === 'GET') {
-      const sha256 = path.slice('/v1/blobs/'.length)
+    if (path === '/v2/blobs/batch' && method === 'POST') {
+      const entries = decodeBlobBatch(Buffer.from(init.body))
+      for (const entry of entries) blobs.set(entry.sha256, entry.data)
+      return Response.json({ ok: true, value: { blobs: entries.map((entry) => ({
+        sha256: entry.sha256, bytes: entry.data.length, dedup: false,
+      })) } }, { status: 201 })
+    }
+    if (path === '/v2/blobs/batch/read' && method === 'POST') {
+      const body = JSON.parse(String(init.body))
+      const entries = (Array.isArray(body.sha256) ? body.sha256 : []).map((sha256) => {
+        const data = blobs.get(sha256)
+        if (data === undefined) throw new Error(`missing blob ${sha256}`)
+        return { kind: 'vault', data }
+      })
+      return new Response(encodeBlobBatch(entries), {
+        status: 200,
+        headers: { 'content-type': 'application/x-dsh-blob-batch' },
+      })
+    }
+    if (path.startsWith('/v2/blobs/') && method === 'GET') {
+      const sha256 = path.slice('/v2/blobs/'.length)
       const bytes = blobs.get(sha256)
       if (bytes === undefined) return Response.json({ ok: false, error: { code: 'not-found', message: sha256 } }, { status: 404 })
       return new Response(bytes, { status: 200, headers: { 'content-type': 'application/octet-stream' } })
     }
-    if (path === '/v1/vault/cursor' && method === 'GET') {
+    if (path === '/v2/vault/cursor' && method === 'GET') {
       const since = Number(url.searchParams.get('since') ?? 0)
       const matching = records.filter((record) => record.revision > since)
       return Response.json({ ok: true, value: { revision: revision, records: matching, hasMore: false } })
     }
-    if (path === '/v1/vault/append' && method === 'POST') {
+    if (path === '/v2/vault/append' && method === 'POST') {
       if (lease === null) return Response.json({ ok: false, error: { code: 'lease-held', message: 'no lease' } }, { status: 409 })
       const body = JSON.parse(String(init.body))
       const blob = blobs.get(body.blobSha256)
@@ -112,6 +132,7 @@ test('Vault 首次写入设备台账和 workspace/profile，第二次不重复',
     assert.deepEqual(server.records.map((record) => record.seq), [1, 2, 3])
     assert.equal(server.lease(), null)
     assert.ok([...server.blobs.keys()].length >= 3)
+    assert.ok(server.calls.includes('POST /v2/blobs/batch'))
 
     const second = await syncVault(config(temp, workspaces), undefined, server.fetchImpl)
     assert.equal(second.appended, 0)
@@ -151,7 +172,7 @@ test('Vault writer 租约冲突时整轮失败且不写新记录', async () => {
     await (await import('node:fs/promises')).rm(config(temp, workspaces).stateDir, { recursive: true, force: true })
     const original = server.fetchImpl
     const conflictFetch = async (input, init = {}) => {
-      if (String(input).endsWith('/v1/vault/lease') && (init.method ?? 'GET') === 'POST') {
+      if (String(input).endsWith('/v2/vault/lease') && (init.method ?? 'GET') === 'POST') {
         return Response.json({ ok: false, error: { code: 'lease-held', message: 'held' } }, { status: 409 })
       }
       return original(input, init)

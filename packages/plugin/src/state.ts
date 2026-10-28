@@ -17,6 +17,8 @@ export const STATE_VERSION = 1
 export interface PullJournal {
   readonly version: 1
   readonly revision: number
+  /** `/v2/changes` 的不透明游标；旧状态没有该字段时从第一页重扫。 */
+  readonly cursor?: string
   readonly pending?: PendingApply
   readonly cwdPending?: readonly string[]
   readonly blocked?: readonly BlockedSessionState[]
@@ -40,6 +42,7 @@ export function readPullJournal(file: string): PullJournal {
   const record = parsed as Record<string, unknown>
   const revision = record['revision']
   if (!Number.isSafeInteger(revision) || (revision as number) < 0) return { version: STATE_VERSION, revision: 0 }
+  const cursor = typeof record['cursor'] === 'string' && record['cursor'] !== '' ? record['cursor'] : undefined
   const cwdPending = Array.isArray(record['cwdPending'])
     ? record['cwdPending'].filter((id): id is string => typeof id === 'string' && id !== '')
     : undefined
@@ -47,6 +50,7 @@ export function readPullJournal(file: string): PullJournal {
   const blockedDecisions = decisionsFrom(record['blockedDecisions'])
   const unmapped = unmappedFrom(record['unmapped'])
   const extra = {
+    ...cursor === undefined ? {} : { cursor },
     ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
     ...blocked === undefined ? {} : { blocked },
     ...blockedDecisions === undefined ? {} : { blockedDecisions },

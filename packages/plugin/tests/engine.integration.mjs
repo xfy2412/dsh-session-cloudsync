@@ -37,7 +37,7 @@ async function call(base, path, options = {}) {
  * @param device - 设备。
  */
 async function holdLease(base, device) {
-  const response = await call(base, '/v1/sync/lease', {
+  const response = await call(base, '/v2/sync/lease', {
     method: 'POST',
     token: device.token,
     headers: { 'x-client-id': '0000000000000000' },
@@ -150,23 +150,29 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         batchEvents: 2,
       }
       const pushedProgress = []
+      const pushRequests = []
       const pushed = await syncOnce({
         persistence: fakeStore(header, events(0, 5)),
         sessions,
         config,
         isTailOpen: () => false,
         workspaceKeyOf: () => workspaceKey,
+        fetch: (input, init) => {
+          pushRequests.push(String(input))
+          return fetch(input, init)
+        },
         onProgress: (progress) => { pushedProgress.push(progress) },
       })
+      assert.ok(pushRequests.some((url) => url.endsWith('/v2/blobs/batch')))
       assert.equal(pushed.sessions[0].status, 'pushed')
+      assert.equal(pushed.sessions[0].compression, 'zstd')
       assert.equal(pushed.sessions[0].totalEvents, 6)
       assert.equal(pushed.sessions[0].doneEvents, 6)
       assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
         && progress.totalEvents === 6 && progress.doneEvents === 6))
       assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
-        && progress.phase === 'progress' && progress.doneEvents === 2))
-      assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
-        && progress.phase === 'progress' && progress.doneEvents === 4))
+        && progress.phase === 'progress' && progress.stage === 'uploading'
+        && progress.doneEvents === 6 && progress.doneBatches === 3))
       assert.ok(pushedProgress.some((progress) => progress.direction === 'push'
         && progress.phase === 'done' && progress.doneEvents === 6))
       const stages = [...new Set(pushedProgress
@@ -177,8 +183,10 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       const planning = pushedProgress.find((progress) => progress.stage === 'planning')
       assert.equal(planning.totalEvents, 6)
       assert.equal(planning.doneEvents, 0)
-      const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      const manifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.body.value.manifest.workspaceKey, workspaceKey)
+      assert.equal(manifest.body.value.manifest.batches[0].compression, 'zstd')
+      assert.equal(manifest.body.value.manifest.batches[1].compression, 'zstd')
 
       // 已有远端 manifest 的会话沿用远端 key：映射到本地路径后不会因为本地
       // 解析出的 key 变化而被判成分叉。
@@ -190,7 +198,7 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         workspaceKeyOf: () => 'differentworkspacekey',
       })
       assert.equal(reused.sessions[0].status, 'up-to-date')
-      const reusedManifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      const reusedManifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(reusedManifest.body.value.manifest.workspaceKey, workspaceKey)
 
       // 活跃会话本轮不 apply，游标必须停在它之前，否则 push 会一直 remote-ahead。
@@ -213,34 +221,39 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
         workspacePathOf: () => undefined,
       }, { revision: 0 })
       assert.equal(firstPull.sessions[0].status, 'unmapped')
+      assert.equal(firstPull.sessions[0].compression, 'zstd')
       assert.equal(typeof firstPull.sessions[0].revision, 'number')
+      assert.equal(typeof firstPull.cursor, 'string')
       const secondPull = await pullOnce({
         persistence: fakeStore(undefined),
         sessions,
         config,
         workspacePathOf: () => undefined,
-      }, { revision: firstPull.revision })
+      }, { revision: firstPull.revision, cursor: firstPull.cursor })
       assert.deepEqual(secondPull.sessions, [])
 
       const mappedStore = fakeStore(undefined)
       const mappedProgress = []
+      const pullRequests = []
       const mapped = await pullOnce({
         persistence: mappedStore,
         sessions,
         config,
         workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
+        fetch: (input, init) => {
+          pullRequests.push(String(input))
+          return fetch(input, init)
+        },
         onProgress: (progress) => { mappedProgress.push(progress) },
       })
+      assert.ok(pullRequests.some((url) => url.endsWith('/v2/blobs/batch/read')))
       assert.equal(mapped.sessions[0].status, 'pulled')
+      assert.equal(mapped.sessions[0].compression, 'zstd')
       assert.equal(mapped.sessions[0].applied, 6)
       assert.equal(mapped.sessions[0].totalEvents, 6)
       assert.equal(mapped.sessions[0].pendingEvents, 0)
       assert.ok(mappedProgress.some((progress) => progress.direction === 'pull'
         && progress.totalEvents === 6 && progress.doneEvents === 6))
-      assert.ok(mappedProgress.some((progress) => progress.direction === 'pull'
-        && progress.phase === 'progress' && progress.doneEvents === 2))
-      assert.ok(mappedProgress.some((progress) => progress.direction === 'pull'
-        && progress.phase === 'progress' && progress.doneEvents === 4))
       assert.equal(mappedStore.sessions.get(sessionId).header.cwd, 'D:/mapped')
 
       // 已加载但已经是最新：只读判断后返回 up-to-date，不能因为 live 就兜底
@@ -341,7 +354,7 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
       assert.equal(first.sessions[0].batches, 3)
       assert.ok(first.sessions[0].bytes > 0)
 
-      const manifest1 = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      const manifest1 = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest1.status, 200)
       assert.equal(manifest1.body.value.manifest.batches.length, 4)
       assert.equal(manifest1.body.value.manifest.lastSeq, 119)
@@ -358,7 +371,7 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
       assert.equal(third.sessions[0].status, 'pushed')
       assert.equal(third.sessions[0].batches, 1)
 
-      const manifest2 = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      const manifest2 = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest2.body.value.manifest.batches.length, 5)
       assert.equal(manifest2.body.value.manifest.lastSeq, 149)
       assert.equal(manifest2.body.value.manifest.safeThroughSeq, 149)
@@ -577,7 +590,7 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
       assert.equal(corrected.events[4].type, 'working-directory/change')
       assert.equal(corrected.events[4].data.cwd, localCwd)
 
-      const manifest = await call(base, `/v1/sessions/${sessionId}/manifest`, { token: device.token })
+      const manifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.body.value.manifest.lastSeq, 4)
       assert.equal(manifest.body.value.manifest.safeThroughSeq, 4)
 
@@ -817,7 +830,7 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
   }
 })
 
-test('连接测试：只探测公开的 /v1/health，不读配置也不带 token', async () => {
+test('连接测试：只探测公开的 /health，不读配置也不带 token', async () => {
   const temp = createTempHome('plugin-test-connection')
   try {
     const db = openDatabase(temp.dataDir)

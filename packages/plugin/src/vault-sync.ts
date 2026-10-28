@@ -13,6 +13,15 @@
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { arch, platform, release } from 'node:os'
 import { dirname, join } from 'node:path'
+import {
+  BLOB_BATCH_CONTENT_TYPE,
+  BLOB_BATCH_ENTRY_HEADER_BYTES,
+  BLOB_BATCH_HEADER_BYTES,
+  decodeBlobBatch,
+  encodeBlobBatch,
+  MAX_BATCH_BLOBS,
+  MAX_BATCH_BODY_BYTES,
+} from '../../shared/src/blob-batch.ts'
 import { deriveMasterKey, sha256 } from '../../shared/src/crypto.ts'
 import { stableStringify } from '../../shared/src/chain.ts'
 import {
@@ -148,11 +157,16 @@ export async function syncVault(
         deviceDigest: state.deviceDigest,
         workspaces: { ...state.workspaces },
       }
+      // 先按本地链规划所有记录，再批量上传 blob，最后逐条 append；append 失败时
+      // 已上传的 blob 成为可去重的孤儿，但不会把半条记录索引写进服务端。
+      const planned: Array<{ readonly entry: (typeof pending)[number]; readonly sealed: ReturnType<typeof sealVaultRecord> }> = []
+      let planSeq = seq
+      let planPrevHash = prevHash
       for (const entry of pending) {
         const sealed = sealVaultRecord({
           writer,
-          seq: seq + 1,
-          prevHash,
+          seq: planSeq + 1,
+          prevHash: planPrevHash,
           createdAt: Date.now(),
           kind: entry.kind,
           entity: entry.entity,
@@ -160,8 +174,15 @@ export async function syncVault(
           data: entry.data,
           vaultKey,
         })
-        await uploadVaultBlob(base, config.token, sealed.bytes, timedFetch)
-        const response = await requestJson(base, '/v1/vault/append', config.token, timedFetch, {
+        planSeq = sealed.ref.seq
+        planPrevHash = sealed.ref.recordHash
+        planned.push({ entry, sealed })
+      }
+      for (const group of vaultBlobGroups(planned.map((item) => item.sealed.bytes))) {
+        await uploadVaultBlobs(base, config.token, group, timedFetch)
+      }
+      for (const { entry, sealed } of planned) {
+        const response = await requestJson(base, '/v2/vault/append', config.token, timedFetch, {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-client-id': config.clientId },
           body: JSON.stringify({
@@ -221,7 +242,7 @@ async function reconcileHead(
   for (let page = 0; page < 100; page += 1) {
     const response = await requestJson(
       base,
-      `/v1/vault/stream/${encodeURIComponent(writer)}?from=${from}&limit=500`,
+      `/v2/vault/stream/${encodeURIComponent(writer)}?from=${from}&limit=500`,
       config.token,
       fetchImpl,
       { method: 'GET' },
@@ -256,13 +277,13 @@ async function reconcileHead(
  * @returns deviceId 与服务端 label。
  */
 async function readMe(base: string, token: string, fetchImpl: typeof fetch): Promise<DeviceMe> {
-  const response = await requestJson(base, '/v1/me', token, fetchImpl, { method: 'GET' })
+  const response = await requestJson(base, '/v2/me', token, fetchImpl, { method: 'GET' })
   const value = response.value as { role?: unknown; device?: unknown }
   if (value.role !== 'device' || value.device === null || typeof value.device !== 'object') {
     throw new Error('Vault 需要设备 token')
   }
   const device = value.device as Record<string, unknown>
-  if (typeof device.deviceId !== 'string' || typeof device.label !== 'string') throw new Error('/v1/me 缺少设备身份')
+  if (typeof device.deviceId !== 'string' || typeof device.label !== 'string') throw new Error('/v2/me 缺少设备身份')
   return { deviceId: device.deviceId, label: device.label }
 }
 
@@ -299,7 +320,7 @@ async function writeState(path: string, state: VaultState): Promise<void> {
 
 /** 拿到 writer 租约。 */
 async function acquireWriterLease(base: string, token: string, clientId: string, fetchImpl: typeof fetch): Promise<void> {
-  const response = await requestJson(base, '/v1/vault/lease', token, fetchImpl, {
+  const response = await requestJson(base, '/v2/vault/lease', token, fetchImpl, {
     method: 'POST',
     headers: { 'x-client-id': clientId },
   })
@@ -308,7 +329,7 @@ async function acquireWriterLease(base: string, token: string, clientId: string,
 
 /** 释放 writer 租约。 */
 async function releaseWriterLease(base: string, token: string, clientId: string, fetchImpl: typeof fetch): Promise<void> {
-  await requestJson(base, '/v1/vault/lease', token, fetchImpl, {
+  await requestJson(base, '/v2/vault/lease', token, fetchImpl, {
     method: 'DELETE',
     headers: { 'x-client-id': clientId },
   })
@@ -316,12 +337,102 @@ async function releaseWriterLease(base: string, token: string, clientId: string,
 
 /** 上传 Vault 密文。 */
 async function uploadVaultBlob(base: string, token: string, bytes: Buffer, fetchImpl: typeof fetch): Promise<void> {
-  const response = await fetchImpl(`${base}/v1/blobs?kind=vault`, {
+  const response = await fetchImpl(`${base}/v2/blobs?kind=vault`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
     body: bytes,
   })
   if (response.status !== 200 && response.status !== 201) throw new Error(`Vault blob 上传失败：HTTP ${response.status}`)
+}
+
+/**
+ * 批量上传 Vault 密文；单条回退单 blob 接口。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param blobs - 已封好的记录字节。
+ * @param fetchImpl - fetch。
+ */
+async function uploadVaultBlobs(
+  base: string,
+  token: string,
+  blobs: readonly Buffer[],
+  fetchImpl: typeof fetch,
+): Promise<void> {
+  if (blobs.length <= 1) {
+    if (blobs[0] !== undefined) await uploadVaultBlob(base, token, blobs[0], fetchImpl)
+    return
+  }
+  const response = await fetchImpl(`${base}/v2/blobs/batch`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': BLOB_BATCH_CONTENT_TYPE,
+    },
+    body: encodeBlobBatch(blobs.map((data) => ({ kind: 'vault', data }))),
+  })
+  if (response.status !== 200 && response.status !== 201) {
+    throw new Error(`Vault 批量 blob 上传失败：HTTP ${response.status}`)
+  }
+}
+
+/**
+ * 按 64 条 / 8 MiB 分组。
+ * @param blobs - 待上传字节。
+ * @returns 分组。
+ */
+function vaultBlobGroups(blobs: readonly Buffer[]): Buffer[][] {
+  const groups: Buffer[][] = []
+  let group: Buffer[] = []
+  let bytes = BLOB_BATCH_HEADER_BYTES
+  for (const blob of blobs) {
+    const size = BLOB_BATCH_ENTRY_HEADER_BYTES + blob.length
+    if (group.length > 0 && (group.length >= MAX_BATCH_BLOBS || bytes + size > MAX_BATCH_BODY_BYTES)) {
+      groups.push(group)
+      group = []
+      bytes = BLOB_BATCH_HEADER_BYTES
+    }
+    group.push(blob)
+    bytes += size
+  }
+  if (group.length > 0) groups.push(group)
+  return groups
+}
+
+/**
+ * 批量下载 Vault 密文；单条回退单 blob 接口。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param hashes - 记录 blobSha256。
+ * @param fetchImpl - fetch。
+ * @returns 按哈希索引的字节。
+ */
+async function downloadVaultBlobs(
+  base: string,
+  token: string,
+  hashes: readonly string[],
+  fetchImpl: typeof fetch,
+): Promise<Map<string, Buffer>> {
+  const unique = [...new Set(hashes)]
+  if (unique.length === 0) return new Map()
+  if (unique.length === 1) {
+    const response = await fetchImpl(`${base}/v2/blobs/${unique[0]}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) throw new Error(`Vault blob ${unique[0]} 下载失败：HTTP ${response.status}`)
+    return new Map([[unique[0]!, Buffer.from(await response.arrayBuffer())]])
+  }
+  const response = await fetchImpl(`${base}/v2/blobs/batch/read`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sha256: unique }),
+  })
+  if (!response.ok) throw new Error(`Vault 批量 blob 下载失败：HTTP ${response.status}`)
+  const result = new Map<string, Buffer>()
+  for (const entry of decodeBlobBatch(Buffer.from(await response.arrayBuffer()))) {
+    if (sha256(entry.data) !== entry.sha256) throw new Error(`Vault 批量 blob ${entry.sha256} 内容哈希不符`)
+    result.set(entry.sha256, entry.data)
+  }
+  return result
 }
 
 /** 带超时与统一 JSON 错误处理的请求。 */
@@ -381,20 +492,32 @@ export async function readWorkspaceProfileLabels(
   const labels: Record<string, { label: string; at: number }> = {}
   let since = 0
   for (let page = 0; page < 50; page += 1) {
-    const cursor = await requestJson(base, `/v1/vault/cursor?since=${since}&limit=500`, config.token, fetchImpl, { method: 'GET' })
+    const cursor = await requestJson(base, `/v2/vault/cursor?since=${since}&limit=500`, config.token, fetchImpl, { method: 'GET' })
     const value = cursor.value as {
       readonly revision?: unknown
       readonly records?: unknown
       readonly hasMore?: unknown
     } | undefined
     const records = Array.isArray(value?.records) ? value.records as VaultRecordRef[] : []
+    const blobs = new Map<string, Buffer>()
+    for (let offset = 0; offset < records.length; offset += MAX_BATCH_BLOBS) {
+      const group = records.slice(offset, offset + MAX_BATCH_BLOBS)
+      try {
+        const downloaded = await downloadVaultBlobs(
+          base,
+          config.token,
+          group.map((record) => record.blobSha256),
+          fetchImpl,
+        )
+        for (const [hash, bytes] of downloaded) blobs.set(hash, bytes)
+      } catch {
+        // 一整组坏记录不影响其他 workspace；下次刷新会重试。
+      }
+    }
     for (const record of records) {
       try {
-        const response = await fetchImpl(`${base}/v1/blobs/${record.blobSha256}`, {
-          headers: { authorization: `Bearer ${config.token}` },
-        })
-        if (!response.ok) continue
-        const bytes = Buffer.from(await response.arrayBuffer())
+        const bytes = blobs.get(record.blobSha256)
+        if (bytes === undefined) continue
         const payload = openVaultRecord({ ref: record, bytes }, vaultKey)
         if (payload.kind !== 'workspace/profile') continue
         const data = payload.data as { readonly label?: unknown } | undefined

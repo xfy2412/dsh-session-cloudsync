@@ -736,8 +736,8 @@
     remoteWorkspaces: REMOTE_WORKSPACES.map((workspace) => ({ ...workspace })),
     bindings: { 'ws-dsh-cloudsync-0001': 'D:/git-repo/dsh-session-cloudsync' },
     mappingChoice: {},
-    // 默认全选；只记录被排除的根会话。
-    sessionExcluded: new Set(['01J9Z7Q8N6W3C4B5A2M0K1P9R3']),
+    // 默认不选；只记录被排除的根会话，初始全部排除。
+    sessionExcluded: new Set(ROOT_SESSIONS.map((session) => session.id)),
     onboardStep: 0,
     onboardAnim: '',
     onboardStepAnim: '',
@@ -830,7 +830,7 @@
     const allSelected = included.length === eligible.length;
     return `<div class="session-scope">
       <div class="session-scope-head">
-        <div><b>会话精度选择</b><span class="hint">默认勾选全部根会话；取消会排除该根及其子代理。</span></div>
+        <div><b>会话精度选择</b><span class="hint">默认不勾选根会话；勾选后才包含该根及其子代理。</span></div>
         <div class="scope-actions">
           <span class="scope-count">${included.length} / ${eligible.length} 个根会话</span>
           <button class="btn small" data-session-select-all>${allSelected ? '清空会话' : '全选会话'}</button>
@@ -862,7 +862,7 @@
           }).join('')}</div>
         </div>`;
       }).join('')}</div>
-      <p class="session-note">选择只在本设备生效；不会删除远端历史。子代理跟随根会话，新根会话默认勾选。</p>
+      <p class="session-note">选择只在本设备生效；不会删除远端历史。子代理跟随根会话，新根会话默认不勾选。</p>
     </div>`;
   }
 

@@ -4,13 +4,16 @@ DSH 会话云同步插件：自部署服务端、端到端加密，同步根会�
 
 ## 能力
 
-- 事件批次增量推送/拉取；批次哈希、AES-256-GCM 封批次；
-- 服务端只存密文、manifest 与 blob 去重，不持有明文口令；
+- v2 API：`/v2/*`、opaque changes cursor、幂等 append；
+- 事件批次增量推送/拉取；批次哈希、zstd 压缩后 AES-256-GCM 封批次；
+- 批量 blob 上传/下载：8 MiB / 64 条分组，Vault blob 复用同一接口；
+- 服务端只存密文、manifest、压缩状态与 blob 去重，不持有明文口令；
 - **多设备必须使用同一同步口令**；默认盐由 `serverUrl` 派生，所以服务端地址写法也必须一致（不要混用 `localhost` / `127.0.0.1` 或省略 `//`）。设备 token 只用于鉴权，不参与解密；口令、地址或 `salt` 任一不同都会报 `keyId` 不符；
 - 开放尾只备份、不直接 apply；拉取带 durable pending journal；
 - 根会话选择：**默认不选中任何根会话**，`syncSessionIds` 是白名单；子代理跟随根会话闭包，fork 是独立根；新会话不会自动进入白名单；
 - 工作区映射：未映射会话持久化、映射后按 cursor revision 回填；本地工作区自己的 key 自动解析；已有远端会话沿用原 key；设置页/首启显示本机↔远端配对表（已绑定/本机身份/仅本机/待映射）、统计和待映射选择，绑定前二次确认；
-- Plugins 页自定义设置页 + 首启向导 + 顶部同步气泡；
+- Plugins 页自定义设置页 + 首启向导 + 顶部同步气泡；气泡行显示 `zstd` / `zstd 混合` 压缩状态；
+- **使用协议**：首启向导在完成前展示协议并要求勾选同意；已配置用户检测到协议内容 hash 变化时弹出更新提示，接受版本记录在浏览器本地；
 - 状态 v2：每个会话只有一行（push/pull 作为两个方向子状态），每行带待上传/待下载事件数、已完成/总数与 `statusVersion`，顶层带全局 `deviceLease`；运行中每上传/下载完一帧就更新完成事件数，气泡按事件比例推进；
 - **入口级 open guard**：client 侧包一层 `uiWorkspace.openSession`，覆盖搜索结果、schedule、feedback、workflow-run、subagent 等没有 `data-row-key` 的入口；冷危险会话直接 toast + 不导航，live 会话放行；服务探测/安装失败一律 fail-open，不影响插件加载；
 - **按需长连接**：默认只轮询 `/status`；手动同步或接近 `nextRunAt` 时打开 `/api/session-cloudsync/events?until=idle`，空闲/终态后关闭，SSE 失败退避到 1s 轮询；页面隐藏时断开；
@@ -67,4 +70,4 @@ pnpm typecheck
 node packages/plugin/scripts/build.mjs
 ```
 
-协议、设计、安全边界分别见 `docs/PROTOCOL.md`、`docs/DESIGN.md`、`docs/SYNC-SAFETY.md`。
+协议、设计、安全边界分别见 [`docs/architecture/PROTOCOL.md`](../../docs/architecture/PROTOCOL.md)、[`docs/architecture/DESIGN.md`](../../docs/architecture/DESIGN.md)、[`docs/sync/SYNC-SAFETY.md`](../../docs/sync/SYNC-SAFETY.md)。

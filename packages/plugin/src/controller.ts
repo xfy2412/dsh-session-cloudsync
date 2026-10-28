@@ -107,6 +107,7 @@ export class SyncController {
   private readonly options: SyncControllerOptions
   private readonly nonRetryable: ReadonlySet<SyncErrorKind>
   private revision: number
+  private cursor: string | undefined
   private pending: { sessionId: string; targetSeq: number; at: number } | undefined
   private running = false
   private lastAttempt = 0
@@ -140,6 +141,7 @@ export class SyncController {
     this.options = options
     this.nonRetryable = options.nonRetryable ?? DEFAULT_NON_RETRYABLE
     this.revision = options.initial?.revision ?? 0
+    this.cursor = options.initial?.cursor
     this.pending = options.initial?.pending
     for (const sessionId of options.initial?.cwdPending ?? []) this.cwdPending.add(sessionId)
     for (const entry of options.initial?.blockedDecisions ?? []) this.blockedDecisions.set(entry.sessionId, entry)
@@ -649,6 +651,7 @@ export class SyncController {
       this.collectPull(pull, views, errors)
       if (pull.configured && pull.sessions.every((session) => session.status !== 'error')) {
         this.revision = pull.revision
+        this.cursor = pull.cursor
         this.persistNow()
       }
     } catch (error: unknown) {
@@ -685,6 +688,7 @@ export class SyncController {
   private pullState(): PullState {
     return {
       revision: this.revision,
+      ...this.cursor === undefined ? {} : { cursor: this.cursor },
       ...this.pending === undefined ? {} : { pending: this.pending },
       ...this.cwdPending.size === 0 ? {} : { cwdPending: [...this.cwdPending] },
       ...this.blocked.size === 0 ? {} : { blocked: [...this.blocked.values()] },
@@ -845,6 +849,7 @@ function pushView(session: SessionSyncReport): SyncDirectionStatus {
     ...session.pendingEvents === undefined ? {} : { pendingEvents: session.pendingEvents },
     ...session.batches === undefined ? {} : { batches: session.batches },
     ...session.bytes === undefined ? {} : { bytes: session.bytes },
+    ...session.compression === undefined ? {} : { compression: session.compression },
     ...session.tailOpen === undefined ? {} : { tailOpen: session.tailOpen },
     ...session.cwdNonPortable === undefined ? {} : { cwdNonPortable: session.cwdNonPortable },
     ...session.kind === undefined ? {} : { kind: session.kind },
@@ -871,6 +876,7 @@ function pullView(session: PullSessionReport): SyncDirectionStatus {
     doneEvents,
     ...session.pendingEvents === undefined ? {} : { pendingEvents: session.pendingEvents },
     ...session.applied === undefined ? {} : { applied: session.applied },
+    ...session.compression === undefined ? {} : { compression: session.compression },
     ...session.cwdNonPortable === undefined ? {} : { cwdNonPortable: session.cwdNonPortable },
     ...session.workspaceKey === undefined ? {} : { workspaceKey: session.workspaceKey },
     ...session.kind === undefined ? {} : { kind: session.kind },
@@ -954,6 +960,7 @@ function finishSessionView(entry: MutableSessionStatus, now: number): SyncSessio
   const stage = directions.map((direction) => direction.stage)
     .find((value) => value !== undefined && value !== 'done' && value !== 'failed')
     ?? directions.map((direction) => direction.stage).find((value) => value !== undefined)
+  const compression = entry.pull?.compression ?? entry.push?.compression
   return {
     sessionId: entry.sessionId,
     phase,
@@ -966,6 +973,7 @@ function finishSessionView(entry: MutableSessionStatus, now: number): SyncSessio
     live: entry.live,
     tailOpen: entry.tailOpen,
     remoteAhead: entry.remoteAhead,
+    ...compression === undefined ? {} : { compression },
     cwdPending: entry.cwdPending,
     ...entry.unmapped === undefined ? {} : { unmapped: entry.unmapped },
     ...entry.blocked === undefined ? {} : { blocked: entry.blocked },

@@ -12,7 +12,7 @@
  * @module dsh-session-cloudsync/scripts/build
  */
 
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripTypeScriptTypes } from 'node:module'
@@ -22,7 +22,9 @@ const sourceDir = path.join(root, 'src')
 const outputDir = path.join(root, 'lib')
 const sharedDir = path.resolve(root, '..', 'shared', 'src')
 const sharedOutput = path.join(outputDir, 'shared')
-const SHARED_MODULES = ['batches.ts', 'chain.ts', 'crypto.ts', 'sealed-frame.ts', 'vault.ts']
+const agreementSource = path.resolve(root, '..', '..', 'docs', 'guides', 'USAGE-AGREEMENT.md')
+const agreementOutput = path.join(outputDir, 'agreement.md')
+const SHARED_MODULES = ['batches.ts', 'blob-batch.ts', 'chain.ts', 'crypto.ts', 'sealed-frame.ts', 'vault.ts']
 
 /** 递归列出某目录下的所有 `.ts` 文件。 */
 function sources(dir) {
@@ -57,6 +59,10 @@ function localJs(text) {
 rmSync(outputDir, { recursive: true, force: true })
 let written = 0
 let bytes = 0
+
+// 使用协议：仓库文档是唯一来源；发布包里带一份，宿主 API 运行时读取。
+mkdirSync(outputDir, { recursive: true })
+copyFileSync(agreementSource, agreementOutput)
 
 // 共享模块：放进 lib/shared，内部相对导入改成 .js。
 mkdirSync(sharedOutput, { recursive: true })

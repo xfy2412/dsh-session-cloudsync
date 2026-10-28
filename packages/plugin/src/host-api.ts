@@ -6,6 +6,8 @@
  *
  * @module dsh-session-cloudsync/host-api
  */
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { classifySyncError } from './engine.ts'
 import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
 import type { ReplacePlan } from './replace.ts'
@@ -44,6 +46,51 @@ export interface SyncControl {
   prepareReplace(sessionId: string): Promise<ReplacePlan>
   /** 建立一次性 workspaceKey → localPath 绑定。 */
   bindWorkspace(workspaceKey: string, localPath: string): Promise<SyncWorkspaceList>
+}
+
+/**
+ * 面向客户端的使用协议文档。
+ *
+ * 仓库文档是唯一来源：发布构建把 `docs/guides/USAGE-AGREEMENT.md` 复制到
+ * `lib/agreement.md`；源码直跑时回退到仓库文档。hash 就是客户端记录的已读版本。
+ */
+export interface AgreementDocument {
+  /** Markdown 正文。 */
+  readonly markdown: string
+  /** 正文的 sha256，内容变化即版本变化。 */
+  readonly hash: string
+  /** 文档里声明的生效日期；缺失时回退为 hash 前缀。 */
+  readonly version: string
+}
+
+/** 发布包内路径 + 源码直跑时的仓库文档回退。 */
+const AGREEMENT_FILES = [
+  new URL('./agreement.md', import.meta.url),
+  new URL('../../../docs/guides/USAGE-AGREEMENT.md', import.meta.url),
+]
+
+/**
+ * 读取并标识当前使用协议。
+ * @returns 正文、内容 hash 与生效日期。
+ * @throws 两个候选路径都不可读时抛出。
+ */
+export function readAgreementDocument(): AgreementDocument {
+  let markdown: string | undefined
+  let lastError: unknown
+  for (const file of AGREEMENT_FILES) {
+    try {
+      markdown = readFileSync(file, 'utf8')
+      break
+    } catch (error: unknown) {
+      lastError = error
+    }
+  }
+  if (markdown === undefined) throw lastError instanceof Error ? lastError : new Error('使用协议文件不存在')
+  // 不同平台的 checkout 可能带 CRLF；hash 必须只反映内容变化。
+  markdown = markdown.replace(/\r\n/g, '\n')
+  const hash = createHash('sha256').update(markdown).digest('hex')
+  const version = /^> 生效日期：([^\n。]+)/m.exec(markdown)?.[1]?.trim() ?? hash.slice(0, 12)
+  return { markdown, hash, version }
 }
 
 /** connection.fetch 接受的精确路由。 */
@@ -96,6 +143,24 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
           return json({
             ok: false,
             error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/agreement',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => {
+        try {
+          return json({ ok: true, value: readAgreementDocument() })
+        } catch (error: unknown) {
+          return json({
+            ok: false,
+            error: {
+              code: 'agreement-unavailable',
+              message: error instanceof Error ? error.message : String(error),
+            },
           }, 500)
         }
       },

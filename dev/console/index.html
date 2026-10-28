@@ -685,7 +685,15 @@ async function refreshServerDialog() {
     admin.href = setup.adminUrl || `${result.sync?.url ?? ''}/admin`
     admin.hidden = admin.href === '/admin'
     restart.disabled = mode !== 'local' || setup.initialized === true
-    summary.textContent = `${setup.adminUrl || result.sync?.url || '同步服务端'} · ${stateLabel}`
+    const server = result.sync?.health?.server
+    const capabilities = server && Array.isArray(server.capabilities)
+      ? server.capabilities.filter((capability) => ['batch-upload', 'batch-download', 'zstd-frame'].includes(capability))
+      : []
+    const detail = server && typeof server.version === 'string'
+      ? ` · v${server.version} · protocol ${Array.isArray(server.protocols) ? server.protocols.join('/') : '?'}`
+        + `${capabilities.length === 0 ? '' : ` · ${capabilities.join(', ')}`}`
+      : ''
+    summary.textContent = `${setup.adminUrl || result.sync?.url || '同步服务端'} · ${stateLabel}${detail}`
     if (setup.available === true) {
       code.textContent = setup.code
       codeRow.hidden = false

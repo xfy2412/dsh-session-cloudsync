@@ -25,6 +25,15 @@ import {
   type SessionHeaderMeta,
   type SyncEvent,
 } from '../../shared/src/batches.ts'
+import {
+  BLOB_BATCH_CONTENT_TYPE,
+  BLOB_BATCH_ENTRY_HEADER_BYTES,
+  BLOB_BATCH_HEADER_BYTES,
+  decodeBlobBatch,
+  encodeBlobBatch,
+  MAX_BATCH_BLOBS,
+  MAX_BATCH_BODY_BYTES,
+} from '../../shared/src/blob-batch.ts'
 import { stableStringify } from '../../shared/src/chain.ts'
 import { deriveMasterKeyAsync, sha256 } from '../../shared/src/crypto.ts'
 import {
@@ -236,10 +245,25 @@ export interface SyncDeps<Session> {
   readonly workspaceKeyOf: (sessionId: string, cwd: string) => string | undefined
 }
 
+/** 会话封帧的压缩状态；mixed 表示旧帧未压缩、新帧 zstd。 */
+export type SessionCompression = 'none' | 'zstd' | 'mixed'
+
+/**
+ * 由 manifest 条目推导压缩状态。
+ * @param frames - 封帧引用（可含未压缩旧帧）。
+ * @returns none / zstd / mixed。
+ */
+function compressionOfFrames(frames: readonly SealedFrameRef[]): SessionCompression {
+  if (frames.length === 0) return 'none'
+  const compressed = frames.reduce((count, frame) => count + (frame.compression === 'zstd' ? 1 : 0), 0)
+  return compressed === 0 ? 'none' : compressed === frames.length ? 'zstd' : 'mixed'
+}
+
 /** 单个会话的同步结果。 */
 export interface SessionSyncReport {
   readonly sessionId: string
   readonly status: 'pushed' | 'up-to-date' | 'remote-ahead' | 'skipped' | 'error'
+  readonly compression?: SessionCompression
   readonly batches?: number
   readonly bytes?: number
   /** 本次计划上传的事件数。 */
@@ -359,6 +383,8 @@ export interface UnmappedSessionState {
 export interface PullState {
   /** 已处理到的服务端 revision；0 表示从头扫描。 */
   readonly revision: number
+  /** `/v2/changes` 的不透明游标；缺省表示从第一页开始。 */
+  readonly cursor?: string
   /** 上次崩溃前未完成的会话。 */
   readonly pending?: PendingApply
   /** 等待用户决定 cwd 修正/跳过的会话 id。 */
@@ -375,6 +401,7 @@ export interface PullState {
 export interface PullSessionReport {
   readonly sessionId: string
   readonly status: 'pulled' | 'up-to-date' | 'partial' | 'local-active' | 'write-owned' | 'local-ahead' | 'tombstone' | 'unmapped' | 'excluded' | 'error'
+  readonly compression?: SessionCompression
   readonly applied?: number
   /** 本次计划处理/已经安全可见的事件数。 */
   readonly totalEvents?: number
@@ -399,6 +426,8 @@ export interface PullReport {
   readonly reason?: string
   readonly sessions: readonly PullSessionReport[]
   readonly revision: number
+  /** 下次拉取继续使用的 `/v2/changes` 不透明游标。 */
+  readonly cursor?: string
 }
 
 /** 服务端 manifest 中本引擎需要的字段。 */
@@ -615,7 +644,7 @@ async function readManifest(
   token: string,
   sessionId: string,
 ): Promise<RemoteManifest | undefined> {
-  const { status, body } = await requestJson(fetchImpl, base, `/v1/sessions/${encodeURIComponent(sessionId)}/manifest`, token)
+  const { status, body } = await requestJson(fetchImpl, base, `/v2/sessions/${encodeURIComponent(sessionId)}/manifest`, token)
   if (status === 404) return undefined
   if (status !== 200) {
     const error = errorOf(body)
@@ -645,13 +674,47 @@ async function uploadBlob(
   token: string,
   sealed: SealedFrame,
 ): Promise<void> {
-  const response = await fetchImpl(`${base}/v1/blobs?kind=frame`, {
+  const response = await fetchImpl(`${base}/v2/blobs?kind=frame`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token}`,
       'content-type': 'application/octet-stream',
     },
     body: sealed.bytes,
+  })
+  const text = await response.text()
+  if (response.status !== 200 && response.status !== 201) {
+    const body = text === '' ? undefined : JSON.parse(text) as unknown
+    const error = errorOf(body)
+    throw new SyncHttpError(error.message, response.status, error.code)
+  }
+}
+
+/**
+ * 批量上传一帧或少量帧；单个超大帧回退单 blob 接口。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param sealed - 已封好的帧。
+ */
+async function uploadBlobs(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  sealed: readonly SealedFrame[],
+): Promise<void> {
+  if (sealed.length === 0) return
+  if (sealed.length === 1) {
+    await uploadBlob(fetchImpl, base, token, sealed[0]!)
+    return
+  }
+  const response = await fetchImpl(`${base}/v2/blobs/batch`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': BLOB_BATCH_CONTENT_TYPE,
+    },
+    body: encodeBlobBatch(sealed.map((entry) => ({ kind: 'frame', data: entry.bytes }))),
   })
   const text = await response.text()
   if (response.status !== 200 && response.status !== 201) {
@@ -689,11 +752,17 @@ async function appendFrames(
   const { status, body } = await requestJson(
     fetchImpl,
     base,
-    `/v1/sessions/${encodeURIComponent(sessionId)}/append`,
+    `/v2/sessions/${encodeURIComponent(sessionId)}/append`,
     token,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-client-id': clientId },
+      headers: {
+        'content-type': 'application/json',
+        'x-client-id': clientId,
+        // A group is identified by the first batch it appends; a retry of the
+        // same group reuses the key, while a later group gets a new one.
+        'idempotency-key': `${clientId}:${sessionId}:${input.baseIndex + 1}`,
+      },
       body: JSON.stringify({ ...input, batches: input.frames }),
     },
   )
@@ -949,6 +1018,7 @@ async function syncSession<Session>(
   const cwdNonPortable = cwdNonPortableOf(events, cwd)
   let safeThroughSeq = safeThroughSeqOf(events, tailOpen)
   const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
+  const remoteCompression = remote === undefined ? undefined : compressionOfFrames(remote.frames)
 
   // 已经有远端 manifest 的会话沿用远端 key：映射到本地路径后，旧会话不会
   // 因为路径的推送身份变化而被判成 diverged；新会话才使用本地解析的 key。
@@ -988,6 +1058,7 @@ async function syncSession<Session>(
       return {
         sessionId,
         status: 'remote-ahead',
+        ...remoteCompression === undefined ? {} : { compression: remoteCompression },
         totalEvents: 0,
         doneEvents: 0,
         pendingEvents: remote.lastSeq - localLast,
@@ -1001,7 +1072,11 @@ async function syncSession<Session>(
   const startAfterSeq = remote?.lastSeq ?? -1
   const totalEvents = Math.max(0, events.length - (startAfterSeq + 1))
   if (remote !== undefined && totalEvents === 0) {
-    return { sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen, ...cwdNonPortable ? { cwdNonPortable } : {} }
+    return {
+      sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen,
+      ...remoteCompression === undefined ? {} : { compression: remoteCompression },
+      ...cwdNonPortable ? { cwdNonPortable } : {},
+    }
   }
 
   notifyProgress(deps, {
@@ -1042,25 +1117,50 @@ async function syncSession<Session>(
     })
   }
 
-  const upload = async (entry: SealedFrame, eventsInBatch: number): Promise<void> => {
+  const pendingUploads: Array<{ readonly sealed: SealedFrame; readonly events: number }> = []
+  const encodedBytesOf = (entries: readonly { readonly sealed: SealedFrame }[]): number =>
+    entries.reduce((total, entry) => total + BLOB_BATCH_ENTRY_HEADER_BYTES + entry.sealed.bytes.length,
+      BLOB_BATCH_HEADER_BYTES)
+
+  const flushUploads = async (): Promise<void> => {
+    if (pendingUploads.length === 0) return
+    const group = pendingUploads.splice(0)
     const uploadStarted = performance.now()
     notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'upload' })
-    await uploadBlob(fetchImpl, base, deps.config.token, entry)
+    await uploadBlobs(fetchImpl, base, deps.config.token, group.map((entry) => entry.sealed))
+    let bytes = 0
+    let events = 0
+    for (const item of group) {
+      frames.push(item.sealed.ref)
+      bytes += item.sealed.ref.bytes
+      totalBytes += item.sealed.ref.bytes
+      doneBytes += item.sealed.ref.bytes
+      events += item.events
+      if (item.events > 0) doneBatches += 1
+    }
+    doneEvents += events
     notifyPerf(deps, {
       direction: 'push',
       sessionId,
       stage: 'upload',
       ms: performance.now() - uploadStarted,
-      bytes: entry.ref.bytes,
+      bytes,
     })
-    frames.push(entry.ref)
-    totalBytes += entry.ref.bytes
-    doneBytes += entry.ref.bytes
-    if (eventsInBatch > 0) {
-      doneEvents += eventsInBatch
-      doneBatches += 1
-    }
     notifyUpload()
+  }
+
+  const upload = async (entry: SealedFrame, eventsInBatch: number): Promise<void> => {
+    const entryBytes = BLOB_BATCH_ENTRY_HEADER_BYTES + entry.bytes.length
+    if (pendingUploads.length > 0
+      && (pendingUploads.length >= MAX_BATCH_BLOBS
+        || encodedBytesOf(pendingUploads) + entryBytes > MAX_BATCH_BODY_BYTES)) {
+      await flushUploads()
+    }
+    pendingUploads.push({ sealed: entry, events: eventsInBatch })
+    if (pendingUploads.length >= MAX_BATCH_BLOBS
+      || encodedBytesOf(pendingUploads) >= MAX_BATCH_BODY_BYTES) {
+      await flushUploads()
+    }
   }
 
   notifyProgress(deps, {
@@ -1077,7 +1177,7 @@ async function syncSession<Session>(
   if (remote === undefined) {
     const sealStarted = performance.now()
     notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'seal' })
-    const headerEntry = sealHeader(meta, sessionId, sessionKey)
+    const headerEntry = sealHeader(meta, sessionId, sessionKey, 'zstd')
     notifyPerf(deps, {
       direction: 'push',
       sessionId,
@@ -1092,7 +1192,7 @@ async function syncSession<Session>(
   for (const batch of iterateEventBatches(events, startAfterSeq, batchOptions(deps.config))) {
     const sealStarted = performance.now()
     notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'seal' })
-    const entry = sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey)
+    const entry = sealEventBatchFromText(batch.text, sessionId, index, batch.seqFrom, batch.seqTo, sessionKey, 'zstd')
     notifyPerf(deps, {
       direction: 'push',
       sessionId,
@@ -1109,6 +1209,7 @@ async function syncSession<Session>(
       lastYieldAt = Date.now()
     }
   }
+  await flushUploads()
   if (doneEvents !== totalEvents) {
     throw new Error(`推送规划只覆盖 ${doneEvents}/${totalEvents} 个事件`)
   }
@@ -1149,6 +1250,7 @@ async function syncSession<Session>(
   return {
     sessionId,
     status: 'pushed',
+    compression: compressionOfFrames([...(remote?.frames ?? []), ...frames]),
     batches: pushedBatches,
     bytes: totalBytes,
     totalEvents,
@@ -1237,7 +1339,7 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
 
 /** 连接测试结果。 */
 export interface SyncTestResult {
-  /** 服务端可达且 `/v1/health` 响应正常。 */
+  /** 服务端可达且 `/health` 响应正常。 */
   readonly ok: boolean
   /** 失败分类。 */
   readonly kind?: SyncErrorKind
@@ -1250,7 +1352,7 @@ export interface SyncTestResult {
 }
 
 /**
- * 测试服务端地址是否可达；只请求公开的 `/v1/health`。
+ * 测试服务端地址是否可达；只请求公开的 `/health`。
  *
  * 不读取已保存的配置，也不携带设备 token：首启向导第 1 步只关心“地址通不通”，
  * 凭据是否有效由后续同步阶段的认证错误来暴露。
@@ -1280,20 +1382,22 @@ export async function testConnection(
   }
   const timedFetch = withRequestTimeout(fetchImpl, requestTimeoutMs)
   try {
-    const response = await timedFetch(`${base}/v1/health`, { headers: { accept: 'application/json' } })
+    const response = await timedFetch(`${base}/health`, { headers: { accept: 'application/json' } })
     if (response.status === 200) {
       const body = await response.json().catch(() => undefined) as Record<string, unknown> | undefined
-      if (body === undefined || body['ok'] !== true) {
-        return { ok: false, kind: 'server', message: '服务端 /v1/health 响应不合法' }
+      if (body === undefined || body['ok'] !== true || body['server'] === null || typeof body['server'] !== 'object') {
+        return { ok: false, kind: 'server', message: '服务端 /health 响应不合法' }
       }
+      const server = body['server'] as Record<string, unknown>
+      const protocols = Array.isArray(server['protocols']) ? server['protocols'] : []
       return {
         ok: true,
-        ...typeof body['version'] === 'string' ? { version: body['version'] } : {},
-        ...typeof body['protocol'] === 'number' ? { protocol: body['protocol'] } : {},
+        ...typeof server['version'] === 'string' ? { version: server['version'] } : {},
+        ...typeof protocols[0] === 'number' ? { protocol: protocols[0] } : {},
       }
     }
     if (response.status === 404) {
-      return { ok: false, kind: 'not-found', message: '服务端没有 /v1/health，确认地址指向同步服务端' }
+      return { ok: false, kind: 'not-found', message: '服务端没有 /health，确认地址指向同步服务端' }
     }
     return { ok: false, kind: 'server', message: `服务端返回 HTTP ${response.status}` }
   } catch (error: unknown) {
@@ -1302,52 +1406,66 @@ export async function testConnection(
   }
 }
 
-/** 游标里的一个会话变更。 */
+/** 变更流里的一个会话。 */
 interface CursorSession {
   readonly sessionId: string
   readonly revision: number
   readonly deletedAt: number | null
 }
 
-/** 游标里的墓碑。 */
+/** 变更流里的墓碑。 */
 interface CursorTombstone {
   readonly sessionId: string
   readonly deletedAt: number
 }
 
-/** 游标响应。 */
+/** `/v2/changes` 的一页。 */
 interface CursorValue {
   readonly revision: number
+  readonly cursor?: string
   readonly sessions: readonly CursorSession[]
   readonly tombstones: readonly CursorTombstone[]
   readonly hasMore: boolean
 }
 
 /**
- * 读取服务端游标。
+ * 读取 `/v2/changes` 的一页。
  * @param fetchImpl - fetch 实现。
  * @param base - 服务端地址。
  * @param token - 设备 token。
- * @param since - 已处理的 revision。
- * @returns 游标响应。
+ * @param since - 已处理的 revision，仅用于计算本页数值高水位。
+ * @param cursor - 上一页返回的不透明游标；第一页省略。
+ * @returns 变更页与下一页游标。
  */
 async function readCursor(
   fetchImpl: typeof fetch,
   base: string,
   token: string,
   since: number,
+  cursor?: string,
 ): Promise<CursorValue> {
-  const { status, body } = await requestJson(fetchImpl, base, `/v1/cursor?since=${since}&limit=200`, token)
+  const query = cursor === undefined ? 'limit=200' : `cursor=${encodeURIComponent(cursor)}&limit=200`
+  const { status, body } = await requestJson(fetchImpl, base, `/v2/changes?${query}`, token)
   if (status !== 200) {
     const error = errorOf(body)
     throw new SyncHttpError(error.message, status, error.code)
   }
-  if (body === null || typeof body !== 'object') throw new Error('cursor 响应不是对象')
+  if (body === null || typeof body !== 'object') throw new Error('changes 响应不是对象')
   const value = (body as Record<string, unknown>)['value']
-  if (value === null || typeof value !== 'object') throw new Error('cursor 响应缺少 value')
+  if (value === null || typeof value !== 'object') throw new Error('changes 响应缺少 value')
   const record = value as Record<string, unknown>
-  if (!Array.isArray(record['sessions']) || !Array.isArray(record['tombstones'])) throw new Error('cursor 响应缺少数组')
-  return value as CursorValue
+  if (!Array.isArray(record['sessions']) || !Array.isArray(record['tombstones'])) throw new Error('changes 响应缺少数组')
+  const sessions = record['sessions'] as CursorSession[]
+  const nextCursor = typeof record['nextCursor'] === 'string' && record['nextCursor'] !== ''
+    ? record['nextCursor']
+    : undefined
+  return {
+    revision: Math.max(since, 0, ...sessions.map((session) => session.revision)),
+    ...nextCursor === undefined ? {} : { cursor: nextCursor },
+    sessions,
+    tombstones: record['tombstones'] as CursorTombstone[],
+    hasMore: record['hasMore'] === true,
+  }
 }
 
 /**
@@ -1364,7 +1482,7 @@ async function downloadBlob(
   token: string,
   sha256: string,
 ): Promise<Buffer> {
-  const response = await fetchImpl(`${base}/v1/blobs/${sha256}`, {
+  const response = await fetchImpl(`${base}/v2/blobs/${sha256}`, {
     headers: { authorization: `Bearer ${token}` },
   })
   if (response.status !== 200) {
@@ -1372,6 +1490,48 @@ async function downloadBlob(
     throw new SyncHttpError(text === '' ? `blob ${sha256} 下载失败` : text, response.status)
   }
   return Buffer.from(await response.arrayBuffer())
+}
+
+/**
+ * 批量下载多个 blob；单条仍走单 blob 接口。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param hashes - 要下载的密文哈希。
+ * @returns 按 sha256 索引的字节。
+ */
+async function downloadBlobs(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  hashes: readonly string[],
+): Promise<Map<string, Buffer>> {
+  const unique = [...new Set(hashes)]
+  if (unique.length === 0) return new Map()
+  if (unique.length === 1) return new Map([[unique[0]!, await downloadBlob(fetchImpl, base, token, unique[0]!)]])
+  const response = await fetchImpl(`${base}/v2/blobs/batch/read`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ sha256: unique }),
+  })
+  if (response.status !== 200) {
+    const text = await response.text()
+    throw new SyncHttpError(text === '' ? '批量 blob 下载失败' : text, response.status)
+  }
+  const entries = decodeBlobBatch(Buffer.from(await response.arrayBuffer()))
+  const result = new Map<string, Buffer>()
+  for (const entry of entries) {
+    if (sha256(entry.data) !== entry.sha256) throw new Error(`批量 blob ${entry.sha256} 内容哈希不符`)
+    if (!unique.includes(entry.sha256)) throw new Error(`批量 blob 返回了未请求的条目 ${entry.sha256}`)
+    result.set(entry.sha256, entry.data)
+  }
+  for (const hash of unique) {
+    if (!result.has(hash)) throw new Error(`批量 blob 缺少 ${hash}`)
+  }
+  return result
 }
 
 /**
@@ -1400,12 +1560,16 @@ async function downloadSafeEvents(
 ): Promise<SyncEvent[]> {
   const events: SyncEvent[] = []
   const totalEvents = safe - localLast
-  for (const frame of frames.slice(1)) {
-    if (frame.seqFrom > safe) break
-    if (frame.seqTo <= localLast) continue
-    const sealed = await downloadBlob(fetchImpl, base, token, frame.blobSha256)
-    for (const event of openEventBatch(sealed, frame, sessionId, sessionKey)) {
-      if (event.seq > localLast && event.seq <= safe) events.push(event)
+  const selected = frames.slice(1).filter((frame) => frame.seqFrom <= safe && frame.seqTo > localLast)
+  for (let offset = 0; offset < selected.length; offset += MAX_BATCH_BLOBS) {
+    const group = selected.slice(offset, offset + MAX_BATCH_BLOBS)
+    const blobs = await downloadBlobs(fetchImpl, base, token, group.map((frame) => frame.blobSha256))
+    for (const frame of group) {
+      const sealed = blobs.get(frame.blobSha256)
+      if (sealed === undefined) throw new Error(`批量下载缺少批次 ${frame.index}`)
+      for (const event of openEventBatch(sealed, frame, sessionId, sessionKey)) {
+        if (event.seq > localLast && event.seq <= safe) events.push(event)
+      }
     }
     if (totalEvents > 0) onProgress?.(events.length, totalEvents)
   }
@@ -1890,7 +2054,7 @@ export async function correctCwd<Session>(
     await handle.append([correction])
     await handle.flush()
 
-    const sealed = sealEventBatch([correction], sessionId, current.frames.length, sessionKeyOf(master, sessionId))
+    const sealed = sealEventBatch([correction], sessionId, current.frames.length, sessionKeyOf(master, sessionId), 'zstd')
     await uploadBlob(fetchImpl, base, deps.config.token, sealed)
     const baseFrame = current.frames[current.frames.length - 1]
     if (baseFrame === undefined) throw new Error('manifest 缺少最后一个批次')
@@ -1977,11 +2141,17 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       const workspaceKey = await resolveWorkspaceKey(loaded, fetchImpl, base, config.token, master, () => undefined)
       const workspacePath = resolvePath(workspaceKey)
       if (workspacePath === undefined) {
-        reports.push({ sessionId: state.pending.sessionId, status: 'unmapped', revision: state.revision, ...workspaceKey === undefined ? {} : { workspaceKey } })
-        return { configured: true, sessions: reports, revision: state.revision }
+        reports.push({
+          sessionId: state.pending.sessionId,
+          status: 'unmapped',
+          revision: state.revision,
+          compression: compressionOfFrames(loaded.remote.frames),
+          ...workspaceKey === undefined ? {} : { workspaceKey },
+        })
+        return { configured: true, sessions: reports, revision: state.revision, ...state.cursor === undefined ? {} : { cursor: state.cursor } }
       }
       const recovered = await pullSession(applyDeps, fetchImpl, base, master, state.pending.sessionId, workspacePath, loaded)
-      reports.push(recovered)
+      reports.push({ ...recovered, compression: compressionOfFrames(loaded.remote.frames) })
       recoveredPendingId = state.pending.sessionId
       // local-active / write-owned 代表这次没有真正 apply，pending 必须留给
       // 下一次；其余状态在 attach 成功后结束，cwd/nonPortable 没有 attach。
@@ -1997,14 +2167,15 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
       const classified = classifySyncError(error)
       deps.logger?.warn(`dsh-session-cloudsync: 恢复 ${state.pending.sessionId} 失败：${classified.message}`)
       reports.push({ sessionId: state.pending.sessionId, status: 'error', error: classified.message, kind: classified.kind })
-      return { configured: true, sessions: reports, revision: state.revision }
+      return { configured: true, sessions: reports, revision: state.revision, ...state.cursor === undefined ? {} : { cursor: state.cursor } }
     }
   }
 
-  for (let page = 0; page < 20; page += 1) {
-    const cursor = await readCursor(fetchImpl, base, config.token, revision)
+  let changesCursor = state.cursor
+  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+    const page = await readCursor(fetchImpl, base, config.token, revision, changesCursor)
     const prepared: Array<{ readonly sessionId: string; readonly loaded: LoadedRemote; readonly revision: number }> = []
-    for (const change of cursor.sessions) {
+    for (const change of page.sessions) {
       if (change.sessionId === recoveredPendingId) continue
       if (change.deletedAt !== null) {
         reports.push({ sessionId: change.sessionId, status: 'tombstone' })
@@ -2053,6 +2224,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
             sessionId: item.sessionId,
             status: 'unmapped',
             revision: item.revision,
+            compression: compressionOfFrames(item.loaded.remote.frames),
             ...workspaceKey === undefined ? {} : { workspaceKey },
             ...item.loaded.meta === undefined ? {} : {
               createdAt: item.loaded.meta.createdAt,
@@ -2067,7 +2239,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
           continue
         }
         const report = await pullSession(applyDeps, fetchImpl, base, master, item.sessionId, workspacePath, item.loaded)
-        reports.push(report)
+        reports.push({ ...report, compression: compressionOfFrames(item.loaded.remote.frames) })
         if (report.status === 'local-active' || report.status === 'write-owned' || report.status === 'local-ahead') {
           deferredRevision = deferredRevision === undefined
             ? item.revision
@@ -2104,24 +2276,29 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         // 已经调用 beforeApply 的失败会留下 pending；此时必须停下，不能
         // 让下一个会话覆盖唯一一条恢复记录。只读阶段的分叉/格式错误没有
         // pending，可以跳过该会话，继续处理其他安全会话。
-        if (applyStarted !== undefined) return { configured: true, sessions: reports, revision: state.revision }
+        if (applyStarted !== undefined) return { configured: true, sessions: reports, revision: state.revision, ...state.cursor === undefined ? {} : { cursor: state.cursor } }
         continue
       }
     }
-    for (const tombstone of cursor.tombstones) {
+    for (const tombstone of page.tombstones) {
       reports.push({ sessionId: tombstone.sessionId, status: 'tombstone' })
     }
     const maxRevision = Math.max(
       revision,
-      ...cursor.sessions.map((change) => change.revision),
-      ...cursor.tombstones.map((tombstone) => tombstone.deletedAt),
+      ...page.sessions.map((change) => change.revision),
+      ...page.tombstones.map((tombstone) => tombstone.deletedAt),
     )
-    if (!cursor.hasMore) {
-      revision = Math.max(cursor.revision, maxRevision)
+    // Deferred sessions keep the previous cursor so the next round re-reads
+    // this page; advancing past them would strand local-active/write-owned rows.
+    if (deferredRevision !== undefined) break
+    if (!page.hasMore) {
+      revision = Math.max(page.revision, maxRevision)
+      changesCursor = page.cursor
       break
     }
     revision = maxRevision
-    if (revision <= state.revision) break
+    if (page.cursor === undefined || page.cursor === changesCursor) break
+    changesCursor = page.cursor
   }
 
   if (deps.attach !== undefined) {
@@ -2137,7 +2314,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
         const classified = classifySyncError(error)
         deps.logger?.warn(`dsh-session-cloudsync: 挂载 ${sessionId} 失败：${classified.message}`)
         reports.push({ sessionId, status: 'error', error: classified.message, kind: classified.kind })
-        return { configured: true, sessions: reports, revision: state.revision }
+        return { configured: true, sessions: reports, revision: state.revision, ...state.cursor === undefined ? {} : { cursor: state.cursor } }
       }
     }
   }
@@ -2151,6 +2328,7 @@ export async function pullOnce<Session>(deps: PullDeps<Session>, state: PullStat
     configured: true,
     sessions: reports,
     revision: nextRevision,
+    ...changesCursor === undefined ? {} : { cursor: changesCursor },
   }
 }
 
