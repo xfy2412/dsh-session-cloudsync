@@ -100,8 +100,10 @@ jobs:
         working-directory: packages/server
         run: |
           tag="${GITHUB_REF_NAME}"
+          # The annotated tag message is the release body. For a lightweight
+          # tag, gh falls back to the tagged commit message.
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes
+            gh release create "$tag" --verify-tag --title "$tag" --notes-from-tag
           fi
           gh release upload "$tag" \
             "${{ steps.package.outputs.tarball }}" \
