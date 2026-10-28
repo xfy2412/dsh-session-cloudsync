@@ -5,8 +5,29 @@
   "type": "module",
   "description": "DSH Session CloudSync self-hosted server.",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xfy2412/dsh-session-cloudsync.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/xfy2412/dsh-session-cloudsync#readme",
+  "bugs": {
+    "url": "https://github.com/xfy2412/dsh-session-cloudsync/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "session",
+    "sync",
+    "self-hosted",
+    "e2ee",
+    "sqlite"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
-    "dscs-server": "./dist/index.js"
+    "dscs-server": "dist/index.js"
   },
   "files": [
     "dist",

@@ -13,6 +13,10 @@
 # Later releases: bump packages/server/package.json, commit, tag
 # `server-v<version>`, and push the tag. `npm publish` performs the OIDC
 # exchange because npm 11.5.1+ supports it.
+#
+# The trusted publisher must name the GitHub repository
+# `xfy2412/dsh-session-cloudsync`, not the local checkout directory
+# `dsh-session-sync`; a mismatched repository surfaces as npm E404.
 name: publish-server
 
 on:
