@@ -9,9 +9,17 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test \"packages/**/tests/**/*.test.ts\" \"packages/**/tests/**/*.test.mjs\" \"tests/**/*.test.mjs\"",
+    "test": "node --test \"packages/**/tests/**/*.test.ts\" \"packages/**/tests/**/*.test.mjs\" \"packages/**/tests/**/*.integration.mjs\" \"tests/**/*.test.mjs\"",
+    "test:shared": "node --test \"packages/shared/tests/**/*.test.ts\"",
+    "test:server": "node --test \"packages/shared/tests/**/*.test.ts\" \"packages/server/tests/**/*.test.mjs\"",
+    "test:plugin": "node --test \"packages/shared/tests/**/*.test.ts\" \"packages/plugin/tests/*.test.mjs\"",
+    "test:integration": "node --test \"packages/plugin/tests/*.integration.mjs\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
+    "typecheck:plugin": "tsc -p tsconfig.plugin.json --noEmit",
     "check": "pnpm run typecheck && pnpm test",
+    "check:server": "pnpm run typecheck:server && pnpm run test:server",
+    "check:plugin": "pnpm run typecheck:plugin && pnpm run test:plugin",
     "fixtures": "node tests/tools/make-fixtures.ts",
     "bench:trace": "node tests/tools/session-trace.ts",
     "bench:generate": "node tests/tools/make-bench-session.ts",

@@ -59,9 +59,12 @@ docs/
 
 ```sh
 pnpm install
-pnpm test           # node --test（.ts 由 Node 24 直接运行）
+pnpm test                 # 全部测试（含跨包集成）
 pnpm typecheck
-pnpm check          # typecheck + test
+pnpm check                # 全部 typecheck + test
+pnpm run check:server     # 服务端/shared：服务端发布门禁
+pnpm run check:plugin     # 插件/shared：插件发布门禁（不含跨包集成）
+pnpm run test:integration # 插件↔服务端跨包集成；不阻塞任一发布
 pnpm fixtures       # 重新生成夹具的 .zstd 兄弟文件
 pnpm dev:server     # 在 .tmp/dev-data 起服务端（127.0.0.1:8787）
 pnpm dev:dsh        # 起隔离的 DSH 开发实例（默认端口 3090）

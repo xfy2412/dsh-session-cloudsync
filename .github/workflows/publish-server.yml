@@ -39,7 +39,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run check
+      # Server publication is gated only by the server/shared suites. A plugin
+      # regression must not hold back a server release.
+      - run: pnpm run check:server
       - run: node packages/server/scripts/build.mjs
       - run: node --check packages/server/dist/index.js
 

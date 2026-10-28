@@ -1,5 +1,6 @@
-# Verification for every push and pull request.  The publish workflow runs the
-# same gates before it is allowed to touch the npm registry.
+# Verification for every push and pull request. The two publish workflows run
+# the matching package gate; a failure in one package cannot block the other
+# package's release. Cross-package integration is a separate job.
 name: ci
 
 on:
@@ -11,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  server:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -23,15 +24,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run check
-      # The npm package contains generated lib/ and the client bundle.  Build
-      # and inspect the exact tarball here, not only in the publish workflow.
-      - run: node packages/plugin/scripts/build.mjs
-      - run: node --check packages/plugin/client/index.js
-      - run: npm pack --dry-run
-        working-directory: packages/plugin
-      # The server is a separate publishable package; build the exact JS
-      # artifact and inspect its tarball on every CI run.
+      - run: pnpm run check:server
+      # Build the exact publishable server artifact and inspect its tarball.
       - run: node packages/server/scripts/build.mjs
       - run: node --check packages/server/dist/index.js
       - run: npm pack --dry-run
@@ -39,3 +33,39 @@ jobs:
       # Installer syntax checks (help exits before service/Node checks).
       - run: bash -n scripts/install.sh
       - run: pwsh -NoProfile -File scripts/install.ps1 -Help > /dev/null
+
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check:plugin
+      # The npm package contains generated lib/ and the client bundle. Build
+      # and inspect the exact tarball here, not only in the publish workflow.
+      - run: node packages/plugin/scripts/build.mjs
+      - run: node --check packages/plugin/client/index.js
+      - run: npm pack --dry-run
+        working-directory: packages/plugin
+
+  integration:
+    # Cross-package plugin↔server behavior. It is not a gate for either
+    # package's publish workflow; keep it visible as its own signal.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:integration
