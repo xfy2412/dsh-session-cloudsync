@@ -88,8 +88,8 @@ function readAsset(url: URL): Buffer | undefined {
 }
 
 /** 页面用的深色 logo 与 favicon。 */
-const LOGO_SVG = readAsset(new URL('../../../assets/logo-dark.svg', import.meta.url))
-const FAVICON_SVG = readAsset(new URL('../../../assets/favicon.svg', import.meta.url))
+const LOGO_SVG = readAsset(new URL('../assets/logo-dark.svg', import.meta.url))
+const FAVICON_SVG = readAsset(new URL('../assets/favicon.svg', import.meta.url))
 
 /**
  * 读一个文本资源；缺失时给出明确错误。

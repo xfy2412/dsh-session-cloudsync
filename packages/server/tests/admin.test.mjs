@@ -56,6 +56,13 @@ test('首次初始化向导：密钥 → 密码 → 配额 → 设备 → 完成
       const setupPage = await call(base, '/setup')
       assert.equal(setupPage.status, 200)
       assert.match(setupPage.headers.get('content-type') ?? '', /text\/html/u)
+      const logo = await call(base, '/logo.svg')
+      assert.equal(logo.status, 200)
+      assert.match(logo.headers.get('content-type') ?? '', /image\/svg\+xml/u)
+      assert.match(logo.text, /<svg/u)
+      const favicon = await call(base, '/favicon.svg')
+      assert.equal(favicon.status, 200)
+      assert.match(favicon.text, /<svg/u)
 
       const state0 = await call(base, '/setup/state')
       assert.equal(state0.body.value.initialized, false)
