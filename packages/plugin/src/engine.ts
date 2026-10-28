@@ -35,6 +35,7 @@ import {
   MAX_BATCH_BODY_BYTES,
 } from '../../shared/src/blob-batch.ts'
 import { stableStringify } from '../../shared/src/chain.ts'
+import { PROTOCOL_VERSION } from '../../shared/src/protocol.ts'
 import { deriveMasterKeyAsync, sha256 } from '../../shared/src/crypto.ts'
 import {
   sessionKeyOf,
@@ -518,7 +519,13 @@ export function classifySyncError(error: unknown): ClassifiedSyncError {
     switch (error.status) {
       case 401: return { kind: 'auth', message, retryable: false }
       case 403: return { kind: 'forbidden', message, retryable: false }
-      case 404: return { kind: 'not-found', message, retryable: false }
+      case 404: return {
+        kind: 'not-found',
+        message: error.code === undefined
+          ? `${message}；如果服务端是 0.0.x，请升级到 0.1.0（插件 0.1.0 只支持 /v2）`
+          : message,
+        retryable: false,
+      }
       case 410: return { kind: 'gone', message, retryable: false }
       case 507: return { kind: 'quota', message, retryable: true }
       case 429: return { kind: 'rate-limited', message, retryable: true }
@@ -1386,10 +1393,22 @@ export async function testConnection(
     if (response.status === 200) {
       const body = await response.json().catch(() => undefined) as Record<string, unknown> | undefined
       if (body === undefined || body['ok'] !== true || body['server'] === null || typeof body['server'] !== 'object') {
-        return { ok: false, kind: 'server', message: '服务端 /health 响应不合法' }
+        return { ok: false, kind: 'server', message: '服务端 /health 响应不合法（0.0.x 旧服务端可能不支持此格式）' }
       }
       const server = body['server'] as Record<string, unknown>
-      const protocols = Array.isArray(server['protocols']) ? server['protocols'] : []
+      const protocols = Array.isArray(server['protocols'])
+        ? server['protocols'].filter((value): value is number => Number.isSafeInteger(value))
+        : []
+      const apiVersions = Array.isArray(server['apiVersions'])
+        ? server['apiVersions'].filter((value): value is number => Number.isSafeInteger(value))
+        : []
+      if (!apiVersions.includes(2) || !protocols.includes(PROTOCOL_VERSION)) {
+        return {
+          ok: false,
+          kind: 'config',
+          message: `服务端版本不兼容：插件 0.1.0 需要 v2 API / protocol ${PROTOCOL_VERSION}；请把服务端升级到 0.1.0`,
+        }
+      }
       return {
         ok: true,
         ...typeof server['version'] === 'string' ? { version: server['version'] } : {},
@@ -1397,7 +1416,11 @@ export async function testConnection(
       }
     }
     if (response.status === 404) {
-      return { ok: false, kind: 'not-found', message: '服务端没有 /health，确认地址指向同步服务端' }
+      return {
+        ok: false,
+        kind: 'not-found',
+        message: '服务端没有 /health，可能是 0.0.x 旧服务端；插件 0.1.0 需要服务端 0.1.0（v2-only）',
+      }
     }
     return { ok: false, kind: 'server', message: `服务端返回 HTTP ${response.status}` }
   } catch (error: unknown) {

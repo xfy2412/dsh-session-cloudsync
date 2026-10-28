@@ -7,6 +7,7 @@ DSH 会话云同步插件：自部署服务端、端到端加密，同步根会�
 - v2 API：`/v2/*`、opaque changes cursor、幂等 append；
 - 事件批次增量推送/拉取；批次哈希、zstd 压缩后 AES-256-GCM 封批次；
 - 批量 blob 上传/下载：8 MiB / 64 条分组，Vault blob 复用同一接口；
+- 连接测试校验 `/health` 的 `apiVersions` / `protocols`；0.0.x 旧服务端会明确提示升级；
 - 服务端只存密文、manifest、压缩状态与 blob 去重，不持有明文口令；
 - **多设备必须使用同一同步口令**；默认盐由 `serverUrl` 派生，所以服务端地址写法也必须一致（不要混用 `localhost` / `127.0.0.1` 或省略 `//`）。设备 token 只用于鉴权，不参与解密；口令、地址或 `salt` 任一不同都会报 `keyId` 不符；
 - 开放尾只备份、不直接 apply；拉取带 durable pending journal；

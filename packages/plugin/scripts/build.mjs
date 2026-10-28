@@ -24,7 +24,7 @@ const sharedDir = path.resolve(root, '..', 'shared', 'src')
 const sharedOutput = path.join(outputDir, 'shared')
 const agreementSource = path.resolve(root, '..', '..', 'docs', 'guides', 'USAGE-AGREEMENT.md')
 const agreementOutput = path.join(outputDir, 'agreement.md')
-const SHARED_MODULES = ['batches.ts', 'blob-batch.ts', 'chain.ts', 'crypto.ts', 'sealed-frame.ts', 'vault.ts']
+const SHARED_MODULES = ['batches.ts', 'blob-batch.ts', 'chain.ts', 'crypto.ts', 'protocol.ts', 'sealed-frame.ts', 'vault.ts']
 
 /** 递归列出某目录下的所有 `.ts` 文件。 */
 function sources(dir) {

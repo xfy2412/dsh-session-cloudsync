@@ -873,6 +873,21 @@ test('连接测试：只探测公开的 /health，不读配置也不带 token', 
   }
 })
 
+test('连接测试：旧服务端 / 缺少 /health 时给出升级提示', async () => {
+  const old = await testConnection('http://old.example', async () => Response.json({
+    ok: true,
+    server: { version: '0.0.3', apiVersions: [1], protocols: [2] },
+  }))
+  assert.equal(old.ok, false)
+  assert.equal(old.kind, 'config')
+  assert.match(old.message, /0\.1\.0/u)
+
+  const missingHealth = await testConnection('http://old.example', async () => new Response('', { status: 404 }))
+  assert.equal(missingHealth.ok, false)
+  assert.equal(missingHealth.kind, 'not-found')
+  assert.match(missingHealth.message, /0\.0\.x/u)
+})
+
 test('连接测试：读取超时归类为 network', async () => {
   const result = await testConnection('http://127.0.0.1:1', (_input, init) => new Promise((_resolve, reject) => {
     init?.signal?.addEventListener('abort', () => reject(new Error('request timeout')))
@@ -889,6 +904,9 @@ test('错误分类：auth / lease / network / crypto', () => {
   assert.equal(classifySyncError(new Error('fetch failed')).kind, 'network')
   assert.equal(classifySyncError(new Error('封帧认证失败（密文、AAD 或密钥不匹配）')).kind, 'crypto')
   assert.equal(classifySyncError(new SyncHttpError('quota', 507)).retryable, true)
+  const oldServer = classifySyncError(new SyncHttpError('Not Found', 404))
+  assert.equal(oldServer.kind, 'not-found')
+  assert.match(oldServer.message, /0\.1\.0/u)
 })
 
 test('错误分类：M4 故障矩阵', () => {
