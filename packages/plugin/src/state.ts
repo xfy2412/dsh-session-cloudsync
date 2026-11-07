@@ -9,6 +9,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { BlockedDecision, BlockedSessionState, PendingApply, UnmappedSessionState } from './engine.ts'
+import type { SyncReceipt } from './sync-plan.ts'
 
 /** 状态文件格式版本。 */
 export const STATE_VERSION = 1
@@ -24,6 +25,8 @@ export interface PullJournal {
   readonly blocked?: readonly BlockedSessionState[]
   readonly blockedDecisions?: readonly BlockedDecision[]
   readonly unmapped?: readonly UnmappedSessionState[]
+  /** 上次成功对齐的会话 receipt；没有 receipt 的会话走完整检查。 */
+  readonly receipts?: Readonly<Record<string, SyncReceipt>>
 }
 
 /**
@@ -49,12 +52,14 @@ export function readPullJournal(file: string): PullJournal {
   const blocked = blockedFrom(record['blocked'])
   const blockedDecisions = decisionsFrom(record['blockedDecisions'])
   const unmapped = unmappedFrom(record['unmapped'])
+  const receipts = receiptsFrom(record['receipts'])
   const extra = {
     ...cursor === undefined ? {} : { cursor },
     ...cwdPending === undefined || cwdPending.length === 0 ? {} : { cwdPending },
     ...blocked === undefined ? {} : { blocked },
     ...blockedDecisions === undefined ? {} : { blockedDecisions },
     ...unmapped === undefined ? {} : { unmapped },
+    ...receipts === undefined ? {} : { receipts },
   }
   const pending = record['pending']
   if (pending === undefined) {
@@ -164,6 +169,46 @@ function unmappedFrom(value: unknown): readonly UnmappedSessionState[] | undefin
     })
   }
   return entries.size === 0 ? undefined : [...entries.values()]
+}
+
+/**
+ * 解析 receipt 表；损坏记录静默丢弃。
+ * @param value - 原始 JSON 值。
+ * @returns receipt 表或 undefined。
+ */
+function receiptsFrom(value: unknown): Readonly<Record<string, SyncReceipt>> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const receipts: Record<string, SyncReceipt> = {}
+  for (const [sessionId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (sessionId === '' || raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const entry = raw as Record<string, unknown>
+    const localEventCount = entry['localEventCount']
+    const localLastSeq = entry['localLastSeq']
+    const remoteLastSeq = entry['remoteLastSeq']
+    const remoteHeadChainHash = entry['remoteHeadChainHash']
+    const formatVersion = entry['formatVersion']
+    const checkedAt = entry['checkedAt']
+    const localRevision = typeof entry['localRevision'] === 'string' && entry['localRevision'] !== ''
+      ? entry['localRevision'] : undefined
+    if (!Number.isSafeInteger(localEventCount) || (localEventCount as number) < 0
+      || !Number.isSafeInteger(localLastSeq) || (localLastSeq as number) < -1
+      || !Number.isSafeInteger(remoteLastSeq) || (remoteLastSeq as number) < -1
+      || typeof remoteHeadChainHash !== 'string'
+      || (remoteHeadChainHash !== '' && !/^[0-9a-f]{64}$/u.test(remoteHeadChainHash))
+      || !Number.isSafeInteger(formatVersion) || (formatVersion as number) < 1
+      || !Number.isSafeInteger(checkedAt)) continue
+    receipts[sessionId] = {
+      sessionId,
+      ...localRevision === undefined ? {} : { localRevision },
+      localEventCount: localEventCount as number,
+      localLastSeq: localLastSeq as number,
+      remoteLastSeq: remoteLastSeq as number,
+      remoteHeadChainHash,
+      formatVersion: formatVersion as number,
+      checkedAt: checkedAt as number,
+    }
+  }
+  return Object.keys(receipts).length === 0 ? undefined : receipts
 }
 
 /**

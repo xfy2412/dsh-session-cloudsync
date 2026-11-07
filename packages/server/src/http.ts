@@ -411,6 +411,9 @@ function parseAppend(body: Record<string, unknown>): {
   tailOpen?: boolean
   safeThroughSeq?: number
   workspaceKey?: string
+  parentSession?: string
+  origin?: string
+  delegationDepth?: number
 } {
   if (!Number.isSafeInteger(body.baseIndex)) throw new SyncError('bad-request', 'baseIndex 必须是整数')
   const baseChainHash = body.baseChainHash
@@ -429,6 +432,16 @@ function parseAppend(body: Record<string, unknown>): {
   if (body.workspaceKey !== undefined && (typeof body.workspaceKey !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/u.test(body.workspaceKey))) {
     throw new SyncError('bad-request', 'workspaceKey 非法')
   }
+  if (body.parentSession !== undefined && (typeof body.parentSession !== 'string' || body.parentSession === '')) {
+    throw new SyncError('bad-request', 'parentSession 必须是非空字符串')
+  }
+  if (body.origin !== undefined && (typeof body.origin !== 'string' || body.origin === '')) {
+    throw new SyncError('bad-request', 'origin 必须是非空字符串')
+  }
+  if (body.delegationDepth !== undefined
+    && (!Number.isSafeInteger(body.delegationDepth) || Number(body.delegationDepth) < 0)) {
+    throw new SyncError('bad-request', 'delegationDepth 必须是非负整数')
+  }
   return {
     baseIndex: Number(body.baseIndex),
     baseChainHash: baseChainHash as string | null,
@@ -438,6 +451,9 @@ function parseAppend(body: Record<string, unknown>): {
     ...body.tailOpen === undefined ? {} : { tailOpen: body.tailOpen },
     ...body.safeThroughSeq === undefined ? {} : { safeThroughSeq: Number(body.safeThroughSeq) },
     ...body.workspaceKey === undefined ? {} : { workspaceKey: body.workspaceKey },
+    ...body.parentSession === undefined ? {} : { parentSession: body.parentSession },
+    ...body.origin === undefined ? {} : { origin: body.origin },
+    ...body.delegationDepth === undefined ? {} : { delegationDepth: Number(body.delegationDepth) },
   }
 }
 

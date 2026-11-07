@@ -109,6 +109,9 @@ export interface ManifestInput {
   readonly tailOpen?: boolean
   readonly safeThroughSeq?: number
   readonly workspaceKey?: string
+  readonly parentSession?: string
+  readonly origin?: string
+  readonly delegationDepth?: number
 }
 
 /**
@@ -133,6 +136,9 @@ export function buildManifest(input: ManifestInput): SessionManifest {
     ...input.workspaceKey === undefined ? {} : { workspaceKey: input.workspaceKey },
     ...input.tailOpen === undefined ? {} : { tailOpen: input.tailOpen },
     ...input.safeThroughSeq === undefined ? {} : { safeThroughSeq: input.safeThroughSeq },
+    ...input.parentSession === undefined ? {} : { parentSession: input.parentSession },
+    ...input.origin === undefined ? {} : { origin: input.origin },
+    ...input.delegationDepth === undefined ? {} : { delegationDepth: input.delegationDepth },
     frames: input.frames,
     updatedAt: input.updatedAt,
   }
@@ -165,6 +171,16 @@ export function assertManifest(manifest: SessionManifest): void {
     throw new Error('manifest 的 workspaceKey 非法')
   }
   if (manifest.tailOpen !== undefined && typeof manifest.tailOpen !== 'boolean') throw new Error('manifest 的 tailOpen 非法')
+  if (manifest.parentSession !== undefined && (typeof manifest.parentSession !== 'string' || manifest.parentSession === '')) {
+    throw new Error('manifest 的 parentSession 非法')
+  }
+  if (manifest.origin !== undefined && (typeof manifest.origin !== 'string' || manifest.origin === '')) {
+    throw new Error('manifest 的 origin 非法')
+  }
+  if (manifest.delegationDepth !== undefined
+    && (!Number.isSafeInteger(manifest.delegationDepth) || manifest.delegationDepth < 0)) {
+    throw new Error('manifest 的 delegationDepth 非法')
+  }
 }
 
 /** 把值规整成键序稳定的 JSON 形状。 */

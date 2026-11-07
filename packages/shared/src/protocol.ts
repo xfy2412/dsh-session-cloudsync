@@ -47,6 +47,12 @@ export interface SessionManifest {
   readonly tailOpen?: boolean
   /** 最后一个闭合事件的 seq；读者只 apply 到这个位置，缺省等于 lastSeq。 */
   readonly safeThroughSeq?: number
+  /** 子代理的父会话 id；根会话缺省。 */
+  readonly parentSession?: string
+  /** 会话来源；当前只有 `subagent`。 */
+  readonly origin?: string
+  /** 委托深度；根会话为 0。 */
+  readonly delegationDepth?: number
   readonly frames: readonly import('./sealed-frame.ts').SealedFrameRef[]
   readonly updatedAt: number
   /** 软删除时存在。 */

@@ -106,6 +106,53 @@ export interface SyncSessionStatus {
   readonly updatedAt: number
 }
 
+/** 一个同步任务的方向。 */
+export type SyncTaskDirection = 'push' | 'pull'
+
+/** 一个同步任务的状态。 */
+export type SyncTaskState = 'checking' | 'queued' | 'running' | 'deferred' | 'failed' | 'blocked' | 'done'
+
+/** 气泡里的一条本轮任务；不再表示完整会话列表。 */
+export interface SyncTaskView {
+  /** 稳定 ordinal，只用于展示排序。 */
+  readonly ordinal: number
+  /** 会话 id。 */
+  readonly sessionId: string
+  /** 所属根会话 id。 */
+  readonly rootId: string
+  /** 子代理的父会话 id。 */
+  readonly parentSession?: string
+  /** 父链深度。 */
+  readonly depth: number
+  /** 本轮唯一方向。 */
+  readonly direction: SyncTaskDirection
+  /** 任务状态。 */
+  readonly state: SyncTaskState
+  /** 当前细分阶段（加密、写入、落盘等）。 */
+  readonly stage?: SyncStage
+  /** 为什么需要这一方向。 */
+  readonly reason: 'local-ahead' | 'remote-ahead' | 'local-missing' | 'remote-missing' | 'checking' | 'blocked'
+  /** 计划处理的事件数。 */
+  readonly totalEvents: number
+  /** 已完成的事件数。 */
+  readonly doneEvents: number
+  /** 0–1 的单个方向进度。 */
+  readonly progress: number
+  readonly totalBytes?: number
+  readonly doneBytes?: number
+  readonly error?: string
+}
+
+/** 手动同步的校验进度。 */
+export interface SyncScanView {
+  /** 已检查会话数。 */
+  readonly checked: number
+  /** 需要检查的会话总数。 */
+  readonly total: number
+  /** 当前正在校验的会话。 */
+  readonly currentSessionId?: string
+}
+
 /** 当前一轮同步的元数据。 */
 export interface SyncRunView {
   /** 递增的 run id。 */
@@ -114,6 +161,14 @@ export interface SyncRunView {
   readonly trigger: 'startup' | 'auto' | 'manual'
   /** 当前状态。 */
   readonly state: 'idle' | 'running' | 'finished'
+  /** 当前 run 的模式。 */
+  readonly mode?: 'auto' | 'manual'
+  /** 当前 run 的阶段。 */
+  readonly phase?: 'scanning' | 'transferring'
+  /** 手动同步的校验进度。 */
+  readonly scan?: SyncScanView
+  /** 本轮任务表。 */
+  readonly tasks?: readonly SyncTaskView[]
   /** 开始时间。 */
   readonly startedAt: number | null
   /** 结束时间。 */

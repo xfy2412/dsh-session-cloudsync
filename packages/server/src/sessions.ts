@@ -52,6 +52,12 @@ export interface AppendInput {
   readonly safeThroughSeq?: number
   /** 根/worktree 的逻辑工作区 key；子代理继承。 */
   readonly workspaceKey?: string
+  /** 子代理的父会话 id；根会话缺省。 */
+  readonly parentSession?: string
+  /** 会话来源；当前只有 `subagent`。 */
+  readonly origin?: string
+  /** 委托深度；根会话为 0。 */
+  readonly delegationDepth?: number
   /** v2 客户端的幂等键；v1 不设置。 */
   readonly idempotencyKey?: string
 }
@@ -139,6 +145,9 @@ function manifestOf(
   tailOpen?: boolean,
   safeThroughSeq?: number,
   workspaceKey?: string,
+  parentSession?: string,
+  origin?: string,
+  delegationDepth?: number,
 ): {
   manifest: SessionManifest
   digest: string
@@ -154,6 +163,9 @@ function manifestOf(
     ...tailOpen === undefined ? {} : { tailOpen },
     ...safeThroughSeq === undefined ? {} : { safeThroughSeq },
     ...workspaceKey === undefined ? {} : { workspaceKey },
+    ...parentSession === undefined ? {} : { parentSession },
+    ...origin === undefined ? {} : { origin },
+    ...delegationDepth === undefined ? {} : { delegationDepth },
   })
   return { manifest, digest: manifestDigest(manifest), headChainHash: frames[frames.length - 1]!.chainHash }
 }
@@ -201,6 +213,9 @@ function appendRequestHash(input: AppendInput): string {
     tailOpen: input.tailOpen ?? null,
     safeThroughSeq: input.safeThroughSeq ?? null,
     workspaceKey: input.workspaceKey ?? null,
+    parentSession: input.parentSession ?? null,
+    origin: input.origin ?? null,
+    delegationDepth: input.delegationDepth ?? null,
   }))
 }
 
@@ -234,6 +249,9 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
     let formatVersion = input.formatVersion
     let createdAt = input.createdAt
     let workspaceKey = input.workspaceKey
+    let parentSession = input.parentSession
+    let origin = input.origin
+    let delegationDepth = input.delegationDepth
 
     if (row !== undefined && row.deleted_at !== null && row.created_at === input.createdAt) {
       throw new SyncError('gone', `会话 ${input.sessionId} 的这个生命周期已被删除`)
@@ -258,6 +276,20 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
       if (workspaceKey !== undefined && existing.workspaceKey === undefined) {
         throw new SyncError('conflict', '已有会话缺少 workspaceKey，不能在后续 append 补写')
       }
+      // 父链元数据同样一经写入不可变；后续 append 不携带时沿用已有值。
+      if (parentSession !== undefined && existing.parentSession !== undefined && parentSession !== existing.parentSession) {
+        throw new SyncError('conflict', 'append 的 parentSession 与已存 manifest 不一致')
+      }
+      if (origin !== undefined && existing.origin !== undefined && origin !== existing.origin) {
+        throw new SyncError('conflict', 'append 的 origin 与已存 manifest 不一致')
+      }
+      if (delegationDepth !== undefined && existing.delegationDepth !== undefined
+        && delegationDepth !== existing.delegationDepth) {
+        throw new SyncError('conflict', 'append 的 delegationDepth 与已存 manifest 不一致')
+      }
+      if (parentSession === undefined) parentSession = existing.parentSession
+      if (origin === undefined) origin = existing.origin
+      if (delegationDepth === undefined) delegationDepth = existing.delegationDepth
       const start = input.baseIndex + 1
       if (start < 0 || start > existing.frames.length) throw new SyncError('diverged', `baseIndex=${input.baseIndex} 超出链长 ${existing.frames.length}`)
       if (start < existing.frames.length - 1) throw new SyncError('diverged', '只能追加或替换尾帧')
@@ -286,6 +318,9 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
       input.tailOpen,
       input.safeThroughSeq,
       workspaceKey,
+      parentSession,
+      origin,
+      delegationDepth,
     )
     const revision = bumpRevision(db)
     const stats = statsOf(combined)
@@ -405,6 +440,12 @@ export interface V2SessionSummary {
   /** 已闭合到的事件序号；没有显式值时等于 lastSeq。 */
   readonly safeThroughSeq: number
   readonly tailOpen: boolean
+  /** 子代理的父会话 id；根会话为 null。 */
+  readonly parentSession: string | null
+  /** 会话来源；根会话为 null。 */
+  readonly origin: string | null
+  /** 委托深度；未知为 null。 */
+  readonly delegationDepth: number | null
   readonly updatedAt: number
   readonly deletedAt: number | null
   /** 整个会话的压缩状态。 */
@@ -429,6 +470,9 @@ interface V2SummaryRow {
   readonly workspace_key: string | null
   readonly tail_open: number | null
   readonly safe_through_seq: number | null
+  readonly parent_session: string | null
+  readonly origin: string | null
+  readonly delegation_depth: number | null
 }
 
 const V2_SUMMARY_SELECT = `s.session_id, s.created_at, s.format_version, s.last_seq, s.frame_count,
@@ -436,7 +480,10 @@ const V2_SUMMARY_SELECT = `s.session_id, s.created_at, s.format_version, s.last_
   s.compression, s.stored_bytes,
   json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key,
   json_extract(s.manifest_json, '$.tailOpen') AS tail_open,
-  json_extract(s.manifest_json, '$.safeThroughSeq') AS safe_through_seq`
+  json_extract(s.manifest_json, '$.safeThroughSeq') AS safe_through_seq,
+  json_extract(s.manifest_json, '$.parentSession') AS parent_session,
+  json_extract(s.manifest_json, '$.origin') AS origin,
+  json_extract(s.manifest_json, '$.delegationDepth') AS delegation_depth`
 
 /**
  * 把数据库行映射成 v2 摘要。
@@ -459,6 +506,11 @@ function mapV2Summary(row: V2SummaryRow): V2SessionSummary {
     workspaceKey: typeof row.workspace_key === 'string' && row.workspace_key !== '' ? row.workspace_key : null,
     safeThroughSeq: safe,
     tailOpen: Number(row.tail_open) === 1,
+    parentSession: typeof row.parent_session === 'string' && row.parent_session !== '' ? row.parent_session : null,
+    origin: typeof row.origin === 'string' && row.origin !== '' ? row.origin : null,
+    delegationDepth: typeof row.delegation_depth === 'number' && Number.isSafeInteger(row.delegation_depth)
+      ? row.delegation_depth
+      : null,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
     compression: compressionOf(row.compression),

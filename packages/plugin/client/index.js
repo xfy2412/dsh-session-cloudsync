@@ -223,6 +223,9 @@ window.__ModuleLoader__.load({
       '.dssync-seg .push,.dssync-seg .pull{position:absolute;width:0;height:4px;transition:width .2s linear,background-color .18s}',
       '.dssync-seg .push{left:0;bottom:0;background:#f0b64a}',
       '.dssync-seg .pull{right:0;top:0;background:#5b9cff;opacity:.92}',
+      '.dssync-seg .task{position:absolute;top:2px;bottom:2px;height:4px;background:#5b9cff;opacity:.92;transition:width .2s linear}',
+      '.dssync-seg .task.push{left:0;background:#f0b64a}',
+      '.dssync-seg .task.pull{right:0;background:#5b9cff}',
       '.dssync-seg.run .push{background:linear-gradient(90deg,#f0b64a,#ffd27a,#f0b64a);background-size:200% 100%;animation:dssync-flow 1.2s linear infinite}',
       '.dssync-seg.push-done .push{background:#22c55e;animation:none}',
       '.dssync-seg.done .push,.dssync-seg.done .pull{background:#22c55e}',
@@ -859,6 +862,10 @@ window.__ModuleLoader__.load({
     function statusDot(status) {
       if (status === null) return 'warn'
       var sessions = Array.isArray(status.sessions) ? status.sessions : []
+      var tasks = statusTasks(status) || []
+      if (tasks.some(function (task) { return task.state === 'running' || task.state === 'checking' })) return 'syncing'
+      if (tasks.some(function (task) { return task.state === 'failed' || task.state === 'blocked' })) return 'bad'
+      if (tasks.some(function (task) { return task.state === 'deferred' })) return 'warn'
       if (sessions.some(function (session) { return isActiveStage(sessionStage(session)) })) return 'syncing'
       if (sessions.some(function (session) { return isWaitingStage(sessionStage(session)) })) return 'waiting'
       if (status.running) return 'syncing'
@@ -938,10 +945,27 @@ window.__ModuleLoader__.load({
     }
 
     /** 一个会话当前的同步保护状态：正在应用 / 开放尾 / 待 cwd 决策 / 已分叉。 */
+    function statusTasks(status) {
+      if (!status || !status.run) return null
+      if (Array.isArray(status.run.tasks)) return status.run.tasks
+      // 任务完成后 controller 会移除空任务表，但 run.mode 仍标记本轮是新任务模式。
+      if (status.run.mode === 'auto' || status.run.mode === 'manual') return []
+      return null
+    }
+
+    function taskOf(status, sessionId) {
+      var tasks = statusTasks(status)
+      if (tasks === null) return null
+      for (var index = 0; index < tasks.length; index += 1) {
+        if (tasks[index].sessionId === sessionId) return tasks[index]
+      }
+      return null
+    }
+
     function sessionState(status, sessionId) {
       if (status === null) return {
         pending: false, tail: false, lag: false, cwd: false, blocked: false,
-        blockedReason: '', unmapped: false, live: false, compression: undefined,
+        blockedReason: '', unmapped: false, live: false, compression: undefined, task: null,
       }
       var session = findSession(status, sessionId)
       var pending = status.pending !== null && status.pending !== undefined && status.pending.sessionId === sessionId
@@ -955,6 +979,7 @@ window.__ModuleLoader__.load({
         unmapped: session ? session.unmapped !== undefined : false,
         live: session ? session.live === true : false,
         compression: session ? session.compression : undefined,
+        task: taskOf(status, sessionId),
       }
     }
 
@@ -965,9 +990,12 @@ window.__ModuleLoader__.load({
     function sessionBlockReason(status, sessionId, row) {
       var state = sessionState(status, sessionId)
       if (row === true && state.live) return null
-      var leaseReason = deviceLeaseBlockReason(status)
-      if (leaseReason !== null) return leaseReason
+      // 全局租约只表示“本机暂不上传”，不是会话级写锁；打开/继续本地
+      // 会话必须照常允许，等拿到租约后再补推即可。
       if (state.blocked) return '这个会话的本地与远端历史已分叉，已阻止继续写入；请先人工处理'
+      if (state.task && state.task.state === 'blocked') {
+        return state.task.error || '这个会话的本地与远端历史已分叉，已阻止继续写入；请先人工处理'
+      }
       if (state.unmapped) return '这个远端会话的工作区尚未映射到本机，请先在设置里建立一次性映射'
       if (state.pending) return '正在应用云端写入，暂不能继续这个会话'
       if (state.tail) return '这个会话有未闭合的同步尾巴，先完成当前轮次再打开'
@@ -2336,6 +2364,8 @@ window.__ModuleLoader__.load({
           hideTimer.current = null
         }
         if (!was || activeRef.current || !visible || pinned) return
+        // 完成结果保留到下一轮任务进来；不要 3 秒后把结果一起隐藏。
+        if (status && status.run && Array.isArray(status.run.tasks) && status.run.tasks.length > 0) return
         if (status && status.lastError !== null && status.lastError !== undefined) return
         hideTimer.current = setTimeout(function () {
           hideTimer.current = null
@@ -2378,7 +2408,9 @@ window.__ModuleLoader__.load({
       var followState = useState(true)
       var follow = followState[0]
       var setFollow = followState[1]
-      var focusSessions = status && Array.isArray(status.sessions) ? status.sessions : []
+      var taskList = statusTasks(status)
+      var useTasks = taskList !== null
+      var focusSessions = useTasks ? [] : (status && Array.isArray(status.sessions) ? status.sessions : [])
       var currentFocus = focusSessions.find(function (session) {
         return session.sessionId === focusRef.current && sessionOngoing(session)
       })
@@ -2417,13 +2449,30 @@ window.__ModuleLoader__.load({
 
       if (setup === null || !setup.configured) return h(Toast, { model: model })
 
-      var sessions = status && Array.isArray(status.sessions) ? status.sessions.slice() : []
-      var total = sessions.length
-      var done = sessions.filter(function (session) { return session.phase === 'done' }).length
-      var planned = sessions.filter(function (session) { return session.phase === 'planned' }).length
-      var deferred = sessions.filter(function (session) { return session.phase === 'deferred' }).length
-      var blockedCount = sessions.filter(function (session) { return session.phase === 'blocked' }).length
-      var failed = sessions.some(function (session) { return session.phase === 'failed' })
+      var sessions = useTasks ? [] : (status && Array.isArray(status.sessions) ? status.sessions.slice() : [])
+      var scan = useTasks && status.run ? status.run.scan : null
+      var total = useTasks
+        ? (scan && typeof scan.total === 'number' ? scan.total : taskList.length)
+        : sessions.length
+      var taskDone = useTasks
+        ? taskList.filter(function (task) { return task.state === 'done' }).length
+        : 0
+      var pendingTasks = useTasks
+        ? taskList.filter(function (task) { return task.state !== 'done' }).length
+        : 0
+      var done = useTasks
+        ? Math.max(0, total - taskList.length) + taskDone
+        : sessions.filter(function (session) { return session.phase === 'done' }).length
+      var planned = useTasks ? 0 : sessions.filter(function (session) { return session.phase === 'planned' }).length
+      var deferred = useTasks
+        ? taskList.filter(function (task) { return task.state === 'deferred' }).length
+        : sessions.filter(function (session) { return session.phase === 'deferred' }).length
+      var blockedCount = useTasks
+        ? taskList.filter(function (task) { return task.state === 'blocked' }).length
+        : sessions.filter(function (session) { return session.phase === 'blocked' }).length
+      var failed = useTasks
+        ? taskList.some(function (task) { return task.state === 'failed' })
+        : sessions.some(function (session) { return session.phase === 'failed' })
       var running = status && status.running
       var activeStage = sessions.map(sessionStage).find(isActiveStage)
       var waitingStage = sessions.map(sessionStage).find(isWaitingStage)
@@ -2450,6 +2499,26 @@ window.__ModuleLoader__.load({
                   : planned > 0 ? planned + ' 个会话待开始'
                     : total === 0 ? '还没有同步记录'
                       : done + '/' + total + ' 个会话 · ' + (status.lastSuccess ? formatAgo(status.lastSuccess) : '尚未成功')
+      if (useTasks) {
+        var phase = status.run ? status.run.phase : undefined
+        var scanChecked = scan && typeof scan.checked === 'number' ? scan.checked : done
+        title = failed ? '同步失败'
+          : blockedCount > 0 ? '需要处理'
+            : running ? (phase === 'scanning' ? '正在校验' : '正在同步')
+              : deferred > 0 ? '部分待处理'
+                : pendingTasks > 0 ? '等待同步' : '同步完成'
+        subtitle = failed ? '有任务未完成，已暂停'
+          : blockedCount > 0 ? blockedCount + ' 个会话历史分叉，已阻止继续写入'
+            : running
+              ? (phase === 'scanning'
+                ? '校验 ' + scanChecked + '/' + total
+                  + (scan && scan.currentSessionId ? ' · ' + sessionLabel(scan.currentSessionId) : '')
+                : taskList.length + ' 个任务 · 端到端加密')
+              : deferred > 0 ? deferred + ' 个任务等待处理'
+                : pendingTasks > 0 ? '等待开始'
+                  : taskList.length > 0 ? '上次任务完成 · ' + taskDone + ' 个'
+                    : status.lastSuccess ? '上次成功 ' + formatAgo(status.lastSuccess) : '没有待同步任务'
+      }
       var dot = statusDot(status)
       function lanePercent(session, direction) {
         if (session.phase === 'done' || session.phase === 'skipped') return 100
@@ -2467,24 +2536,46 @@ window.__ModuleLoader__.load({
         laneHighRef.current[key] = pct
         return pct
       }
-      var segments = sessions.map(function (session) {
-        var bad = session.phase === 'failed' || session.phase === 'blocked'
-        var active = session.phase === 'running'
-        var terminal = session.phase === 'done' || session.phase === 'skipped'
-        var push = lanePercent(session, session.push)
-        var pull = lanePercent(session, session.pull)
-        var pushDone = push >= 100
-        var className = 'dssync-seg'
-          + (bad ? ' bad' : terminal ? ' done' : active ? ' run' : '')
-          + (pushDone && !terminal ? ' push-done' : '')
-        return h('span', {
-          className: className,
-          key: session.sessionId,
-          title: sessionLabel(session.sessionId) + ' · 上传 ' + push + '% · 拉取 ' + pull + '%',
-        },
-        h('i', { className: 'push', style: { width: push + '%' } }),
-        h('i', { className: 'pull', style: { width: pull + '%' } }))
-      })
+      var segments = useTasks
+        ? taskList.map(function (task) {
+          var bad = task.state === 'failed' || task.state === 'blocked'
+          var active = task.state === 'running' || task.state === 'checking'
+          var terminal = task.state === 'done'
+          var pct = terminal ? 100
+            : task.state === 'checking' ? 0
+              : task.totalEvents > 0 ? Math.max(0, Math.min(100, Math.round(task.doneEvents / task.totalEvents * 100)))
+                : task.progress > 0 ? Math.round(task.progress * 100) : 0
+          var className = 'dssync-seg' + (bad ? ' bad' : terminal ? ' done' : active ? ' run' : '')
+          return h('span', {
+            className: className,
+            key: task.sessionId,
+            title: sessionLabel(task.sessionId) + ' · ' + (task.direction === 'push' ? '上传 ' + pct + '%' : '下载 ' + pct + '%'),
+          },
+            h('i', {
+              className: 'task ' + task.direction,
+              style: task.direction === 'push'
+                ? { left: '0', width: pct + '%' }
+                : { right: '0', width: pct + '%' },
+            }))
+        })
+        : sessions.map(function (session) {
+          var bad = session.phase === 'failed' || session.phase === 'blocked'
+          var active = session.phase === 'running'
+          var terminal = session.phase === 'done' || session.phase === 'skipped'
+          var push = lanePercent(session, session.push)
+          var pull = lanePercent(session, session.pull)
+          var pushDone = push >= 100
+          var className = 'dssync-seg'
+            + (bad ? ' bad' : terminal ? ' done' : active ? ' run' : '')
+            + (pushDone && !terminal ? ' push-done' : '')
+          return h('span', {
+            className: className,
+            key: session.sessionId,
+            title: sessionLabel(session.sessionId) + ' · 上传 ' + push + '% · 拉取 ' + pull + '%',
+          },
+          h('i', { className: 'push', style: { width: push + '%' } }),
+          h('i', { className: 'pull', style: { width: pull + '%' } }))
+        })
       if (segments.length === 0) {
         segments = [h('span', { className: 'dssync-seg' + (running ? ' run' : ''), key: 'empty' },
           h('i', { className: 'push', style: { width: running ? '35%' : '0%' } }),
@@ -2503,6 +2594,8 @@ window.__ModuleLoader__.load({
         if (!visible || !pinned) return
         // 同步期间不自动收起；阶段/列表可能正被查看。
         if (activeRef.current) return
+        // 任务结果保留到下一轮，不要在失焦时收走。
+        if (status && status.run && Array.isArray(status.run.tasks) && status.run.tasks.length > 0) return
         clearBlur()
         blurTimer.current = setTimeout(function () {
           blurTimer.current = null
@@ -2751,6 +2844,39 @@ window.__ModuleLoader__.load({
           !isBlocked && !isResolved && session.cwdPending ? cwdActions(session.sessionId) : null)
       })
 
+      if (useTasks) {
+        rows = taskList.map(function (task) {
+          var totalEvents = task.totalEvents || 0
+          var doneEvents = task.doneEvents || 0
+          var stageText = stageLabel(task.stage)
+          var tag = task.state === 'checking' ? '校验中'
+            : task.state === 'done' ? '完成'
+              : task.state === 'blocked' ? '分叉'
+                : task.state === 'failed' ? '失败'
+                  : task.state === 'deferred' ? '等待'
+                    : task.state === 'running'
+                      ? (stageText || (task.direction === 'push' ? '上传中' : '下载中'))
+                      : task.direction === 'push' ? '待上传' : '待拉取'
+          var counts = totalEvents > 0 && task.state !== 'checking'
+            ? [(task.direction === 'push' ? '↑ ' : '↓ ') + doneEvents + '/' + totalEvents]
+            : []
+          var stateClass = task.state === 'failed' || task.state === 'blocked' ? 'bad'
+            : task.state === 'done' ? 'ok'
+              : task.state === 'running' || task.state === 'checking' ? 'run'
+                : task.state === 'deferred' ? 'waiting' : ''
+          return h('div', {
+            className: 'dssync-rowline' + (scan && scan.currentSessionId === task.sessionId ? ' focus' : ''),
+            key: task.sessionId,
+            'data-session-id': task.sessionId,
+          },
+            h('span', { className: 'dssync-st ' + stateClass }),
+            h('span', { className: 'name' }, sessionLabel(task.sessionId)),
+            counts.length > 0 ? h('span', { className: 'dssync-events' }, counts.join(' · ')) : null,
+            h('span', { className: 'tag' }, tag),
+            task.error ? h('span', { className: 'dssync-warn', title: task.error }, '!') : null)
+        })
+      }
+
       var head = h('div', {
         className: 'dssync-bubble-head', role: 'button', tabIndex: 0,
         'aria-expanded': open, 'aria-label': open ? '收起同步会话' : '展开同步会话',
@@ -2784,7 +2910,9 @@ window.__ModuleLoader__.load({
             onTouchMove: pauseFollowOnUserScroll,
           }, rows.length > 0
             ? rows
-            : h('div', { className: 'dssync-note' }, '暂无会话记录')),
+            : h('div', { className: 'dssync-note' }, useTasks
+              ? (running ? '正在扫描…' : '本轮没有需要同步的会话')
+              : '暂无会话记录')),
           leaseBlocked ? h('div', { className: 'dssync-error' }, lease.state === 'foreign'
             ? '另一台设备持有全局同步锁；本机只拉取，不上传'
             : '全局同步租约丢失；本机暂停上传并重试') : null,
@@ -2852,6 +2980,20 @@ window.__ModuleLoader__.load({
       var sessionId = props.sessionId ? String(props.sessionId) : ''
       if (sessionId === '') return null
       var sync = sessionState(state.status, sessionId)
+      var task = sync.task
+      if (task !== null && task !== undefined && task.state === 'done') return null
+      if (task !== null && task !== undefined) {
+        var taskLabel = task.state === 'checking' ? '正在校验'
+          : task.state === 'failed' ? '同步失败'
+            : task.state === 'blocked' ? '历史分叉，已阻止'
+              : task.state === 'deferred' ? '同步等待中'
+                : task.state === 'done' ? '已完成'
+                  : stageLabel(task.stage) || (task.direction === 'push' ? '正在上传' : '正在下载')
+        return h('span', {
+          className: 'dssync-rowmark' + (task.state === 'blocked' ? ' tail' : ''),
+          title: taskLabel, 'aria-label': taskLabel, role: 'img',
+        }, task.state === 'blocked' ? '!' : task.direction === 'push' ? '↑' : '↓')
+      }
       if (!sync.pending && !sync.tail && !sync.lag) return null
       var label = sync.pending ? '正在应用云端写入'
         : sync.tail ? '有未闭合的同步尾巴'
@@ -2869,9 +3011,13 @@ window.__ModuleLoader__.load({
       var reason = sessionBlockReason(state.status, sessionId)
       var sync = sessionState(state.status, sessionId)
       var compressed = sync.compression === 'zstd' || sync.compression === 'mixed'
-      if (reason === null && !compressed) return null
+      var taskError = sync.task && sync.task.error ? sync.task.error : null
+      var leaseNote = deviceLeaseBlockReason(state.status)
+      if (reason === null && !compressed && taskError === null && leaseNote === null) return null
       return h('div', { className: 'dssync-hovernote' },
         reason === null ? null : h('div', null, '会话同步：', reason),
+        taskError === null ? null : h('div', null, '同步任务：', taskError),
+        leaseNote === null ? null : h('div', null, leaseNote),
         compressed ? h('div', null, '封帧压缩：' + (sync.compression === 'mixed' ? 'zstd 混合' : 'zstd')) : null)
     }
 

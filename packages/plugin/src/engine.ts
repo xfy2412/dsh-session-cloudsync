@@ -440,6 +440,9 @@ interface RemoteManifest {
   readonly workspaceKey?: string
   readonly tailOpen?: boolean
   readonly safeThroughSeq?: number
+  readonly parentSession?: string
+  readonly origin?: string
+  readonly delegationDepth?: number
   readonly frames: readonly SealedFrameRef[]
   readonly batches?: readonly SealedFrameRef[]
   readonly batchCount?: number
@@ -754,6 +757,9 @@ async function appendFrames(
     readonly workspaceKey?: string
     readonly tailOpen?: boolean
     readonly safeThroughSeq?: number
+    readonly parentSession?: string
+    readonly origin?: string
+    readonly delegationDepth?: number
   },
 ): Promise<void> {
   const { status, body } = await requestJson(
@@ -1244,6 +1250,9 @@ async function syncSession<Session>(
     formatVersion: meta.formatVersion,
     frames,
     ...workspaceKey === undefined ? {} : { workspaceKey },
+    ...meta.parentSession === undefined ? {} : { parentSession: meta.parentSession },
+    ...meta.origin === undefined ? {} : { origin: meta.origin },
+    ...meta.delegationDepth === undefined ? {} : { delegationDepth: meta.delegationDepth },
     tailOpen,
     safeThroughSeq,
   })
@@ -1342,6 +1351,148 @@ export async function syncOnce<Session>(deps: SyncDeps<Session>): Promise<SyncRe
   }
 
   return { configured: true, sessions }
+}
+
+/**
+ * 执行一个单向 push 任务。
+ *
+ * 与 `syncOnce` 不同，这里只处理调用方明确选中的会话；不会重新枚举或夹带
+ * pull。调用方负责在任务完成/失败后更新 receipt 和任务表。
+ * @param deps - 引擎依赖。
+ * @param snapshot - 本地会话快照。
+ * @param isRoot - 是否为根会话。
+ * @returns 推送报告。
+ */
+export async function pushSessionTask<Session>(
+  deps: SyncDeps<Session>,
+  snapshot: SnapshotLike,
+  isRoot: boolean,
+): Promise<SessionSyncReport> {
+  const config = deps.config
+  if (config.serverUrl.trim() === '' || config.token.trim() === '' || config.passphrase === '') {
+    throw new Error('serverUrl / token / passphrase 未配置全')
+  }
+  const base = normalizeBase(config.serverUrl)
+  if (base === '') throw new Error('serverUrl 非法')
+  const master = await deriveMasterKeyCached(config.passphrase, resolveSalt(config, base))
+  const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
+  const sessionId = String(snapshot.header.id)
+  notifyProgress(deps, { sessionId, direction: 'push', phase: 'start', stage: 'reading', progress: 0 })
+  const sessionKey = sessionKeyOf(master, sessionId)
+  const report = await syncSession(deps, fetchImpl, base, sessionKey, snapshot, isRoot)
+  notifyProgress(deps, {
+    sessionId,
+    direction: 'push',
+    phase: report.status === 'error' ? 'error' : 'done',
+    stage: report.status === 'error' ? 'failed' : 'done',
+    progress: report.status === 'error' ? 0 : 1,
+    ...report.totalEvents === undefined ? {} : { totalEvents: report.totalEvents },
+    ...report.doneEvents === undefined ? {} : { doneEvents: report.doneEvents },
+    ...report.bytes === undefined ? {} : { bytes: report.bytes, doneBytes: report.bytes },
+    ...report.error === undefined ? {} : { error: report.error },
+  })
+  return report
+}
+
+/** 服务端摘要没有树字段时，从加密会话头补读的最小元数据。 */
+export interface RemoteSessionMeta {
+  readonly sessionId: string
+  readonly formatVersion: number
+  readonly createdAt: number
+  readonly lastSeq: number
+  readonly headChainHash: string
+  readonly workspaceKey?: string
+  readonly safeThroughSeq?: number
+  readonly tailOpen?: boolean
+  readonly parentSession?: string
+  readonly origin?: string
+  readonly delegationDepth?: number
+  readonly deletedAt?: number
+}
+
+/**
+ * 从远端加密头读取树元数据，供尚未提供摘要树字段的旧服务端兼容使用。
+ * @param deps - 至少包含 config 与可选 fetch。
+ * @param sessionId - 远端会话 id。
+ * @returns 元数据；服务端缺少会话时抛出。
+ */
+export async function readRemoteSessionMeta<Session>(
+  deps: Pick<PullDeps<Session>, 'config' | 'fetch'>,
+  sessionId: string,
+): Promise<RemoteSessionMeta> {
+  const config = deps.config
+  if (config.serverUrl.trim() === '' || config.token.trim() === '' || config.passphrase === '') {
+    throw new Error('serverUrl / token / passphrase 未配置全')
+  }
+  const base = normalizeBase(config.serverUrl)
+  if (base === '') throw new Error('serverUrl 非法')
+  const master = await deriveMasterKeyCached(config.passphrase, resolveSalt(config, base))
+  const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
+  const loaded = await loadRemoteHeader(fetchImpl, base, config.token, master, sessionId)
+  const remote = loaded.remote
+  const head = remote.frames[remote.frames.length - 1]
+  if (head === undefined) throw new Error('远端 manifest 没有帧')
+  return {
+    sessionId,
+    formatVersion: remote.formatVersion,
+    createdAt: remote.createdAt,
+    lastSeq: remote.lastSeq,
+    headChainHash: head.chainHash,
+    ...remote.workspaceKey === undefined ? {} : { workspaceKey: remote.workspaceKey },
+    ...remote.safeThroughSeq === undefined ? {} : { safeThroughSeq: remote.safeThroughSeq },
+    ...remote.tailOpen === undefined ? {} : { tailOpen: remote.tailOpen },
+    ...loaded.meta?.parentSession === undefined ? {} : { parentSession: loaded.meta.parentSession },
+    ...loaded.meta?.origin === undefined ? {} : { origin: loaded.meta.origin },
+    ...loaded.meta?.delegationDepth === undefined ? {} : { delegationDepth: loaded.meta.delegationDepth },
+    ...remote.deletedAt === undefined ? {} : { deletedAt: remote.deletedAt },
+  }
+}
+
+/**
+ * 执行一个单向 pull 任务。
+ *
+ * 已存在的会话走 `attachMode=none`，不重复 attach/warm；只有本地不存在的新
+ * 会话才走 `pull-new` 并允许挂载与标题预热。
+ * @param deps - 拉取依赖。
+ * @param sessionId - 远端会话 id。
+ * @param localExists - 本机是否已有该会话。
+ * @returns 拉取报告。
+ */
+export async function pullSessionTask<Session>(
+  deps: PullDeps<Session>,
+  sessionId: string,
+  localExists: boolean,
+): Promise<PullSessionReport> {
+  const config = deps.config
+  if (config.serverUrl.trim() === '' || config.token.trim() === '' || config.passphrase === '') {
+    throw new Error('serverUrl / token / passphrase 未配置全')
+  }
+  if (deps.workspacePathOf === undefined) throw new Error('workspace 绑定未初始化')
+  const base = normalizeBase(config.serverUrl)
+  if (base === '') throw new Error('serverUrl 非法')
+  const master = await deriveMasterKeyCached(config.passphrase, resolveSalt(config, base))
+  const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
+  const loaded = await loadRemoteHeader(fetchImpl, base, config.token, master, sessionId)
+  if (loaded.remote.deletedAt !== undefined) return { sessionId, status: 'tombstone', totalEvents: 0 }
+  const workspaceKey = await resolveWorkspaceKey(loaded, fetchImpl, base, config.token, master, () => undefined)
+  const workspacePath = workspaceKey === undefined ? undefined : deps.workspacePathOf(workspaceKey)
+  if (workspacePath === undefined) {
+    return {
+      sessionId,
+      status: 'unmapped',
+      ...workspaceKey === undefined ? {} : { workspaceKey },
+    }
+  }
+  return pullSession(
+    deps,
+    fetchImpl,
+    base,
+    master,
+    sessionId,
+    workspacePath,
+    loaded,
+    localExists ? 'none' : 'new',
+  )
 }
 
 /** 连接测试结果。 */
@@ -1740,6 +1891,9 @@ async function appendPulledEvents(handle: WriteHandleLike, events: readonly Sync
   }
 }
 
+/** 新任务模式下的挂载策略：已存在会话不重复 attach/warm。 */
+type PullAttachMode = 'always' | 'new' | 'none'
+
 async function pullSession<Session>(
   deps: PullDeps<Session>,
   fetchImpl: typeof fetch,
@@ -1748,6 +1902,7 @@ async function pullSession<Session>(
   sessionId: string,
   workspacePath: string,
   preloaded?: LoadedRemote,
+  attachMode: PullAttachMode = 'always',
 ): Promise<PullSessionReport> {
   const loaded = preloaded ?? await loadRemoteHeader(fetchImpl, base, deps.config.token, master, sessionId)
   const remote = loaded.remote
@@ -1817,7 +1972,9 @@ async function pullSession<Session>(
       return { sessionId, status: 'local-ahead', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
     }
     if (observed.last === safe) {
-      if (live === undefined && !observed.cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
+      if (attachMode === 'always' && live === undefined && !observed.cwdNonPortable) {
+        await deps.attach?.(sessionId, workspacePath)
+      }
       return { sessionId, status: 'up-to-date', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
     }
     if (live !== undefined) {
@@ -1853,7 +2010,7 @@ async function pullSession<Session>(
         return { sessionId, status: 'local-ahead', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
       }
       if (observed.last === safe) {
-        if (!observed.cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
+        if (attachMode === 'always' && !observed.cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
         return { sessionId, status: 'up-to-date', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
       }
       const totalEvents = safe - observed.last
@@ -1905,7 +2062,7 @@ async function pullSession<Session>(
         ms: performance.now() - flushStarted,
       })
       const nextCwdNonPortable = cwdNonPortableOf([...observed.events, ...events], workspacePath)
-      if (!nextCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
+      if (attachMode === 'always' && !nextCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
       return {
         sessionId,
         status: safe < remote.lastSeq ? 'partial' : 'pulled',
@@ -1989,7 +2146,7 @@ async function pullSession<Session>(
     await handle.close()
   }
   const cwdNonPortable = cwdNonPortableOf(events, workspacePath)
-  if (!cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
+  if (attachMode !== 'none' && !cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
   if (!cwdNonPortable && meta.parentSession === undefined && meta.delegationDepth === 0) deps.onFirstPull?.(sessionId)
   return {
     sessionId,
@@ -2087,6 +2244,9 @@ export async function correctCwd<Session>(
       createdAt: handle.header.createdAt,
       formatVersion: handle.header.version,
       frames: [sealed.ref],
+      ...handle.header.parentSession === undefined ? {} : { parentSession: handle.header.parentSession },
+      ...handle.header.origin === undefined ? {} : { origin: handle.header.origin },
+      ...handle.header.delegationDepth === undefined ? {} : { delegationDepth: handle.header.delegationDepth },
       tailOpen: false,
       safeThroughSeq: correction.seq,
     })

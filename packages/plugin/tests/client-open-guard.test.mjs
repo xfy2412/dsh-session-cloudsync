@@ -133,24 +133,26 @@ test('客户端 openSession guard：拦冷危险会话、放行 live/安全/未�
   workspace.openSession('cold-safe')
   assert.equal(calls.length, 1)
 
-  // 全局租约 foreign：冷会话即使自身安全也不能打开；live 仍允许切换查看。
+  // 全局租约 foreign 只限制上传，不阻止打开安全会话或 live 会话。
   status.deviceLease = { state: 'foreign' }
   workspace.openSession('cold-safe')
-  assert.equal(calls.length, 1)
-  workspace.openSession('live-danger')
   assert.equal(calls.length, 2)
+  workspace.openSession('live-danger')
+  assert.equal(calls.length, 3)
+  workspace.openSession('cold-danger')
+  assert.equal(calls.length, 3)
   status.deviceLease = { state: 'held' }
   workspace.openSession('cold-safe')
-  assert.equal(calls.length, 3)
-  workspace.openSession({ parentSessionId: 'p', childSessionId: 'cold-danger' })
-  assert.equal(calls.length, 3)
-  workspace.openSession('unknown-session')
   assert.equal(calls.length, 4)
+  workspace.openSession({ parentSessionId: 'p', childSessionId: 'cold-danger' })
+  assert.equal(calls.length, 4)
+  workspace.openSession('unknown-session')
+  assert.equal(calls.length, 5)
 
   for (const dispose of disposers.reverse()) {
     if (typeof dispose === 'function') await dispose()
   }
   assert.equal(workspace.openSession, originalOpenSession)
   workspace.openSession('cold-danger')
-  assert.equal(calls.length, 5)
+  assert.equal(calls.length, 6)
 })

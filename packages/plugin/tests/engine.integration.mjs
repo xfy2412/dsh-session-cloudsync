@@ -9,6 +9,7 @@ import {
   classifySyncError,
   correctCwd,
   pullOnce,
+  pullSessionTask,
   syncOnce as syncOnceRaw,
   SyncHttpError,
   testConnection,
@@ -255,6 +256,30 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       assert.ok(mappedProgress.some((progress) => progress.direction === 'pull'
         && progress.totalEvents === 6 && progress.doneEvents === 6))
       assert.equal(mappedStore.sessions.get(sessionId).header.cwd, 'D:/mapped')
+
+      // 单向任务：本地不存在才 attach/warm；本地已存在只读判断，不重复挂载。
+      const newTaskStore = fakeStore(undefined)
+      const newTaskAttached = []
+      const newTask = await pullSessionTask({
+        persistence: newTaskStore,
+        sessions,
+        config,
+        workspacePathOf: () => 'D:/mapped',
+        attach: async (id) => { newTaskAttached.push(id) },
+      }, sessionId, false)
+      assert.equal(newTask.status, 'pulled')
+      assert.deepEqual(newTaskAttached, [sessionId])
+
+      const existingAttached = []
+      const existingTask = await pullSessionTask({
+        persistence: mappedStore,
+        sessions,
+        config,
+        workspacePathOf: () => 'D:/mapped',
+        attach: async (id) => { existingAttached.push(id) },
+      }, sessionId, true)
+      assert.equal(existingTask.status, 'up-to-date')
+      assert.deepEqual(existingAttached, [])
 
       // 已加载但已经是最新：只读判断后返回 up-to-date，不能因为 live 就兜底
       // local-active 卡住游标。

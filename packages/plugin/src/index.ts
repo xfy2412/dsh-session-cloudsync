@@ -13,20 +13,23 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { SyncController, type PlannedSyncSession } from './controller.ts'
+import { SyncController, type TaskRunner } from './controller.ts'
 import { buildSessionTree, pathKeyOf } from './closure.ts'
+import { planSync, type LocalPlanSnapshot, type RemoteSessionSummary, type SyncPlanEntry, type SyncReceipt } from './sync-plan.ts'
 import { prepareReplaceScript } from './replace.ts'
 import {
   correctCwd as correctSessionCwd,
-  pullOnce,
-  syncOnce,
+  pullSessionTask,
+  pushSessionTask,
+  readRemoteSessionMeta,
   testConnection,
   type CreateHeaderLike,
   type CreateOptions,
   type EngineConfig,
-  type PullReport,
   type PullState,
+  type RemoteSessionMeta,
   type SyncLogger,
+  type SyncProgress,
 } from './engine.ts'
 import { performance } from 'node:perf_hooks'
 import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
@@ -39,7 +42,7 @@ import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } fr
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
 import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
 import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
-import type { SetupInfo, SyncConfigSnapshot, SyncSessionCandidate, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
+import type { SetupInfo, SyncConfigSnapshot, SyncSessionCandidate, SyncTaskView, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
 export const name = 'dsh-session-cloudsync'
@@ -405,6 +408,8 @@ export function apply(ctx: Context, config: Config): void {
     ? { version: STATE_VERSION, revision: 0 }
     : readPullJournal(statePath)
   if (statePath === undefined) logger.info('dsh-session-cloudsync: 找不到 DSH home，拉取状态只保存在内存')
+  /** 上次成功对齐的 receipt；没有记录的会话走一次完整扫描。 */
+  let receipts: Record<string, SyncReceipt> = { ...(initialJournal.receipts ?? {}) }
 
   let bindings: WorkspaceBindings = emptyBindings()
   const bindingsDir = statePath === undefined ? undefined : join(dirname(statePath), 'vault')
@@ -414,8 +419,15 @@ export function apply(ctx: Context, config: Config): void {
   let workspaceLabels: Record<string, string> = {}
   let labelsIdentity: string | undefined
   let labelsFetchedAt = 0
-  let remoteInventory: { readonly identity: string; readonly at: number; readonly byKey: Map<string, string[]> } | undefined
+  let remoteInventory: {
+    readonly identity: string
+    readonly at: number
+    readonly byKey: Map<string, string[]>
+    readonly summaries: readonly RemoteSessionSummary[]
+  } | undefined
   const remoteLastSeq = new Map<string, number>()
+  /** 旧服务端摘要没有 parent/origin 时，从加密头补读的缓存。 */
+  const remoteMetaCache = new Map<string, { readonly headChainHash: string; readonly meta: RemoteSessionMeta }>()
   const refreshWorkspaceLabels = async (): Promise<void> => {
     if (statePath === undefined || bindingsDir === undefined) return
     if (engineConfig.token.trim() === '' || engineConfig.passphrase === '') return
@@ -444,19 +456,24 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
   /**
-   * 读取远端会话清单，按 workspaceKey 聚合。只用于设置页/映射页展示，
-   * 不参与同步判定本身。
+   * 读取远端会话摘要；扫描规划与设置页共用同一份 15s 缓存。
+   * 这里保留无 workspaceKey 的子会话，避免远端树在 pull 时才补行。
+   * @returns 全部远端摘要。
    */
-  const readRemoteInventory = async (): Promise<Map<string, string[]>> => {
+  const readRemoteSummaries = async (): Promise<readonly RemoteSessionSummary[]> => {
     const base = serverUrl.trim().replace(/\/+$/u, '')
     const token = engineConfig.token.trim()
-    if (base === '' || token === '') return new Map()
+    if (base === '' || token === '') return []
     const identity = `${base}\u0000${token}`
     if (remoteInventory !== undefined && remoteInventory.identity === identity && Date.now() - remoteInventory.at < 15_000) {
-      return remoteInventory.byKey
+      return remoteInventory.summaries
     }
-    if (remoteInventory?.identity !== identity) remoteLastSeq.clear()
+    if (remoteInventory?.identity !== identity) {
+      remoteLastSeq.clear()
+      remoteMetaCache.clear()
+    }
     const byKey = new Map<string, string[]>()
+    const summaries: RemoteSessionSummary[] = []
     try {
       let cursor: string | undefined
       for (let page = 0; page < 50; page += 1) {
@@ -467,29 +484,48 @@ export function apply(ctx: Context, config: Config): void {
           headers: { authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(engineConfig.requestTimeoutMs ?? 10_000),
         })
-        if (!response.ok) break
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const body = await response.json() as {
           readonly value?: {
             readonly nextCursor?: unknown
-            readonly sessions?: readonly {
-              readonly sessionId?: string
-              readonly workspaceKey?: unknown
-              readonly lastSeq?: unknown
-            }[]
+            readonly sessions?: readonly Partial<RemoteSessionSummary>[]
           }
         }
         const sessions = body.value?.sessions ?? []
         for (const session of sessions) {
           const sessionId = session.sessionId
-          const workspaceKey = session.workspaceKey
           if (typeof sessionId !== 'string' || sessionId === '') continue
-          if (typeof workspaceKey !== 'string' || workspaceKey === '') continue
-          if (typeof session.lastSeq === 'number' && Number.isFinite(session.lastSeq)) {
-            remoteLastSeq.set(sessionId, session.lastSeq)
+          if (typeof session.lastSeq !== 'number' || !Number.isSafeInteger(session.lastSeq)) continue
+          if (typeof session.formatVersion !== 'number' || !Number.isSafeInteger(session.formatVersion)) continue
+          if (typeof session.createdAt !== 'number' || !Number.isSafeInteger(session.createdAt)) continue
+          if (typeof session.headChainHash !== 'string') continue
+          const workspaceKey = typeof session.workspaceKey === 'string' && session.workspaceKey !== ''
+            ? session.workspaceKey
+            : undefined
+          const summary: RemoteSessionSummary = {
+            sessionId,
+            formatVersion: session.formatVersion,
+            createdAt: session.createdAt,
+            lastSeq: session.lastSeq,
+            headChainHash: session.headChainHash,
+            ...workspaceKey === undefined ? {} : { workspaceKey },
+            ...typeof session.safeThroughSeq === 'number' && Number.isSafeInteger(session.safeThroughSeq)
+              ? { safeThroughSeq: session.safeThroughSeq } : {},
+            ...typeof session.tailOpen === 'boolean' ? { tailOpen: session.tailOpen } : {},
+            ...typeof session.parentSession === 'string' && session.parentSession !== ''
+              ? { parentSession: session.parentSession } : {},
+            ...typeof session.origin === 'string' && session.origin !== '' ? { origin: session.origin } : {},
+            ...typeof session.delegationDepth === 'number' && Number.isSafeInteger(session.delegationDepth)
+              ? { delegationDepth: session.delegationDepth } : {},
+            ...typeof session.deletedAt === 'number' ? { deletedAt: session.deletedAt } : {},
           }
-          const list = byKey.get(workspaceKey) ?? []
-          list.push(sessionId)
-          byKey.set(workspaceKey, list)
+          summaries.push(summary)
+          remoteLastSeq.set(sessionId, session.lastSeq)
+          if (workspaceKey !== undefined) {
+            const list = byKey.get(workspaceKey) ?? []
+            list.push(sessionId)
+            byKey.set(workspaceKey, list)
+          }
         }
         cursor = typeof body.value?.nextCursor === 'string' && body.value.nextCursor !== ''
           ? body.value.nextCursor
@@ -498,9 +534,23 @@ export function apply(ctx: Context, config: Config): void {
       }
     } catch (error: unknown) {
       logger.warn(`dsh-session-cloudsync: 读取远端会话清单失败：${error instanceof Error ? error.message : String(error)}`)
+      throw error
     }
-    remoteInventory = { identity, at: Date.now(), byKey }
-    return byKey
+    remoteInventory = { identity, at: Date.now(), byKey, summaries }
+    return summaries
+  }
+
+  /**
+   * 兼容设置页/映射页的按 workspaceKey 聚合视图。
+   * @returns workspaceKey → sessionId 列表。
+   */
+  const readRemoteInventory = async (): Promise<Map<string, string[]>> => {
+    try {
+      await readRemoteSummaries()
+    } catch {
+      return remoteInventory?.byKey ?? new Map()
+    }
+    return remoteInventory?.byKey ?? new Map()
   }
 
   let vaultKeyCache: { readonly identity: string; readonly key: Buffer } | undefined
@@ -562,6 +612,7 @@ export function apply(ctx: Context, config: Config): void {
         ...state.blocked === undefined || state.blocked.length === 0 ? {} : { blocked: state.blocked },
         ...state.blockedDecisions === undefined || state.blockedDecisions.length === 0 ? {} : { blockedDecisions: state.blockedDecisions },
         ...state.unmapped === undefined || state.unmapped.length === 0 ? {} : { unmapped: state.unmapped },
+        ...Object.keys(receipts).length === 0 ? {} : { receipts },
       })
     } catch (error: unknown) {
       logger.warn(`dsh-session-cloudsync: 写状态文件失败：${error instanceof Error ? error.message : String(error)}`)
@@ -604,8 +655,7 @@ export function apply(ctx: Context, config: Config): void {
     return { configured: true }
   }
 
-  let pullWithDeps: ((state: PullState) => Promise<PullReport>) | undefined
-  // 所有 pull 都必须经过这一把锁：控制器轮次、映射回填、未来任何入口。
+  // 所有 pull 都必须经过这一把锁：当前任务执行和未来任何入口。
   let pullTail: Promise<unknown> = Promise.resolve()
   const withPullLock = <T>(operation: () => Promise<T>): Promise<T> => {
     const run = pullTail.then(operation, operation)
@@ -673,25 +723,11 @@ export function apply(ctx: Context, config: Config): void {
     logger.warn(`dsh-session-cloudsync: 自动加入上传名单失败：${lastError instanceof Error ? lastError.message : String(lastError)}`)
   }
   const perf = new PerfCollector()
+  let taskRunner: TaskRunner | undefined
   const controller = new SyncController({
-    push: () => {
-      const started = performance.now()
-      return syncOnce({
-        ...deps,
-        workspaceKeyOf: workspaceKeyForCwd,
-        onProgress: (progress) => {
-          controller.updateProgress(progress)
-          perf.progress(progress)
-        },
-        onPerf: (sample) => perf.metric(sample),
-        onPerfStart: (sample) => perf.beginOperation(sample),
-      }).finally(() => perf.phase('push', performance.now() - started))
-    },
-    pull: (state) => {
-      if (pullWithDeps === undefined) throw new Error('拉取引擎尚未初始化')
-      const started = performance.now()
-      return withPullLock(() => pullWithDeps!(state))
-        .finally(() => perf.phase('pull', performance.now() - started))
+    tasks: {
+      scan: (mode, hooks) => taskRunner!.scan(mode, hooks),
+      execute: (task, update) => taskRunner!.execute(task, update),
     },
     persist: persistState,
     configuration,
@@ -825,58 +861,318 @@ export function apply(ctx: Context, config: Config): void {
       controller.endApply(sessionId)
     },
   }
-  pullWithDeps = (state) => {
-    refreshConfig()
-    return pullOnce({
-      ...pullDeps,
-      workspacePathOf: resolveWorkspacePath,
-      onProgress: (progress) => {
-        controller.updateProgress(progress)
-        perf.progress(progress)
-      },
-      onPerf: (sample) => perf.metric(sample),
-      onPerfStart: (sample) => perf.beginOperation(sample),
-    }, state)
+  /**
+   * 读取一个本地会话的最末事件序号；只在 revision/receipt 无法判断方向时调用。
+   * @param sessionId - 会话 id。
+   * @returns 最末 seq；读取失败时为 undefined。
+   */
+  const readLocalLastSeq = async (sessionId: string): Promise<number | undefined> => {
+    try {
+      const handle = await ctx.sessionPersistence.open(sessionId as SessionId, 'read')
+      try {
+        const read = await handle.read()
+        return read.events.length === 0 ? -1 : read.events[read.events.length - 1]!.seq
+      } finally {
+        await handle.close()
+      }
+    } catch (error: unknown) {
+      logger.warn(`dsh-session-cloudsync: 读取 ${sessionId} 的本地进度失败：${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
   }
 
-  let backfilling = false
+  const taskEntries = new Map<string, SyncPlanEntry>()
   /**
-   * 映射完成后重放未映射会话：从它们最初的 cursor revision 之前再拉一次，
-   * 不推进主游标。这样即使映射页打开时游标已经越过它们，也能补回来。
+   * 把规划条目转成气泡任务。
+   * @param entry - 规划结果。
+   * @param state - 初始任务状态。
+   * @param ordinal - 稳定顺序。
+   * @returns 任务视图。
    */
-  const backfillMappedWorkspaces = async (): Promise<void> => {
-    if (backfilling) return
-    if (controller.snapshot().running) return
-    const pending = controller.unmappedSessions()
-      .filter((entry) => bindings.bindings[entry.workspaceKey] !== undefined)
-    if (pending.length === 0) return
-    if (pullWithDeps === undefined) return
-    backfilling = true
-    if (!controller.beginBackfill()) {
-      backfilling = false
-      return
+  const taskOf = (
+    entry: SyncPlanEntry,
+    state: SyncTaskView['state'],
+    ordinal: number,
+  ): SyncTaskView => {
+    const direction: SyncTaskView['direction'] = entry.action === 'pull'
+      ? 'pull'
+      : entry.action === 'push'
+        ? 'push'
+        : entry.local === undefined ? 'pull' : 'push'
+    const localLast = entry.localLastSeq ?? -1
+    const remoteLast = entry.remoteLastSeq ?? -1
+    const totalEvents = direction === 'pull'
+      ? Math.max(0, remoteLast - localLast)
+      : Math.max(0, localLast - remoteLast)
+    return {
+      ordinal,
+      sessionId: entry.sessionId,
+      rootId: entry.rootId,
+      ...entry.parentSession === undefined ? {} : { parentSession: entry.parentSession },
+      depth: entry.depth,
+      direction,
+      state,
+      reason: state === 'checking'
+        ? 'checking'
+        : entry.reason === 'blocked'
+          ? 'blocked'
+          : entry.action === 'push'
+            ? entry.reason === 'remote-missing' ? 'remote-missing' : 'local-ahead'
+            : entry.reason === 'local-missing' ? 'local-missing' : 'remote-ahead',
+      totalEvents,
+      doneEvents: 0,
+      progress: 0,
+      ...state === 'blocked' ? { error: entry.error ?? '会话被阻塞' } : {},
     }
-    perf.begin('backfill')
-    try {
-      const report = await withPullLock(() => {
-        const snapshot = controller.snapshot()
-        const revision = Math.max(0, Math.min(...pending.map((entry) => entry.revision)) - 1)
-        return pullWithDeps!({
-          revision,
-          ...snapshot.pending === null ? {} : { pending: snapshot.pending },
-        })
-      })
-      controller.endBackfill(report)
-      perf.finish(controller.snapshot())
-      await flushAutoUpload()
+  }
+
+  taskRunner = {
+    async scan(mode, hooks) {
+      refreshConfig()
+      await refreshSecrets()
       await refreshBindings()
-    } catch (error: unknown) {
-      controller.endBackfill()
-      perf.finish(controller.snapshot())
-      logger.warn(`dsh-session-cloudsync: 映射回填失败：${error instanceof Error ? error.message : String(error)}`)
-    } finally {
-      backfilling = false
-    }
+      const snapshots = await ctx.sessionPersistence.list()
+      let remote = await readRemoteSummaries()
+      // 兼容没有 parent/origin/depth 摘要字段的旧服务端：对无 workspaceKey、
+      // 无父链信息的远端会话补读一次加密头，之后按 headChainHash 缓存。
+      remote = await Promise.all(remote.map(async (summary) => {
+        if (summary.parentSession !== undefined || summary.origin !== undefined) return summary
+        if (typeof summary.workspaceKey === 'string' && summary.workspaceKey !== '') return summary
+        const cached = remoteMetaCache.get(summary.sessionId)
+        if (cached !== undefined && cached.headChainHash === summary.headChainHash) {
+          return { ...summary, ...cached.meta }
+        }
+        try {
+          const meta = await readRemoteSessionMeta({ config: engineConfig }, summary.sessionId)
+          remoteMetaCache.set(summary.sessionId, { headChainHash: summary.headChainHash, meta })
+          return { ...summary, ...meta }
+        } catch (error: unknown) {
+          logger.warn(`dsh-session-cloudsync: 补读 ${summary.sessionId} 的远端树元数据失败：${error instanceof Error ? error.message : String(error)}`)
+          return summary
+        }
+      }))
+      if (autoBindSamePath && bindingsDir !== undefined && workspaceRegistry !== undefined) {
+        let boundNow = false
+        const registered = workspaceRegistry.list?.() ?? []
+        for (const summary of remote) {
+          const workspaceKey = summary.workspaceKey
+          if (typeof workspaceKey !== 'string' || workspaceKey === '' || bindings.bindings[workspaceKey] !== undefined) continue
+          const candidate = registered.find((workspace) => workspaceKeyForCwd('', workspace.path) === workspaceKey)
+          if (candidate === undefined) continue
+          try {
+            await bindWorkspaceFile(bindingsDir, workspaceKey, candidate.path, candidate.title)
+            boundNow = true
+          } catch (error: unknown) {
+            logger.warn(`dsh-session-cloudsync: 自动绑定 ${candidate.path} 失败：${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        if (boundNow) {
+          await refreshBindings()
+          labelsIdentity = undefined
+        }
+      }
+      const localSnapshots = await Promise.all(snapshots.map(async (snapshot) => {
+        const sessionId = String(snapshot.header.id)
+        const remoteSummary = remote.find((summary) => summary.sessionId === sessionId)
+        if (remoteSummary === undefined) return snapshot
+        const receipt = receipts[sessionId]
+        const localKnown = snapshot.eventCount !== undefined
+        const localRevision = typeof snapshot.revision === 'string' ? snapshot.revision : undefined
+        const remoteSame = receipt !== undefined
+          && receipt.remoteLastSeq === remoteSummary.lastSeq
+          && (receipt.remoteHeadChainHash === '' || receipt.remoteHeadChainHash === remoteSummary.headChainHash)
+        // revision/receipt 足够判断方向时不读本地大日志；只有“两边都变了”
+        // 或没有 receipt 的远端已存在会话才补读 lastSeq。
+        const needLastSeq = !localKnown && (
+          receipt === undefined
+          || (receipt.localRevision !== undefined && localRevision !== undefined
+            && receipt.localRevision !== localRevision && !remoteSame)
+          || (receipt.localRevision === undefined && !remoteSame)
+        )
+        if (!needLastSeq) return snapshot
+        const lastSeq = await readLocalLastSeq(sessionId)
+        return lastSeq === undefined ? snapshot : { ...snapshot, lastSeq }
+      }))
+      const selected = new Set(syncSessionIds)
+      const bound = new Set(Object.keys(bindings.bindings))
+      const plan = planSync({
+        local: localSnapshots as unknown as readonly LocalPlanSnapshot[],
+        remote,
+        selectedRoots: [...selected],
+        includeSubagents: engineConfig.includeSubagents !== false,
+        boundWorkspaceKeys: bound,
+        receipts,
+      })
+      // up-to-date 不产生任务，但顺手把 receipt 的 revision 补齐，下一轮
+      // 不再因为旧 receipt 没有 revision 而重新读取/拉取。
+      for (const entry of plan.entries) {
+        if (entry.action !== 'none' || entry.reason !== 'up-to-date') continue
+        if (entry.local === undefined || entry.remote === undefined) continue
+        const previous = receipts[entry.sessionId]
+        receipts[entry.sessionId] = {
+          sessionId: entry.sessionId,
+          ...entry.local.revision === undefined ? {} : { localRevision: entry.local.revision },
+          localEventCount: previous?.localEventCount ?? Math.max(0, (entry.remote.safeThroughSeq ?? entry.remote.lastSeq) + 1),
+          localLastSeq: entry.localLastSeq ?? entry.remote.lastSeq,
+          remoteLastSeq: entry.remote.lastSeq,
+          remoteHeadChainHash: entry.remote.headChainHash,
+          formatVersion: entry.remote.formatVersion,
+          checkedAt: Date.now(),
+        }
+      }
+      taskEntries.clear()
+      for (const entry of plan.entries) taskEntries.set(entry.sessionId, entry)
+      const autoEntries = plan.entries.filter((entry) => entry.action !== 'none' || entry.reason === 'blocked')
+      const total = mode === 'manual' ? plan.entries.length : autoEntries.length
+      const leaseHeld = deviceLease.snapshot().state === 'held'
+      const withLease = (tasks: readonly SyncTaskView[]): SyncTaskView[] => tasks.map((task) =>
+        task.direction === 'push' && !leaseHeld && task.state !== 'blocked'
+          ? { ...task, state: 'deferred', error: '等待全局同步租约' }
+          : task)
+      if (mode === 'auto') {
+        const tasks = withLease(autoEntries.map((entry, index) =>
+          taskOf(entry, entry.reason === 'blocked' ? 'blocked' : 'queued', index)))
+        hooks.setTasks(tasks)
+        hooks.setScan(tasks.length, tasks.length)
+        return { tasks }
+      }
+
+      // 手动同步：全部选中会话先进入 checking；只分类，不传输。
+      const tasks = plan.entries.map((entry, index) => taskOf(entry, 'checking', index))
+      hooks.setTasks(tasks)
+      hooks.setScan(0, total)
+      await new Promise<void>((resolve) => { setImmediate(resolve) })
+      const scanStarted = Date.now()
+      const remaining: SyncTaskView[] = []
+      for (let index = 0; index < plan.entries.length; index += 1) {
+        const entry = plan.entries[index]!
+        if (entry.reason === 'blocked') {
+          remaining.push(taskOf(entry, 'blocked', index))
+        } else if (entry.action !== 'none') {
+          remaining.push(taskOf(entry, 'queued', index))
+        }
+        hooks.setScan(index + 1, total, entry.sessionId)
+        await new Promise<void>((resolve) => { setImmediate(resolve) })
+      }
+      // 校验可能只有 1 个会话；给前端一个可观测的校验窗口。
+      const remainingMs = 300 - (Date.now() - scanStarted)
+      if (remainingMs > 0) await new Promise<void>((resolve) => { setTimeout(resolve, remainingMs) })
+      // 校验全部完成后再替换任务表：up-to-date 会话在这里一次性移除，
+      // 校验期间保留完整体验，避免单会话在一帧内闪掉。
+      const finalTasks = withLease(remaining)
+      hooks.setTasks(finalTasks)
+      hooks.setScan(total, total)
+      return { tasks: finalTasks }
+    },
+
+    async execute(task, update) {
+      const entry = taskEntries.get(task.sessionId)
+      if (entry === undefined) throw new Error('任务对应的规划条目已失效')
+      const reportProgress = (progress: SyncProgress): void => {
+        // 只合并本条进度实际携带的字段；total/done 为 undefined 时由
+        // controller 保留当前任务的高水位，避免写入阶段把下载进度清零。
+        update({
+          state: 'running',
+          ...progress.stage === undefined ? {} : { stage: progress.stage },
+          ...progress.totalEvents === undefined ? {} : { totalEvents: progress.totalEvents },
+          ...progress.doneEvents === undefined ? {} : { doneEvents: progress.doneEvents },
+          progress: progress.progress,
+          ...progress.error === undefined ? {} : { error: progress.error },
+          ...progress.bytes === undefined ? {} : { totalBytes: progress.bytes },
+          ...progress.doneBytes === undefined ? {} : { doneBytes: progress.doneBytes },
+        })
+        perf.progress(progress)
+      }
+      const commonDeps = {
+        config: engineConfig,
+        onProgress: reportProgress,
+        onPerf: (sample: Parameters<typeof perf.metric>[0]) => perf.metric(sample),
+        onPerfStart: (sample: Parameters<typeof perf.beginOperation>[0]) => perf.beginOperation(sample),
+      }
+      if (task.direction === 'push') {
+        if (deviceLease.snapshot().state !== 'held') {
+          return { state: 'deferred', totalEvents: task.totalEvents, doneEvents: task.doneEvents, error: '等待全局同步租约' }
+        }
+        if (entry.local === undefined) throw new Error('推送任务缺少本地快照')
+        const report = await pushSessionTask({
+          ...deps,
+          ...commonDeps,
+          workspaceKeyOf: workspaceKeyForCwd,
+        }, entry.local as never, entry.depth === 0)
+        if (report.status === 'error') {
+          return {
+            state: 'failed',
+            totalEvents: report.totalEvents ?? task.totalEvents,
+            doneEvents: report.doneEvents ?? 0,
+            error: report.error ?? '推送失败',
+          }
+        }
+        if (report.status === 'remote-ahead') {
+          return { state: 'deferred', totalEvents: task.totalEvents, doneEvents: task.doneEvents, error: '远端已领先，等待下一轮拉取' }
+        }
+        if (report.status === 'skipped') {
+          return { state: 'deferred', totalEvents: task.totalEvents, doneEvents: task.doneEvents, error: report.error ?? '会话本轮跳过' }
+        }
+        // 远端摘要已经变化；下一轮必须重读，不能继续用 15s 缓存。
+        remoteInventory = undefined
+        const localLast = entry.localLastSeq ?? Math.max(-1, (entry.local.eventCount ?? 0) - 1)
+        receipts[entry.sessionId] = {
+          sessionId: entry.sessionId,
+          ...entry.local.revision === undefined ? {} : { localRevision: entry.local.revision },
+          localEventCount: entry.local.eventCount ?? Math.max(0, localLast + 1),
+          localLastSeq: localLast,
+          remoteLastSeq: localLast,
+          remoteHeadChainHash: '',
+          formatVersion: entry.local.header.version,
+          checkedAt: Date.now(),
+        }
+        return {
+          state: 'done',
+          totalEvents: report.totalEvents ?? task.totalEvents,
+          doneEvents: report.doneEvents ?? report.totalEvents ?? task.totalEvents,
+          ...report.bytes === undefined ? {} : { totalBytes: report.bytes, doneBytes: report.bytes },
+        }
+      }
+      const report = await withPullLock(() =>
+        pullSessionTask({
+          ...pullDeps,
+          ...commonDeps,
+          workspacePathOf: resolveWorkspacePath,
+        }, entry.sessionId, entry.local !== undefined))
+      if (report.status === 'error') {
+        return {
+          state: 'failed',
+          totalEvents: report.totalEvents ?? task.totalEvents,
+          doneEvents: 0,
+          error: report.error ?? '拉取失败',
+        }
+      }
+      if (report.status === 'unmapped' || report.status === 'excluded') {
+        return { state: 'deferred', totalEvents: task.totalEvents, doneEvents: task.doneEvents, error: report.error ?? '会话未映射' }
+      }
+      if (report.status === 'local-active' || report.status === 'write-owned' || report.status === 'local-ahead') {
+        return { state: 'deferred', totalEvents: report.totalEvents ?? task.totalEvents, doneEvents: 0, error: report.error ?? '等待会话写入结束' }
+      }
+      const safe = entry.remote?.safeThroughSeq ?? entry.remoteLastSeq ?? -1
+      if (entry.remote !== undefined) {
+        const after = await ctx.sessionPersistence.stat(entry.sessionId as SessionId)
+        receipts[entry.sessionId] = {
+          sessionId: entry.sessionId,
+          ...after?.revision === undefined ? {} : { localRevision: after.revision },
+          localEventCount: Math.max(0, safe + 1),
+          localLastSeq: safe,
+          remoteLastSeq: entry.remote.lastSeq,
+          remoteHeadChainHash: entry.remote.headChainHash,
+          formatVersion: entry.remote.formatVersion,
+          checkedAt: Date.now(),
+        }
+      }
+      return {
+        state: 'done',
+        totalEvents: report.totalEvents ?? task.totalEvents,
+        doneEvents: report.applied ?? report.totalEvents ?? task.totalEvents,
+      }
+    },
   }
 
   const setup = async (): Promise<SetupInfo> => {
@@ -903,75 +1199,6 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  const autoBindMatchingWorkspaces = async (): Promise<void> => {
-    if (!autoBindSamePath || bindingsDir === undefined || workspaceRegistry === undefined) return
-    let registered: readonly WorkspaceLike[] = []
-    try {
-      registered = workspaceRegistry.list?.() ?? []
-    } catch (error: unknown) {
-      logger.warn(`dsh-session-cloudsync: 自动绑定读取工作区失败：${error instanceof Error ? error.message : String(error)}`)
-      return
-    }
-    let bound = false
-    for (const session of controller.unmappedSessions()) {
-      const workspaceKey = session.workspaceKey
-      if (bindings.bindings[workspaceKey] !== undefined) continue
-      const candidate = registered.find((workspace) => workspaceKeyForCwd('', workspace.path) === workspaceKey)
-      if (candidate === undefined) continue
-      try {
-        await bindWorkspaceFile(bindingsDir, workspaceKey, candidate.path, candidate.title)
-        bound = true
-      } catch (error: unknown) {
-        logger.warn(`dsh-session-cloudsync: 自动绑定 ${candidate.path} 失败：${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-    if (bound) {
-      await refreshBindings()
-      labelsIdentity = undefined
-    }
-  }
-
-  /**
-   * 在 controller 开始本轮之前建立完整列表：选中的本地根 + 远端未拉取根。
-   * 这样气泡在第一个会话开始传输前就知道整轮有哪些行。
-   */
-  const seedControllerList = async (): Promise<void> => {
-    const listStarted = performance.now()
-    const snapshots = await ctx.sessionPersistence.list()
-    perf.phase('list', performance.now() - listStarted)
-    const tree = buildSessionTree(snapshots)
-    const localById = new Map(snapshots.map((snapshot) => [String(snapshot.header.id), snapshot]))
-    const selected = new Set(syncSessionIds)
-    const inventory = await readRemoteInventory()
-    const remoteIds = new Set<string>()
-    for (const ids of inventory.values()) {
-      for (const sessionId of ids) remoteIds.add(sessionId)
-    }
-    const stateFor = (sessionId: string): 'planned' | 'local-ahead' | 'remote-ahead' | 'up-to-date' => {
-      const local = localById.get(sessionId)
-      if (local === undefined) return 'remote-ahead'
-      if (!remoteIds.has(sessionId)) return 'local-ahead'
-      const remoteLast = remoteLastSeq.get(sessionId)
-      if (remoteLast === undefined) return 'planned'
-      const localLast = Math.max(-1, (local.eventCount ?? 0) - 1)
-      if (localLast === remoteLast) return 'up-to-date'
-      return localLast < remoteLast ? 'remote-ahead' : 'local-ahead'
-    }
-    const entries: PlannedSyncSession[] = []
-    for (const root of tree.roots) {
-      if (!selected.has(String(root.root.header.id))) continue
-      for (const snapshot of [root.root, ...root.descendants.map((entry) => entry.snapshot)]) {
-        const sessionId = String(snapshot.header.id)
-        entries.push({ sessionId, direction: 'push', state: stateFor(sessionId) })
-      }
-    }
-    for (const sessionId of [...remoteIds].sort()) {
-      if (!localById.has(sessionId)) entries.push({ sessionId, direction: 'pull', state: 'remote-ahead' })
-    }
-    controller.seedList(entries)
-    controller.reconcileLocal(new Set(localById.keys()), selected)
-  }
-
   const runSync = async (
     manual = false,
     trigger?: 'startup' | 'auto' | 'manual',
@@ -983,19 +1210,13 @@ export function apply(ctx: Context, config: Config): void {
     const activeRun = controller.snapshot().running
     if (!activeRun) perf.begin(trigger ?? (manual ? 'manual' : 'auto'))
     try {
-      // 已有同步在跑时不要重写列表占位，否则会把刚完成的 pull 状态覆盖成 planned。
-      if (!controller.snapshot().running) {
-        const seedStarted = performance.now()
-        await seedControllerList()
-        perf.phase('seed', performance.now() - seedStarted)
-      }
+      // 新任务模式由 controller.scan 建立任务表；旧 seed 列表不再参与。
       const result = await controller.run({
         manual,
         ...trigger === undefined ? {} : { trigger },
       })
       if (!activeRun) perf.finish(result.status)
-      await autoBindMatchingWorkspaces()
-      await backfillMappedWorkspaces()
+      // 任务模式由下一轮摘要扫描负责映射后的补拉；不再走旧的 cursor 回填。
       await flushAutoUpload()
       void runVault().catch((error: unknown) => {
         logger.warn(`dsh-session-cloudsync: Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
@@ -1249,7 +1470,6 @@ export function apply(ctx: Context, config: Config): void {
       if (workspace === undefined) throw new Error('本地工作区不存在')
       await bindWorkspaceFile(bindingsDir, workspaceKey, workspace.path, workspace.title)
       await refreshBindings()
-      void backfillMappedWorkspaces()
       return workspaces()
     },
   }

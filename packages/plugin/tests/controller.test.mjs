@@ -45,6 +45,105 @@ function createController(overrides = {}) {
   }
 }
 
+test('控制器：手动任务模式先完成全部校验再执行', async () => {
+  const events = []
+  let releaseScan
+  const scanGate = new Promise((resolve) => { releaseScan = resolve })
+  const tasks = [
+    { ordinal: 0, sessionId: 's1', rootId: 's1', depth: 0, direction: 'push', state: 'checking', reason: 'checking', totalEvents: 1, doneEvents: 0, progress: 0 },
+    { ordinal: 1, sessionId: 's2', rootId: 's2', depth: 0, direction: 'pull', state: 'checking', reason: 'checking', totalEvents: 1, doneEvents: 0, progress: 0 },
+  ]
+  const controller = new SyncController({
+    tasks: {
+      scan: async (mode, hooks) => {
+        events.push('scan:start')
+        hooks.setTasks(tasks)
+        hooks.setScan(0, 2)
+        await scanGate
+        hooks.setTasks(tasks.map((task) => ({ ...task, state: 'queued' })))
+        hooks.setScan(2, 2)
+        events.push('scan:done')
+        return { tasks: tasks.map((task) => ({ ...task, state: 'queued' })) }
+      },
+      execute: async (task, update) => {
+        events.push('execute:' + task.sessionId)
+        update({ state: 'running', totalEvents: 1, doneEvents: 1, progress: 1 })
+        return { state: 'done', totalEvents: 1, doneEvents: 1 }
+      },
+    },
+    persist: () => {},
+    configuration: () => ({ configured: true }),
+    intervalMs: 60_000,
+  })
+  const running = controller.run({ manual: true })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(events, ['scan:start'])
+  assert.deepEqual(controller.snapshot().run.tasks.map((task) => task.state), ['checking', 'checking'])
+  releaseScan()
+  const result = await running
+  assert.deepEqual(events, ['scan:start', 'scan:done', 'execute:s1', 'execute:s2'])
+  assert.equal(result.ok, true)
+  assert.equal(result.status.run.mode, 'manual')
+  assert.deepEqual(result.status.run.tasks.map((task) => task.state), ['done', 'done'])
+})
+
+test('控制器：写入阶段不把下载进度和事件数清零', async () => {
+  let running
+  const controller = new SyncController({
+    tasks: {
+      scan: async () => ({
+        tasks: [{
+          ordinal: 0, sessionId: 's1', rootId: 's1', depth: 0,
+          direction: 'pull', state: 'queued', reason: 'remote-ahead',
+          totalEvents: 0, doneEvents: 0, progress: 0,
+        }],
+      }),
+      execute: async (task, update) => {
+        update({ progress: 0.4, totalEvents: 10, doneEvents: 4, stage: 'downloading' })
+        const during = controller.snapshot().run.tasks[0]
+        assert.equal(during.totalEvents, 10)
+        assert.equal(during.doneEvents, 4)
+        update({ progress: 0, stage: 'applying' })
+        const writing = controller.snapshot().run.tasks[0]
+        assert.equal(writing.totalEvents, 10)
+        assert.equal(writing.doneEvents, 4)
+        assert.equal(writing.progress, 0.4)
+        assert.equal(writing.stage, 'applying')
+        return { state: 'done', totalEvents: 10, doneEvents: 10 }
+      },
+    },
+    persist: () => {},
+    configuration: () => ({ configured: true }),
+    intervalMs: 60_000,
+  })
+  running = await controller.run({ manual: true })
+  assert.equal(running.ok, true)
+  assert.equal(running.status.run.tasks[0].state, 'done')
+})
+
+test('控制器：任务模式保留失败任务并进入退避', async () => {
+  const controller = new SyncController({
+    tasks: {
+      scan: async () => ({
+        tasks: [{
+          ordinal: 0, sessionId: 'bad', rootId: 'bad', depth: 0,
+          direction: 'push', state: 'queued', reason: 'local-ahead',
+          totalEvents: 1, doneEvents: 0, progress: 0,
+        }],
+      }),
+      execute: async () => ({ state: 'failed', error: '上传失败' }),
+    },
+    persist: () => {},
+    configuration: () => ({ configured: true }),
+    intervalMs: 60_000,
+  })
+  const result = await controller.run({ manual: true })
+  assert.equal(result.ok, false)
+  assert.equal(result.status.run.tasks.length, 1)
+  assert.equal(result.status.run.tasks[0].state, 'failed')
+  assert.equal(result.status.run.tasks[0].error, '上传失败')
+})
+
 test('控制器：实时阶段进入 live，轮次结束后收敛', async () => {
   let fixture
   fixture = createController({

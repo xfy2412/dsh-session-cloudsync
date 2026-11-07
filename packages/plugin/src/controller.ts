@@ -33,6 +33,7 @@ import type {
   SyncSessionPhase,
   SyncSessionStatus,
   SyncStatus,
+  SyncTaskView,
 } from './status.ts'
 
 /** 默认不自动重试、只等待配置或人工处理的错误。 */
@@ -47,12 +48,43 @@ export const DEFAULT_NON_RETRYABLE: ReadonlySet<SyncErrorKind> = new Set([
   'config',
 ])
 
+/** 任务扫描回调。 */
+export interface TaskScanHooks {
+  /** 用新的完整任务表替换当前视图。 */
+  readonly setTasks: (tasks: readonly SyncTaskView[]) => void
+  /** 更新校验进度与当前会话。 */
+  readonly setScan: (checked: number, total: number, currentSessionId?: string) => void
+}
+
+/** 任务执行结果。 */
+export interface TaskExecutionResult {
+  readonly state: 'done' | 'deferred' | 'failed'
+  readonly totalEvents?: number
+  readonly doneEvents?: number
+  readonly totalBytes?: number
+  readonly doneBytes?: number
+  readonly error?: string
+}
+
+/** 新任务模式注入。 */
+export interface TaskRunner {
+  /** 校验阶段；不得执行传输。 */
+  readonly scan: (mode: 'auto' | 'manual', hooks: TaskScanHooks) => Promise<{ readonly tasks: readonly SyncTaskView[] }>
+  /** 执行一个单向任务。 */
+  readonly execute: (
+    task: SyncTaskView,
+    update: (patch: Partial<SyncTaskView>) => void,
+  ) => Promise<TaskExecutionResult>
+}
+
 /** 控制器依赖。 */
 export interface SyncControllerOptions {
+  /** 新任务模式；存在时不再走旧 push/pull。 */
+  readonly tasks?: TaskRunner
   /** 执行一次推送。 */
-  readonly push: () => Promise<SyncReport>
+  readonly push?: () => Promise<SyncReport>
   /** 执行一次拉取；传入当前 revision 与未完成的 pending。 */
-  readonly pull: (state: PullState) => Promise<PullReport>
+  readonly pull?: (state: PullState) => Promise<PullReport>
   /** 持久化 revision/pending；写失败由注入方负责记录。 */
   readonly persist: (state: PullState) => void
   /** 每次读取，允许配置在运行期变化。 */
@@ -117,6 +149,7 @@ export class SyncController {
   private nextRetryAt = 0
   private sessions: readonly SyncDirectionStatus[] = []
   private live: readonly SyncDirectionStatus[] = []
+  private taskViews: readonly SyncTaskView[] = []
   private stableViews: readonly SyncSessionStatus[] = []
   private readonly ordinals = new Map<string, number>()
   private nextOrdinal = 0
@@ -160,7 +193,10 @@ export class SyncController {
       configured: configuration.configured,
       reason: configuration.reason ?? null,
       running: this.running,
-      run: this.runView,
+      run: {
+        ...this.runView,
+        ...this.options.tasks === undefined ? {} : { tasks: this.taskViews },
+      },
       scheduler: this.options.scheduler?.() ?? {
         autoSync: this.options.intervalMs > 0,
         intervalMs: this.options.intervalMs,
@@ -627,6 +663,9 @@ export class SyncController {
     if (!configuration.configured) {
       return this.skipped('unconfigured', configuration.reason ?? '未配置')
     }
+    if (this.options.tasks !== undefined) {
+      return this.runTaskMode(options, now)
+    }
 
     this.running = true
     this.live = []
@@ -645,9 +684,9 @@ export class SyncController {
       // 拉取不需要租约；只有持有全局单写者租约时才允许上传。
       const lease = this.options.deviceLease?.()
       if (lease === undefined || lease.state === 'held') {
-        this.collectPush(await this.options.push(), views, errors)
+        this.collectPush(await this.options.push!(), views, errors)
       }
-      const pull = await this.options.pull(this.pullState())
+      const pull = await this.options.pull!(this.pullState())
       this.collectPull(pull, views, errors)
       if (pull.configured && pull.sessions.every((session) => session.status !== 'error')) {
         this.revision = pull.revision
@@ -679,6 +718,168 @@ export class SyncController {
     this.lastError = undefined
     this.persistNow()
     return { ok: true, status: this.snapshot() }
+  }
+
+  /**
+   * 新任务模式：先完成 scan，再按任务表单向执行。
+   *
+   * 手动同步的 scan 会把全部选中会话交给 hooks；校验完成的 up-to-date 行由
+   * scan 自己移除。只有 scan Promise resolve 后才进入 transferring。
+   * @param options - run 选项。
+   * @param now - 本轮开始时间。
+   * @returns 运行结果。
+   */
+  private async runTaskMode(options: {
+    readonly manual?: boolean
+    readonly trigger?: 'startup' | 'auto' | 'manual'
+  }, now: number): Promise<SyncRunResult> {
+    const runner = this.options.tasks!
+    const mode: 'auto' | 'manual' = options.manual === true ? 'manual' : 'auto'
+    this.running = true
+    this.live = []
+    this.taskViews = []
+    this.lastAttempt = now
+    this.runView = {
+      id: this.runView.id + 1,
+      trigger: options.trigger ?? (mode === 'manual' ? 'manual' : 'auto'),
+      state: 'running',
+      mode,
+      phase: 'scanning',
+      scan: { checked: 0, total: 0 },
+      startedAt: now,
+      finishedAt: null,
+    }
+    this.bump()
+    const errors: Array<{ kind: SyncErrorKind; message: string }> = []
+    try {
+      const scan = await runner.scan(mode, {
+        setTasks: (tasks) => {
+          this.taskViews = [...tasks]
+          this.bump()
+        },
+        setScan: (checked, total, currentSessionId) => {
+          this.runView = {
+            ...this.runView,
+            scan: {
+              checked,
+              total,
+              ...currentSessionId === undefined ? {} : { currentSessionId },
+            },
+          }
+          this.bump()
+        },
+      })
+      this.taskViews = [...scan.tasks]
+      this.runView = {
+        ...this.runView,
+        phase: 'transferring',
+        scan: {
+          checked: this.runView.scan?.total ?? this.taskViews.length,
+          total: this.runView.scan?.total ?? this.taskViews.length,
+        },
+      }
+      this.bump()
+      // 展示顺序由 ordinal 固定；执行时新拉取的子代理先于父会话创建。
+      const execution = [...this.taskViews].sort((left, right) => {
+        const leftNewPull = left.direction === 'pull' && left.reason === 'local-missing'
+        const rightNewPull = right.direction === 'pull' && right.reason === 'local-missing'
+        if (leftNewPull && rightNewPull && left.depth !== right.depth) return right.depth - left.depth
+        return left.ordinal - right.ordinal
+      })
+      for (const task of execution) {
+        if (task.state === 'failed' || task.state === 'deferred' || task.state === 'blocked') continue
+        this.updateTask({ ...task, state: 'running' })
+        try {
+          const result = await runner.execute(task, (patch) => {
+            const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
+            this.updateTask({ ...current, ...patch })
+          })
+          if (result.state === 'done') {
+            // 保留完成结果，直到下一轮 scan 建立新任务表。
+            const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
+            this.updateTask({
+              ...current,
+              state: 'done',
+              stage: 'done',
+              progress: 1,
+              totalEvents: result.totalEvents ?? current.totalEvents,
+              doneEvents: result.doneEvents ?? result.totalEvents ?? current.totalEvents,
+              ...result.totalBytes === undefined ? {} : { totalBytes: result.totalBytes },
+              ...result.doneBytes === undefined ? {} : { doneBytes: result.doneBytes },
+            })
+            continue
+          }
+          const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
+          this.updateTask({
+            ...current,
+            ...result,
+            state: result.state,
+            progress: result.totalEvents === undefined || result.totalEvents <= 0
+              ? 0
+              : Math.min(1, (result.doneEvents ?? 0) / result.totalEvents),
+          })
+          if (result.state === 'failed') {
+            errors.push({ kind: 'unknown', message: result.error ?? `会话 ${task.sessionId} 同步失败` })
+          }
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          errors.push({ kind: classified.kind, message: classified.message })
+          const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
+          this.updateTask({
+            ...current,
+            state: 'failed',
+            stage: 'failed',
+            error: classified.message,
+          })
+          this.options.logger?.warn(`dsh-session-cloudsync: ${task.sessionId} 任务失败（${classified.kind}）：${classified.message}`)
+        }
+      }
+    } catch (error: unknown) {
+      const classified = classifySyncError(error)
+      errors.push({ kind: classified.kind, message: classified.message })
+      this.options.logger?.warn(`dsh-session-cloudsync: 一轮任务同步失败（${classified.kind}）：${classified.message}`)
+    }
+
+    this.running = false
+    this.live = []
+    const finished = this.now()
+    const { phase: _finishedPhase, ...finishedRun } = this.runView
+    this.runView = {
+      ...finishedRun,
+      state: 'finished',
+      finishedAt: finished,
+    }
+    this.bump()
+    if (errors.length > 0) return this.fail(errors, finished)
+    this.retryCount = 0
+    this.nextRetryAt = 0
+    this.lastSuccess = finished
+    this.lastError = undefined
+    this.persistNow()
+    return { ok: true, status: this.snapshot() }
+  }
+
+  /**
+   * 更新一条任务；不存在时追加。
+   * @param task - 新任务视图。
+   */
+  private updateTask(task: SyncTaskView): void {
+    const previous = this.taskViews.find((item) => item.sessionId === task.sessionId)
+    // 进度只增不减：下载完成后的 writing/flushing 阶段可能不再携带
+    // total/done，不能把已经显示的进度和事件数清零。
+    const merged: SyncTaskView = previous === undefined ? task : {
+      ...previous,
+      ...task,
+      totalEvents: Math.max(previous.totalEvents, task.totalEvents),
+      doneEvents: Math.max(previous.doneEvents, task.doneEvents),
+      progress: Math.max(previous.progress, task.progress),
+      ...task.stage === undefined && previous.stage !== undefined ? { stage: previous.stage } : {},
+    }
+    const next = this.taskViews.filter((item) => item.sessionId !== task.sessionId)
+    next.push(merged)
+    next.sort((left, right) => left.ordinal - right.ordinal)
+    this.taskViews = next
+    this.bump()
   }
 
   private now(): number {

@@ -54,6 +54,9 @@ function manifestFor(sessionId, options = {}) {
     ...(options.workspaceKey === undefined ? {} : { workspaceKey: options.workspaceKey }),
     ...(options.tailOpen === undefined ? {} : { tailOpen: options.tailOpen }),
     ...(options.safeThroughSeq === undefined ? {} : { safeThroughSeq: options.safeThroughSeq }),
+    ...(options.parentSession === undefined ? {} : { parentSession: options.parentSession }),
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
+    ...(options.delegationDepth === undefined ? {} : { delegationDepth: options.delegationDepth }),
     frames,
     updatedAt: options.updatedAt ?? 1,
     ...(options.deletedAt === undefined ? {} : { deletedAt: options.deletedAt }),
@@ -125,6 +128,7 @@ test('v2 全量快照分页完整，且 v1 路由已移除', async () => {
         workspaceKey: index < 2 ? `workspace-${index}` : undefined,
         tailOpen: index === 0,
         safeThroughSeq: index === 0 ? 9 : undefined,
+        ...index === 0 ? { parentSession: 'parent-0', origin: 'subagent', delegationDepth: 1 } : {},
       })
     }
     insertSession(db, { sessionId: 'session-v2-deleted', revision: 300, deletedAt: 300 })
@@ -154,6 +158,9 @@ test('v2 全量快照分页完整，且 v1 路由已移除', async () => {
       assert.equal(first.body.value.sessions[0].workspaceKey, 'workspace-0')
       assert.equal(first.body.value.sessions[0].tailOpen, true)
       assert.equal(first.body.value.sessions[0].safeThroughSeq, 9)
+      assert.equal(first.body.value.sessions[0].parentSession, 'parent-0')
+      assert.equal(first.body.value.sessions[0].origin, 'subagent')
+      assert.equal(first.body.value.sessions[0].delegationDepth, 1)
       assert.equal(first.body.value.sessions[0].compression, 'none')
       assert.equal(first.body.value.sessions[0].storedBytes, 0)
 
