@@ -862,6 +862,32 @@ export function apply(ctx: Context, config: Config): void {
     },
   }
   /**
+   * 把外部同步进来的本地根会话补挂到官方 workspace。
+   * @param snapshots - 当前本地会话快照。
+   */
+  const reconcileWorkspaceAttachments = async (
+    snapshots: readonly { readonly header: { readonly id: string; readonly createdAt: number; readonly cwd?: string } }[],
+  ): Promise<void> => {
+    const registered = workspaceRegistry?.list?.() ?? []
+    if (registered.length === 0) return
+    const tree = buildSessionTree(snapshots)
+    for (const root of tree.roots) {
+      const cwd = root.root.header.cwd?.trim() ?? ''
+      if (cwd === '') continue
+      const workspace = registered.find((item) => pathKeyOf(item.path) === pathKeyOf(cwd))
+      if (workspace === undefined) continue
+      const sessionId = String(root.root.header.id)
+      const attached = workspace.sessionIds ?? []
+      if (attached.includes(sessionId)) continue
+      try {
+        await workspace.attachSession(sessionId as SessionId)
+      } catch (error: unknown) {
+        logger.warn(`dsh-session-cloudsync: 归组 ${sessionId} 到 workspace 失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+
+  /**
    * 读取一个本地会话的最末事件序号；只在 revision/receipt 无法判断方向时调用。
    * @param sessionId - 会话 id。
    * @returns 最末 seq；读取失败时为 undefined。
@@ -932,6 +958,7 @@ export function apply(ctx: Context, config: Config): void {
       await refreshSecrets()
       await refreshBindings()
       const snapshots = await ctx.sessionPersistence.list()
+      await reconcileWorkspaceAttachments(snapshots)
       let remote = await readRemoteSummaries()
       // 兼容没有 parent/origin/depth 摘要字段的旧服务端：对无 workspaceKey、
       // 无父链信息的远端会话补读一次加密头，之后按 headChainHash 缓存。
