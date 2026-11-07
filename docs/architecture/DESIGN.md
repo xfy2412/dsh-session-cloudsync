@@ -128,7 +128,9 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 
 ## 版本策略
 
-只支持 DSH `>=0.2.1-rc.1 <0.2.2-0`。用**特性探测**而非版本比较；缺必需 API 时装载期报错并给出所需版本。不维护旧版本兼容分支。
+只支持 DSH `>=0.2.1-rc.1 <0.3.0-0`。用**特性探测**而非版本比较；缺必需 API 时装载期报错并给出所需版本。不维护旧版本兼容分支。
+
+`0.2.2-rc.1` 已于 2026-11-07 重验（该版把 cordis 从 4.0.5 升到 4.1.0）：插件用到的宿主 API 逐个在 DSH 源码里核对仍在，`pnpm run check` 用 `0.2.2-rc.1` 的包跑通 212 条用例。详见下一节的插件 API 条目。
 
 ## 兼容性边界
 
@@ -138,7 +140,7 @@ DSH 的单写者锁只在一台机器内生效，跨机器不拦。服务端按�
 - **跨代际**（v4 → v5）：旧 DSH 直接拒读（`sessionFormatVersionRefusal`），同步必须按 `formatVersion` 闸门，不把新代际会话推给旧设备；manifest 与会话台账都记录代际；
 - **同代际但 DSH 版本不同**：新补丁若引入旧版不认识的必需事件，旧版读/写会失败；设备台账比较 DSH 版本，默认只向不低于自己的设备推送；
 - **物理格式无关**：压缩参数、JSONL/zstd/未来后端都不影响同步；`cwd` 与 header 走带外元数据；
-- **插件 API**：`appendPluginRecord` 等只在 `>=0.2.1 <0.2.2` 内验证，越过这个小版本要重新验证；官方校验器随 DSH 升级同步升版本并重跑夹具。
+- **插件 API**：`appendPluginRecord` 等与会话/持久化 seam 只在 `>=0.2.1-rc.1 <0.3.0-0` 内验证，越过这个小版本要重新验证；官方校验器随 DSH 升级同步升版本并重跑夹具。`0.2.2-rc.1` 的核对结论（2026-11-07，源码级）：`sessionPersistence.{list,stat,open,create}`、`SessionHandle.{read,append,flush,close}` 与 `header`/`inheritedEventCount`、`ctx.sessions.{get,flush}`、`sessionProjectionCache.{coldSnapshot,cachedSnapshot}`、`connection.fetch.register`（`ConnectionFetchRoute` 仍是 `path/methods/requestBody/fetch`）、`credentials.resolve`（仍返回 `{value,source}`）、`workspaceRegistry.{resolveByPath,create,attachSession}`、`settings.{describe,mutate}`、`ctx.get('dshHomePath')`、`interruptedTurnClosers`、`working-directory/change`、`agent/pre-step` 全部仍在；`validateStoredEvents` 仍拒读**未知且未标 `ignorable`**的事件类型，代际闸门仍由 `sessionFormatVersionRefusal` 承担；`SESSION_FORMAT_VERSION` 仍是 4。
 
 ## 非目标
 
