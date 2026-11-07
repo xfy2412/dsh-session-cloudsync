@@ -1483,7 +1483,7 @@ export async function pullSessionTask<Session>(
       ...workspaceKey === undefined ? {} : { workspaceKey },
     }
   }
-  return pullSession(
+  const report = await pullSession(
     deps,
     fetchImpl,
     base,
@@ -1493,6 +1493,15 @@ export async function pullSessionTask<Session>(
     loaded,
     localExists ? 'none' : 'new',
   )
+  // 任务模式直接调用 pullSession，不像 pullOnce 那样在外层统一收口；
+  // 必须在成功 apply/确认 up-to-date 后清掉 durable pending，否则会话会
+  // 永远停在“正在应用云端写入”。
+  if (report.status === 'pulled' || report.status === 'partial'
+    || report.status === 'up-to-date' || report.status === 'tombstone'
+    || report.status === 'local-ahead') {
+    await deps.afterApply?.(sessionId)
+  }
+  return report
 }
 
 /** 连接测试结果。 */

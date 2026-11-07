@@ -260,26 +260,34 @@ test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply'
       // 单向任务：本地不存在才 attach/warm；本地已存在只读判断，不重复挂载。
       const newTaskStore = fakeStore(undefined)
       const newTaskAttached = []
+      const newTaskApplied = []
       const newTask = await pullSessionTask({
         persistence: newTaskStore,
         sessions,
         config,
         workspacePathOf: () => 'D:/mapped',
         attach: async (id) => { newTaskAttached.push(id) },
+        beforeApply: async (id) => { newTaskApplied.push('begin:' + id) },
+        afterApply: async (id) => { newTaskApplied.push('end:' + id) },
       }, sessionId, false)
       assert.equal(newTask.status, 'pulled')
       assert.deepEqual(newTaskAttached, [sessionId])
+      assert.deepEqual(newTaskApplied, ['begin:' + sessionId, 'end:' + sessionId])
 
       const existingAttached = []
+      const existingApplied = []
       const existingTask = await pullSessionTask({
         persistence: mappedStore,
         sessions,
         config,
         workspacePathOf: () => 'D:/mapped',
         attach: async (id) => { existingAttached.push(id) },
+        beforeApply: async (id) => { existingApplied.push('begin:' + id) },
+        afterApply: async (id) => { existingApplied.push('end:' + id) },
       }, sessionId, true)
       assert.equal(existingTask.status, 'up-to-date')
       assert.deepEqual(existingAttached, [])
+      assert.deepEqual(existingApplied, ['end:' + sessionId])
 
       // 已加载但已经是最新：只读判断后返回 up-to-date，不能因为 live 就兜底
       // local-active 卡住游标。

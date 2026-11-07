@@ -266,7 +266,9 @@ test('应用接线：设置信息不回传 token/passphrase', async () => {
 
 test('应用接线：workspaces 汇总工作区、根会话与子代理计数', async () => {
   const connection = fakeConnection()
+  const home = mkdtempSync(join(tmpdir(), 'session-cloudsync-workspaces-'))
   const { ctx } = fakeContext(connection, {
+    dshHomePath: (suffix) => join(home, suffix),
     sessionPersistence: {
       list: async () => [
         {

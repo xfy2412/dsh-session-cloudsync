@@ -994,18 +994,37 @@ export function apply(ctx: Context, config: Config): void {
         return lastSeq === undefined ? snapshot : { ...snapshot, lastSeq }
       }))
       const selected = new Set(syncSessionIds)
+      // 本机工作区自己的 key 也视为已映射：否则删掉 bindings 后，本地
+      // key 与远端 key 相同的 workspace 会被误判为未绑定。
       const bound = new Set(Object.keys(bindings.bindings))
+      for (const workspace of workspaceRegistry?.list?.() ?? []) {
+        const localKey = workspaceKeyForCwd('', workspace.path)
+        if (localKey !== undefined) bound.add(localKey)
+      }
+      // 拉取范围独立于上传白名单：本机 key 与远端 workspace key 相同的
+      // 本地根也要参与校验/拉取，否则已有本地会话永远不会更新。
+      const pullRoots = new Set<string>()
+      const localTree = buildSessionTree(localSnapshots)
+      for (const root of localTree.roots) {
+        const cwd = root.root.header.cwd?.trim() ?? ''
+        const key = cwd === '' ? undefined : workspaceKeyForCwd('', cwd)
+        if (key !== undefined && bound.has(key)) pullRoots.add(String(root.root.header.id))
+      }
+      const plannedRoots = new Set([...selected, ...pullRoots])
       const plan = planSync({
         local: localSnapshots as unknown as readonly LocalPlanSnapshot[],
         remote,
-        selectedRoots: [...selected],
+        selectedRoots: [...plannedRoots],
         includeSubagents: engineConfig.includeSubagents !== false,
         boundWorkspaceKeys: bound,
         receipts,
       })
+      // 未在 syncSessionIds 里的根只允许 pull，不能因为本机领先而上传。
+      const entries = plan.entries.filter((entry) =>
+        entry.action !== 'push' || selected.has(entry.rootId))
       // up-to-date 不产生任务，但顺手把 receipt 的 revision 补齐，下一轮
       // 不再因为旧 receipt 没有 revision 而重新读取/拉取。
-      for (const entry of plan.entries) {
+      for (const entry of entries) {
         if (entry.action !== 'none' || entry.reason !== 'up-to-date') continue
         if (entry.local === undefined || entry.remote === undefined) continue
         const previous = receipts[entry.sessionId]
@@ -1020,10 +1039,19 @@ export function apply(ctx: Context, config: Config): void {
           checkedAt: Date.now(),
         }
       }
+      // 旧任务路径或崩溃可能留下 pending；如果本地已经和远端一致，
+      // 直接结束这条 pending，避免永久锁住会话。
+      const pending = controller.snapshot().pending
+      if (pending !== null && pending !== undefined) {
+        const pendingEntry = entries.find((entry) => entry.sessionId === pending.sessionId)
+        if (pendingEntry !== undefined && pendingEntry.reason === 'up-to-date' && pendingEntry.action === 'none') {
+          controller.endApply(pending.sessionId)
+        }
+      }
       taskEntries.clear()
-      for (const entry of plan.entries) taskEntries.set(entry.sessionId, entry)
-      const autoEntries = plan.entries.filter((entry) => entry.action !== 'none' || entry.reason === 'blocked')
-      const total = mode === 'manual' ? plan.entries.length : autoEntries.length
+      for (const entry of entries) taskEntries.set(entry.sessionId, entry)
+      const autoEntries = entries.filter((entry) => entry.action !== 'none' || entry.reason === 'blocked')
+      const total = mode === 'manual' ? entries.length : autoEntries.length
       const leaseHeld = deviceLease.snapshot().state === 'held'
       const withLease = (tasks: readonly SyncTaskView[]): SyncTaskView[] => tasks.map((task) =>
         task.direction === 'push' && !leaseHeld && task.state !== 'blocked'
@@ -1038,14 +1066,14 @@ export function apply(ctx: Context, config: Config): void {
       }
 
       // 手动同步：全部选中会话先进入 checking；只分类，不传输。
-      const tasks = plan.entries.map((entry, index) => taskOf(entry, 'checking', index))
+      const tasks = entries.map((entry, index) => taskOf(entry, 'checking', index))
       hooks.setTasks(tasks)
       hooks.setScan(0, total)
       await new Promise<void>((resolve) => { setImmediate(resolve) })
       const scanStarted = Date.now()
       const remaining: SyncTaskView[] = []
-      for (let index = 0; index < plan.entries.length; index += 1) {
-        const entry = plan.entries[index]!
+      for (let index = 0; index < entries.length; index += 1) {
+        const entry = entries[index]!
         if (entry.reason === 'blocked') {
           remaining.push(taskOf(entry, 'blocked', index))
         } else if (entry.action !== 'none') {
@@ -1331,7 +1359,6 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
     for (const [key, label] of Object.entries(workspaceLabels)) {
-      if (bindings.bindings[key] === undefined && localWorkspacePathForKey(key) !== undefined) continue
       const current = remote.get(key)
       const sessionIds = inventory.get(key)
       remote.set(key, {
@@ -1342,7 +1369,6 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
     for (const [key, sessionIds] of inventory) {
-      if (bindings.bindings[key] === undefined && localWorkspacePathForKey(key) !== undefined) continue
       const current = remote.get(key)
       remote.set(key, {
         ...current?.label === undefined ? {} : { label: current.label },
