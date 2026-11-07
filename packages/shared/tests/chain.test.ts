@@ -12,6 +12,7 @@ import {
   commonPrefix,
   diffChains,
   manifestDigest,
+  markerEquivalent,
   stableStringify,
 } from '../src/chain.ts'
 import type { ChainFrame } from '../src/chain.ts'
@@ -149,4 +150,19 @@ test('manifest 组装、校验与摘要', () => {
 test('stableStringify 与键序无关', () => {
   assert.equal(stableStringify({ b: 1, a: { d: 2, c: 3 } }), stableStringify({ a: { c: 3, d: 2 }, b: 1 }))
   assert.notEqual(stableStringify([1, 2]), stableStringify([2, 1]))
+})
+
+test('空标记等价：只有 end-seed 的 time 不同才算等价', () => {
+  const plain = { type: 'session/end-seed', seq: 10, time: 1000, data: {} }
+  const plainLater = { type: 'session/end-seed', seq: 10, time: 2000, data: {} }
+  const inherited = { type: 'session/end-seed', seq: 10, time: 1000, data: { inherited: true } }
+  const inheritedLater = { type: 'session/end-seed', seq: 10, time: 2000, data: { inherited: true } }
+  const turnEnd = { type: 'turn/end', seq: 10, time: 1000, data: {} }
+
+  assert.equal(markerEquivalent(plain, plainLater), true)
+  // 继承标记与普通标记语义不同，不能互换。
+  assert.equal(markerEquivalent(inherited, plainLater), false)
+  assert.equal(markerEquivalent(inherited, inheritedLater), true)
+  // 非标记事件永远不等价。
+  assert.equal(markerEquivalent(turnEnd, { type: 'turn/end', data: {} }), false)
 })

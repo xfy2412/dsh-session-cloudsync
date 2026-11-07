@@ -34,7 +34,7 @@ import {
   MAX_BATCH_BLOBS,
   MAX_BATCH_BODY_BYTES,
 } from '../../shared/src/blob-batch.ts'
-import { stableStringify } from '../../shared/src/chain.ts'
+import { markerEquivalent, stableStringify } from '../../shared/src/chain.ts'
 import { PROTOCOL_VERSION } from '../../shared/src/protocol.ts'
 import { deriveMasterKeyAsync, sha256 } from '../../shared/src/crypto.ts'
 import {
@@ -921,6 +921,12 @@ function localEventRange(
  *
  * 本地和远端都不做 cwd 投影，因此直接按远端批次边界对 raw 事件算哈希。
  * 本地末尾落在远端批次中间时，下载该批次并比较重叠事件，不能跳过校验。
+ *
+ * 唯一的例外是「空标记对撞」：`session/end-seed` 是 DSH 打开/复活会话时补写
+ * 的就绪标记，只携带 `{}` 或 `{ inherited: true }`。两台设备在同一已同步前缀
+ * 之上、离线期间各自打开过同一会话，会在同一个 seq 上各写一条，只有 `time`
+ * 不同。该事件不承载会话内容，按等价处理后继续同步，不再把「两端都打开过」
+ * 判成历史分叉；本机的 marker 位于远端 lastSeq 之内，因而也不会被推上去。
  * @param fetchImpl - fetch 实现。
  * @param base - 服务端基地址。
  * @param token - 设备 token。
@@ -928,6 +934,7 @@ function localEventRange(
  * @param sessionKey - 会话密钥。
  * @param remote - 远端 manifest。
  * @param localEvents - 本地完整事件。
+ * @returns 本次按等价处理的 end-seed seq（升序，去重）。
  */
 async function verifySharedPrefix(
   fetchImpl: typeof fetch,
@@ -937,9 +944,9 @@ async function verifySharedPrefix(
   sessionKey: Buffer,
   remote: RemoteManifest,
   localEvents: readonly SyncEvent[],
-): Promise<void> {
+): Promise<readonly number[]> {
   const localLast = localEvents.length === 0 ? -1 : localEvents[localEvents.length - 1]!.seq
-  if (localLast < 0) return
+  if (localLast < 0) return []
 
   const bySeq = new Map<number, SyncEvent>()
   let scanned = 0
@@ -950,36 +957,65 @@ async function verifySharedPrefix(
     if (scanned % 4096 === 0) await yieldToEventLoop()
   }
 
+  const adopted: number[] = []
   // 第 0 个引用是会话头，不是事件批次。
   let lastYieldAt = performance.now()
   for (const frame of remote.frames.slice(1)) {
     if (frame.seqFrom > localLast) break
-    if (frame.seqTo <= localLast) {
+    const covered = frame.seqTo <= localLast
+    if (covered) {
       const local = localEventRange(bySeq, frame.seqFrom, frame.seqTo)
-      if (eventBatchHash(local) !== frame.chainHash) {
-        throw new Error(`共享前缀批次 ${frame.index} 不一致（diverged）`)
+      if (eventBatchHash(local) === frame.chainHash) {
+        if (performance.now() - lastYieldAt >= 8) {
+          await yieldToEventLoop()
+          lastYieldAt = performance.now()
+        }
+        continue
       }
-      if (performance.now() - lastYieldAt >= 8) {
-        await yieldToEventLoop()
-        lastYieldAt = performance.now()
-      }
-      continue
     }
 
-    // 本地末尾落在这个远端批次中间：下载该批次，比较重叠段。
+    // 哈希不等或本地末尾落在批次中间：下载该批次，逐事件比对（重叠段）。
     const sealed = await downloadBlob(fetchImpl, base, token, frame.blobSha256)
     const remoteEvents = openEventBatch(sealed, frame, sessionId, sessionKey)
+    const localEquivalent: SyncEvent[] = []
     for (const remoteEvent of remoteEvents) {
       if (remoteEvent.seq > localLast) break
       const local = bySeq.get(remoteEvent.seq)
       if (local === undefined) throw new Error(`本地缺少事件 seq ${remoteEvent.seq}（diverged）`)
-      if (stableStringify(local) !== stableStringify(remoteEvent)) {
+      if (stableStringify(local) === stableStringify(remoteEvent)) {
+        localEquivalent.push(local)
+        continue
+      }
+      if (!markerEquivalent(local, remoteEvent)) {
         throw new Error(`共享前缀事件 seq ${remoteEvent.seq} 不一致（diverged）`)
       }
+      adopted.push(remoteEvent.seq)
+      localEquivalent.push(remoteEvent)
+    }
+    if (covered && eventBatchHash(localEquivalent) !== frame.chainHash) {
+      throw new Error(`共享前缀批次 ${frame.index} 不一致（diverged）`)
     }
     await yieldToEventLoop()
     lastYieldAt = performance.now()
   }
+  return adopted
+}
+
+/**
+ * 记录一次「空标记对撞」的自动对齐。
+ * @param deps - 引擎依赖（只需 logger）。
+ * @param sessionId - 会话 id。
+ * @param adopted - 被等价处理的 seq。
+ */
+function reportMarkerAdoption(
+  deps: { readonly logger?: SyncLogger },
+  sessionId: string,
+  adopted: readonly number[],
+): void {
+  if (adopted.length === 0) return
+  deps.logger?.info(
+    `sync: 会话 ${sessionId} 与远端在 seq ${adopted.join(',')} 各写了一条 end-seed 标记（仅 time 不同），已按等价处理`,
+  )
 }
 
 /**
@@ -1060,7 +1096,11 @@ async function syncSession<Session>(
     })
     const verifyStarted = performance.now()
     notifyPerfStart(deps, { direction: 'push', sessionId, stage: 'verify' })
-    await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, events)
+    reportMarkerAdoption(
+      deps,
+      sessionId,
+      await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, events),
+    )
     notifyPerf(deps, {
       direction: 'push',
       sessionId,
@@ -1954,7 +1994,11 @@ async function pullSession<Session>(
       })
       const verifyStarted = performance.now()
       notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'verify' })
-      await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events)
+      reportMarkerAdoption(
+        deps,
+        sessionId,
+        await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote, read.events),
+      )
       notifyPerf(deps, {
         direction: 'pull',
         sessionId,
@@ -2231,7 +2275,11 @@ export async function correctCwd<Session>(
       || headerRef.chainHash !== headerChainHash(headerMetaOf(handle.header, handle.inheritedEventCount))) {
       return { ok: false, status: 'needs-sync', message: '远端会话头与本地不一致，请先重新同步' }
     }
-    await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKeyOf(master, sessionId), current, events)
+    reportMarkerAdoption(
+      deps,
+      sessionId,
+      await verifySharedPrefix(fetchImpl, base, deps.config.token, sessionId, sessionKeyOf(master, sessionId), current, events),
+    )
 
     const lastTime = (events[events.length - 1] as { readonly time?: unknown } | undefined)?.time
     const correction = {

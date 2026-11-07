@@ -203,6 +203,30 @@ export function stableStringify(value: unknown): string {
   return JSON.stringify(canonical(value))
 }
 
+/** 链比较只需要的事件身份：类型与数据（用于判定可互换的空标记）。 */
+export interface MarkerEventLike {
+  readonly seq?: number
+  readonly type?: string
+  readonly data?: unknown
+}
+
+/**
+ * 两端在同一 seq 上是否写着同一种「空标记」。
+ *
+ * `session/end-seed` 是 DSH 打开/复活会话时补写的就绪标记，只携带
+ * `{}` 或 `{ inherited: true }`。两台设备在同一已同步前缀之上、离线期间
+ * 各自打开过同一会话时，会在同一个 seq 上各写一条，唯一差异是 `time`。
+ * 该事件不承载会话内容，链校验可以把它当作等价，避免把「两端都打开过」
+ * 误判成历史分叉。`data` 不同（例如一侧是 fork 继承标记）时不算等价。
+ * @param local - 本地事件。
+ * @param remote - 远端事件。
+ * @returns 两侧都是 data 相同的 `session/end-seed` 时为 true。
+ */
+export function markerEquivalent(local: MarkerEventLike, remote: MarkerEventLike): boolean {
+  return local.type === 'session/end-seed' && remote.type === 'session/end-seed'
+    && stableStringify(local.data) === stableStringify(remote.data)
+}
+
 /**
  * manifest 的内容摘要；不含 `updatedAt`（服务端易变字段）。
  * @param manifest - 待摘要的 manifest。

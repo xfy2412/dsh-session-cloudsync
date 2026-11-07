@@ -502,6 +502,105 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
   }
 })
 
+test('空标记对撞：end-seed 只有 time 不同时按等价处理并继续推送/拉取', async () => {
+  const temp = createTempHome('plugin-end-seed')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'end-seed-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      await holdLease(base, device)
+
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'end seed pass',
+        batchEvents: 50,
+      }
+      const isTailOpen = () => false
+      const makeHeader = (id, createdAt) => ({
+        id,
+        version: 4,
+        createdAt,
+        isSeeded: false,
+        delegationDepth: 0,
+        cwd: localCwd,
+      })
+      const prefix = events(0, 9)
+      const marker = (seq, time, data = {}) => ({ type: 'session/end-seed', seq, time, data })
+
+      // 主用例：远端（设备 B）先在 seq 10 推了自己的 end-seed；
+      // 本机（设备 A）的 seq 10 是另一条 end-seed，其后还有真实事件。
+      const sessionId = 'session-end-seed-test'
+      const header = makeHeader(sessionId, 1300)
+      assert.equal(
+        (await syncOnce({ persistence: fakeStore(header, prefix), sessions, config, isTailOpen })).sessions[0].status,
+        'pushed',
+      )
+      assert.equal(
+        (await syncOnce({ persistence: fakeStore(header, [...prefix, marker(10, 9000)]), sessions, config, isTailOpen })).sessions[0].status,
+        'pushed',
+      )
+
+      const logged = []
+      const aPushed = await syncOnce({
+        persistence: fakeStore(header, [...prefix, marker(10, 5000), ...events(11, 14)]),
+        sessions,
+        config,
+        isTailOpen,
+        logger: { info: (line) => logged.push(line), warn: () => {}, error: () => {} },
+      })
+      assert.equal(aPushed.sessions[0].status, 'pushed')
+      assert.ok(logged.some((line) => line.includes('end-seed') && line.includes('seq 10')), '应记录一次标记对齐')
+      const manifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
+      assert.equal(manifest.body.value.manifest.lastSeq, 14)
+      // header + [0..9] + 远端的 [10..10] + 本机新推的 [11..14]
+      assert.equal(manifest.body.value.manifest.batches.length, 4)
+
+      // 拉取方向：设备 C 的 seq 10 也是自己的 end-seed，应被等价处理并拉到 11..14。
+      const cStore = fakeStore(header, [...prefix, marker(10, 7000)])
+      const pulled = await pullOnce(
+        { persistence: cStore, sessions, config, workspacePathOf: () => localCwd },
+        { revision: 0 },
+      )
+      assert.equal(pulled.sessions[0].status, 'pulled')
+      assert.equal(cStore.sessions.get(sessionId).events.length, 15)
+      assert.equal(cStore.sessions.get(sessionId).events[14].seq, 14)
+
+      // 反例一：data 不同（fork 继承标记 vs 普通标记）不算等价。
+      const inheritedHeader = makeHeader('session-end-seed-inherited', 1400)
+      await syncOnce({ persistence: fakeStore(inheritedHeader, prefix), sessions, config, isTailOpen })
+      await syncOnce({ persistence: fakeStore(inheritedHeader, [...prefix, marker(10, 9000)]), sessions, config, isTailOpen })
+      const inherited = await syncOnce({
+        persistence: fakeStore(inheritedHeader, [...prefix, marker(10, 5000, { inherited: true })]),
+        sessions,
+        config,
+        isTailOpen,
+      })
+      assert.equal(inherited.sessions[0].status, 'error')
+      assert.equal(inherited.sessions[0].kind, 'diverged')
+
+      // 反例二：同一 seq 一侧是标记、一侧是真实事件，仍判分叉。
+      const realHeader = makeHeader('session-end-seed-real', 1500)
+      await syncOnce({ persistence: fakeStore(realHeader, prefix), sessions, config, isTailOpen })
+      await syncOnce({ persistence: fakeStore(realHeader, [...prefix, marker(10, 9000)]), sessions, config, isTailOpen })
+      const real = await syncOnce({
+        persistence: fakeStore(realHeader, [...prefix, { type: 'test/event', seq: 10, time: 5000, data: { text: 'real' } }]),
+        sessions,
+        config,
+        isTailOpen,
+      })
+      assert.equal(real.sessions[0].status, 'error')
+      assert.equal(real.sessions[0].kind, 'diverged')
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
 test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
   const temp = createTempHome('plugin-nonportable')
   try {
