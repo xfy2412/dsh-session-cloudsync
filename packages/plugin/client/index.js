@@ -13,6 +13,7 @@ window.__ModuleLoader__.load({
     var h = React.createElement
     var useCallback = React.useCallback
     var useEffect = React.useEffect
+    var useLayoutEffect = React.useLayoutEffect || React.useEffect
     var useRef = React.useRef
     var useState = React.useState
 
@@ -236,7 +237,12 @@ window.__ModuleLoader__.load({
       '.dssync-bubble.open .dssync-collapse{grid-template-rows:1fr}',
       '.dssync-collapse-in{min-height:0;overflow:hidden;opacity:0;transform:translateY(-4px);transition:opacity .18s,transform .26s}',
       '.dssync-bubble.open .dssync-collapse-in{opacity:1;transform:none}',
-      '.dssync-panel{padding:2px 10px 4px;max-height:250px;overflow:auto}',
+      '.dssync-panel{padding:2px 10px 4px;max-height:250px;overflow-y:auto;overflow-x:hidden}',
+      '.dssync-task-anim{max-height:44px;overflow:hidden}',
+      '.dssync-task-anim.enter{animation:dssync-task-in .22s cubic-bezier(.2,.8,.2,1) both}',
+      '.dssync-task-anim.exit{animation:dssync-task-out .2s cubic-bezier(.4,0,.6,1) both;pointer-events:none}',
+      '@keyframes dssync-task-in{from{max-height:0;opacity:0;transform:translateX(28px)}to{max-height:44px;opacity:1;transform:none}}',
+      '@keyframes dssync-task-out{from{max-height:44px;opacity:1;transform:none}to{max-height:0;opacity:0;transform:translateX(-28px)}}',
       '.dssync-rowline{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:6px;font-size:11.5px}',
       '.dssync-rowline.focus{background:rgba(240,182,74,.08);box-shadow:inset 2px 0 0 rgba(240,182,74,.65)}',
       '.dssync-rowline .name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dssync-muted)}',
@@ -2290,6 +2296,147 @@ window.__ModuleLoader__.load({
 
     /* ---------- 顶部同步气泡 ---------- */
 
+    var TASK_ANIM_MS = 220
+    var TASK_ANIM_MAX = 8
+
+    /**
+     * 任务行进出动画：高度展开/折叠 + 右侧滑入/左侧滑出。
+     * 只动画当前视口附近的少量行，避免一次校验 80 行时刷屏。
+     * @param props - tasks、scan 与单行渲染函数。
+     * @returns 任务行列表。
+     */
+    function AnimatedTaskRows(props) {
+      var tasks = Array.isArray(props.tasks) ? props.tasks : []
+      var scan = props.scan
+      var renderRow = props.renderRow
+      var enteringState = useState([])
+      var entering = enteringState[0]
+      var setEntering = enteringState[1]
+      var exitingState = useState([])
+      var exiting = exitingState[0]
+      var setExiting = exitingState[1]
+      // 初始已存在的任务不做入场动画，只动画后续新增的行。
+      var prevRef = useRef(tasks)
+      var latestRef = useRef(new Map())
+      var enterTimers = useRef(new Map())
+      var exitTimers = useRef(new Map())
+      var aliveRef = useRef(true)
+      var idsKey = tasks.map(function (task) { return String(task.sessionId) }).join('|')
+      var reduceMotion = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      tasks.forEach(function (task) {
+        latestRef.current.set(String(task.sessionId), task)
+      })
+
+      useEffect(function () {
+        aliveRef.current = true
+        return function () {
+          aliveRef.current = false
+          enterTimers.current.forEach(function (timer) { clearTimeout(timer) })
+          exitTimers.current.forEach(function (timer) { clearTimeout(timer) })
+          enterTimers.current.clear()
+          exitTimers.current.clear()
+        }
+      }, [])
+
+      useLayoutEffect(function () {
+        var prev = prevRef.current
+        var prevIds = new Set(prev.map(function (task) { return String(task.sessionId) }))
+        var currentIds = new Set(tasks.map(function (task) { return String(task.sessionId) }))
+        var added = tasks.filter(function (task) { return !prevIds.has(String(task.sessionId)) })
+        var removed = prev.filter(function (task) { return !currentIds.has(String(task.sessionId)) })
+        prevRef.current = tasks
+
+        if (reduceMotion) {
+          enterTimers.current.forEach(function (timer) { clearTimeout(timer) })
+          exitTimers.current.forEach(function (timer) { clearTimeout(timer) })
+          enterTimers.current.clear()
+          exitTimers.current.clear()
+          setEntering(function (current) { return current.length === 0 ? current : [] })
+          setExiting(function (current) { return current.length === 0 ? current : [] })
+          return
+        }
+
+        // 同一会话重新出现时，取消上一轮的退场，不重复挂旧行。
+        currentIds.forEach(function (id) {
+          var timer = exitTimers.current.get(id)
+          if (timer !== undefined) {
+            clearTimeout(timer)
+            exitTimers.current.delete(id)
+          }
+        })
+        removed.forEach(function (task) {
+          var id = String(task.sessionId)
+          var timer = enterTimers.current.get(id)
+          if (timer !== undefined) {
+            clearTimeout(timer)
+            enterTimers.current.delete(id)
+          }
+        })
+        setEntering(function (current) {
+          var next = current.filter(function (id) { return currentIds.has(id) })
+          added.slice(0, TASK_ANIM_MAX).forEach(function (task) {
+            var id = String(task.sessionId)
+            if (next.indexOf(id) < 0) next.push(id)
+          })
+          return next
+        })
+        setExiting(function (current) {
+          var next = current.filter(function (item) { return !currentIds.has(item.sessionId) })
+          removed.slice(0, TASK_ANIM_MAX).forEach(function (task) {
+            var id = String(task.sessionId)
+            if (!next.some(function (item) { return item.sessionId === id })) {
+              next.push({ sessionId: id, task: latestRef.current.get(id) || task })
+            }
+          })
+          return next
+        })
+
+        added.slice(0, TASK_ANIM_MAX).forEach(function (task) {
+          var id = String(task.sessionId)
+          if (enterTimers.current.has(id)) return
+          enterTimers.current.set(id, setTimeout(function () {
+            enterTimers.current.delete(id)
+            if (!aliveRef.current) return
+            setEntering(function (current) {
+              return current.filter(function (item) { return item !== id })
+            })
+          }, TASK_ANIM_MS + 20))
+        })
+        removed.slice(0, TASK_ANIM_MAX).forEach(function (task) {
+          var id = String(task.sessionId)
+          if (exitTimers.current.has(id)) return
+          exitTimers.current.set(id, setTimeout(function () {
+            exitTimers.current.delete(id)
+            if (!aliveRef.current) return
+            setExiting(function (current) {
+              return current.filter(function (item) { return item.sessionId !== id })
+            })
+          }, TASK_ANIM_MS + 20))
+        })
+      }, [idsKey, reduceMotion])
+
+      var enteringIds = new Set(entering)
+      var currentIds = new Set(tasks.map(function (task) { return String(task.sessionId) }))
+      var items = tasks.map(function (task) {
+        var id = String(task.sessionId)
+        return { sessionId: id, task: task, phase: enteringIds.has(id) ? ' enter' : '' }
+      })
+      exiting.forEach(function (item) {
+        if (currentIds.has(item.sessionId)) return
+        items.push({ sessionId: item.sessionId, task: item.task, phase: ' exit', exit: true })
+      })
+      if (items.length === 0) return null
+      return h(React.Fragment, null, items.map(function (item) {
+        return h('div', {
+          className: 'dssync-task-anim' + item.phase,
+          key: (item.exit ? 'exit:' : '') + item.sessionId,
+          'data-session-id': item.sessionId,
+          'aria-hidden': item.exit ? 'true' : undefined,
+        }, renderRow(item.task, scan))
+      }))
+    }
+
     function Bubble(props) {
       var model = props.model
       var state = useModel(model)
@@ -2844,37 +2991,34 @@ window.__ModuleLoader__.load({
           !isBlocked && !isResolved && session.cwdPending ? cwdActions(session.sessionId) : null)
       })
 
-      if (useTasks) {
-        rows = taskList.map(function (task) {
-          var totalEvents = task.totalEvents || 0
-          var doneEvents = task.doneEvents || 0
-          var stageText = stageLabel(task.stage)
-          var tag = task.state === 'checking' ? '校验中'
-            : task.state === 'done' ? '完成'
-              : task.state === 'blocked' ? '分叉'
-                : task.state === 'failed' ? '失败'
-                  : task.state === 'deferred' ? '等待'
-                    : task.state === 'running'
-                      ? (stageText || (task.direction === 'push' ? '上传中' : '下载中'))
-                      : task.direction === 'push' ? '待上传' : '待拉取'
-          var counts = totalEvents > 0 && task.state !== 'checking'
-            ? [(task.direction === 'push' ? '↑ ' : '↓ ') + doneEvents + '/' + totalEvents]
-            : []
-          var stateClass = task.state === 'failed' || task.state === 'blocked' ? 'bad'
-            : task.state === 'done' ? 'ok'
-              : task.state === 'running' || task.state === 'checking' ? 'run'
-                : task.state === 'deferred' ? 'waiting' : ''
-          return h('div', {
-            className: 'dssync-rowline' + (scan && scan.currentSessionId === task.sessionId ? ' focus' : ''),
-            key: task.sessionId,
-            'data-session-id': task.sessionId,
-          },
-            h('span', { className: 'dssync-st ' + stateClass }),
-            h('span', { className: 'name' }, sessionLabel(task.sessionId)),
-            counts.length > 0 ? h('span', { className: 'dssync-events' }, counts.join(' · ')) : null,
-            h('span', { className: 'tag' }, tag),
-            task.error ? h('span', { className: 'dssync-warn', title: task.error }, '!') : null)
-        })
+      function renderTaskRow(task, taskScan) {
+        var totalEvents = task.totalEvents || 0
+        var doneEvents = task.doneEvents || 0
+        var stageText = stageLabel(task.stage)
+        var tag = task.state === 'checking' ? '校验中'
+          : task.state === 'done' ? '完成'
+            : task.state === 'blocked' ? '分叉'
+              : task.state === 'failed' ? '失败'
+                : task.state === 'deferred' ? '等待'
+                  : task.state === 'running'
+                    ? (stageText || (task.direction === 'push' ? '上传中' : '下载中'))
+                    : task.direction === 'push' ? '待上传' : '待拉取'
+        var counts = totalEvents > 0 && task.state !== 'checking'
+          ? [(task.direction === 'push' ? '↑ ' : '↓ ') + doneEvents + '/' + totalEvents]
+          : []
+        var stateClass = task.state === 'failed' || task.state === 'blocked' ? 'bad'
+          : task.state === 'done' ? 'ok'
+            : task.state === 'running' || task.state === 'checking' ? 'run'
+              : task.state === 'deferred' ? 'waiting' : ''
+        return h('div', {
+          className: 'dssync-rowline' + (taskScan && taskScan.currentSessionId === task.sessionId ? ' focus' : ''),
+          'data-session-id': task.sessionId,
+        },
+          h('span', { className: 'dssync-st ' + stateClass }),
+          h('span', { className: 'name' }, sessionLabel(task.sessionId)),
+          counts.length > 0 ? h('span', { className: 'dssync-events' }, counts.join(' · ')) : null,
+          h('span', { className: 'tag' }, tag),
+          task.error ? h('span', { className: 'dssync-warn', title: task.error }, '!') : null)
       }
 
       var head = h('div', {
@@ -2908,11 +3052,11 @@ window.__ModuleLoader__.load({
             ref: panelRef,
             onWheel: pauseFollowOnUserScroll,
             onTouchMove: pauseFollowOnUserScroll,
-          }, rows.length > 0
-            ? rows
-            : h('div', { className: 'dssync-note' }, useTasks
-              ? (running ? '正在扫描…' : '本轮没有需要同步的会话')
-              : '暂无会话记录')),
+          }, useTasks
+            ? h(AnimatedTaskRows, { tasks: taskList, scan: scan, renderRow: renderTaskRow })
+            : rows.length > 0
+              ? rows
+              : h('div', { className: 'dssync-note' }, '暂无会话记录')),
           leaseBlocked ? h('div', { className: 'dssync-error' }, lease.state === 'foreign'
             ? '另一台设备持有全局同步锁；本机只拉取，不上传'
             : '全局同步租约丢失；本机暂停上传并重试') : null,
