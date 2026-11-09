@@ -111,6 +111,7 @@ test('宿主 API：注册 status/perf/config/agreement/events/setup/workspaces/t
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-cloudsync/status', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/session-status', ['GET'], 'buffered'],
     ['/api/session-cloudsync/perf', ['GET'], 'buffered'],
     ['/api/session-cloudsync/config', ['GET'], 'buffered'],
     ['/api/session-cloudsync/agreement', ['GET'], 'buffered'],

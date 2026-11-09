@@ -68,9 +68,37 @@ export type SyncSessionPhase =
   | 'failed'
   | 'skipped'
 
-/** 一个会话在所有方向上的聚合状态。 */
-export interface SyncSessionStatus {
+/**
+ * 单会话同步状态：只读规划得出的方向与差值，供会话状态条使用。
+ *
+ * 与 `SyncDirectionStatus` 不同，它描述“规划看到的当前差异”，
+ * 不依赖是否刚跑过一轮同步。
+ */
+export interface SessionSyncView {
   /** 会话 id。 */
+  readonly sessionId: string
+  /** 所属根会话 id。 */
+  readonly rootId: string
+  /** 在会话树中的深度（0 = 根）。 */
+  readonly depth: number
+  /** 规划动作。 */
+  readonly action: 'none' | 'push' | 'pull' | 'skip'
+  /** 规划原因。 */
+  readonly reason: string
+  /** 本地末事件序号；未知时为 null。 */
+  readonly localLastSeq: number | null
+  /** 远端末事件序号；未知时为 null。 */
+  readonly remoteLastSeq: number | null
+  /** 远端链头哈希；未知时为 null。 */
+  readonly headChainHash: string | null
+  /** 会话格式版本。 */
+  readonly formatVersion: number | null
+  /** 分叉阻塞说明；未阻塞时为 null。 */
+  readonly blocked: string | null
+}
+
+/** 一个会话在所有方向上的聚合状态。 */
+export interface SyncSessionStatus {  /** 会话 id。 */
   readonly sessionId: string
   /** 聚合阶段。 */
   readonly phase: SyncSessionPhase

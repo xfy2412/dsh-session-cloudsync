@@ -952,9 +952,14 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  taskRunner = {
-    async scan(mode, hooks) {
-      refreshConfig()
+  /**
+   * 只读规划：拉远端摘要、本地快照和 receipt，算出每个会话的方向与差值。
+   * 不做传输、不写 receipt；`scan` 与单会话状态查询共用这一份规划。
+   * @param mode - 手动/自动；只影响诊断日志的粒度。
+   * @returns 规划条目、远端摘要与本地快照。
+   */
+  const planRound = async (mode: 'auto' | 'manual') => {
+    refreshConfig()
       await refreshSecrets()
       await refreshBindings()
       const snapshots = await ctx.sessionPersistence.list()
@@ -1095,6 +1100,42 @@ export function apply(ctx: Context, config: Config): void {
           }
         }
       }
+    return { entries, remote, snapshots }
+  }
+
+  /** 单会话状态查询：复用只读规划，同一份结果在 2 秒内复用。 */
+  const SESSION_STATUS_TTL_MS = 2_000
+  let planMemo: { at: number; value: ReturnType<typeof planRound> } | undefined
+  const sessionStatus = async (sessionId: string) => {
+    const now = Date.now()
+    if (planMemo === undefined || now - planMemo.at > SESSION_STATUS_TTL_MS) {
+      const value = planRound('auto')
+      // 规划失败不能在缓存里留一个 rejected promise，否则这 2 秒内每次查询都失败。
+      value.catch(() => {
+        if (planMemo?.value === value) planMemo = undefined
+      })
+      planMemo = { at: now, value }
+    }
+    const round = await planMemo.value
+    const entry = round.entries.find((item) => item.sessionId === sessionId)
+    if (entry === undefined) return undefined
+    return {
+      sessionId: entry.sessionId,
+      rootId: entry.rootId,
+      depth: entry.depth,
+      action: entry.action,
+      reason: entry.reason,
+      localLastSeq: entry.localLastSeq ?? null,
+      remoteLastSeq: entry.remoteLastSeq ?? null,
+      headChainHash: entry.remote?.headChainHash ?? null,
+      formatVersion: entry.remote?.formatVersion ?? entry.local?.header.version ?? null,
+      blocked: entry.reason === 'blocked' ? entry.error ?? '会话被阻塞' : null,
+    }
+  }
+
+  taskRunner = {
+    async scan(mode, hooks) {
+      const { entries, remote, snapshots } = await planRound(mode)
       // up-to-date 不产生任务，但顺手把 receipt 的 revision 补齐，下一轮
       // 不再因为旧 receipt 没有 revision 而重新读取/拉取。
       for (const entry of entries) {
@@ -1519,6 +1560,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const control: SyncControl = {
     status: () => controller.snapshot(),
+    sessionStatus,
     perf: () => perf.snapshot(),
     config: async (): Promise<SyncConfigSnapshot> => {
       const setupInfo = await setup()

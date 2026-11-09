@@ -13,12 +13,14 @@ import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { PerfSnapshot } from './perf.ts'
-import type { SetupInfo, SyncConfigSnapshot, SyncStatus, SyncWorkspaceList } from './status.ts'
+import type { SessionSyncView, SetupInfo, SyncConfigSnapshot, SyncStatus, SyncWorkspaceList } from './status.ts'
 
 /** 宿主注入的控制面。 */
 export interface SyncControl {
   /** 当前状态快照。 */
   status(): SyncStatus
+  /** 单会话同步状态：复用只读规划；会话不在同步范围时返回 undefined。 */
+  sessionStatus(sessionId: string): Promise<SessionSyncView | undefined>
   /** 进程内最近若干次性能采集快照。 */
   perf(): PerfSnapshot
   /** 所有设置/向导/气泡共用的单一快照。 */
@@ -124,6 +126,26 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async () => json({ ok: true, value: control.status() }),
+    },
+    {
+      path: '/api/session-cloudsync/session-status',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const sessionId = new URL(request.url).searchParams.get('id')?.trim() ?? ''
+          if (sessionId === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 id 参数' } }, 400)
+          }
+          return json({ ok: true, value: await control.sessionStatus(sessionId) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
     },
     {
       path: '/api/session-cloudsync/perf',

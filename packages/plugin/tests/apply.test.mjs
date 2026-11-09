@@ -82,6 +82,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
 
   assert.deepEqual(connection.routes.map((item) => item.path), [
     '/api/session-cloudsync/status',
+    '/api/session-cloudsync/session-status',
     '/api/session-cloudsync/perf',
     '/api/session-cloudsync/config',
     '/api/session-cloudsync/agreement',
