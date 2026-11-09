@@ -13,7 +13,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { SyncController, type TaskRunner } from './controller.ts'
+import { SyncController, type SyncRunResult, type TaskRunner } from './controller.ts'
 import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { planSync, type LocalPlanSnapshot, type RemoteSessionSummary, type SyncPlanEntry, type SyncReceipt } from './sync-plan.ts'
 import { prepareReplaceScript } from './replace.ts'
@@ -1106,7 +1106,12 @@ export function apply(ctx: Context, config: Config): void {
   /** 单会话状态查询：复用只读规划，同一份结果在 2 秒内复用。 */
   const SESSION_STATUS_TTL_MS = 2_000
   let planMemo: { at: number; value: ReturnType<typeof planRound> } | undefined
-  const sessionStatus = async (sessionId: string) => {
+  /**
+   * 取单会话的规划条目（共享 2 秒规划缓存）。
+   * @param sessionId - 会话 id。
+   * @returns 规划条目；不在同步范围时为 undefined。
+   */
+  const planEntry = async (sessionId: string) => {
     const now = Date.now()
     if (planMemo === undefined || now - planMemo.at > SESSION_STATUS_TTL_MS) {
       const value = planRound('auto')
@@ -1117,7 +1122,42 @@ export function apply(ctx: Context, config: Config): void {
       planMemo = { at: now, value }
     }
     const round = await planMemo.value
-    const entry = round.entries.find((item) => item.sessionId === sessionId)
+    return round.entries.find((item) => item.sessionId === sessionId)
+  }
+  /**
+   * 单会话定向同步。
+   *
+   * 拉取对正在运行的会话无解（引擎返回 local-active），所以条栏只给推送；
+   * 推送必须持有全局写入租约，否则返回 lease-held 让调用方置灰。
+   * @param sessionId - 目标会话。
+   * @param direction - 方向。
+   * @returns 本轮结果。
+   */
+  const syncSession = async (sessionId: string, direction: 'push' | 'pull'): Promise<SyncRunResult> => {
+    const entry = await planEntry(sessionId)
+    if (entry === undefined) {
+      return { ok: false, code: 'not-in-scope', message: '会话不在同步范围', status: controller.snapshot() }
+    }
+    if (direction === 'push' && !(await deviceLease.ensure())) {
+      return { ok: false, code: 'lease-held', message: '未持有全局同步租约，稍后再试', status: controller.snapshot() }
+    }
+    const base = taskOf(entry, 'queued', 0)
+    const localLast = entry.localLastSeq ?? -1
+    const remoteLast = entry.remoteLastSeq ?? -1
+    const totalEvents = direction === 'push'
+      ? Math.max(0, localLast - remoteLast)
+      : Math.max(0, remoteLast - localLast)
+    const task = { ...base, direction, totalEvents, doneEvents: 0, progress: 0 }
+    taskEntries.set(sessionId, entry)
+    return controller.runTasks([task], { manual: true })
+  }
+  /**
+   * 单会话状态查询。
+   * @param sessionId - 会话 id。
+   * @returns 状态视图；不在同步范围时为 undefined。
+   */
+  const sessionStatus = async (sessionId: string) => {
+    const entry = await planEntry(sessionId)
     if (entry === undefined) return undefined
     return {
       sessionId: entry.sessionId,
@@ -1561,6 +1601,7 @@ export function apply(ctx: Context, config: Config): void {
   const control: SyncControl = {
     status: () => controller.snapshot(),
     sessionStatus,
+    syncSession,
     perf: () => perf.snapshot(),
     config: async (): Promise<SyncConfigSnapshot> => {
       const setupInfo = await setup()

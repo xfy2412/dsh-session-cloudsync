@@ -35,6 +35,8 @@ export interface SyncControl {
   test(serverUrl: string): Promise<SyncTestResult>
   /** 手动触发一轮同步；已在运行时返回 `already-running`。 */
   syncNow(): Promise<SyncRunResult>
+  /** 单会话定向同步；`direction=push` 需要全局写入租约。 */
+  syncSession(sessionId: string, direction: 'push' | 'pull'): Promise<SyncRunResult>
   /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
   cwdDecision(sessionId: string, action: 'fix' | 'skip'): Promise<CwdCorrectionResult>
   /** 分叉会话的人工决定：ignore 不再自动提示；force 解除写入拦截；restore 恢复阻塞。 */
@@ -250,8 +252,20 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
       path: '/api/session-cloudsync/sync',
       methods: ['POST'],
       requestBody: 'buffered',
-      fetch: async () => {
+      fetch: async (request: Request) => {
         try {
+          const text = await request.text()
+          if (text.trim() !== '') {
+            const body = JSON.parse(text) as { readonly sessionId?: unknown; readonly direction?: unknown }
+            const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+            const direction = body.direction === 'push' ? 'push' : body.direction === 'pull' ? 'pull' : ''
+            if (sessionId !== '' || direction !== '') {
+              if (sessionId === '' || direction === '') {
+                return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId 与 direction=push|pull' } }, 400)
+              }
+              return json({ ok: true, value: await control.syncSession(sessionId, direction) })
+            }
+          }
           return json({ ok: true, value: await control.syncNow() })
         } catch (error: unknown) {
           const classified = classifySyncError(error)

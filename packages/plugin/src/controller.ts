@@ -106,7 +106,7 @@ export interface SyncControllerOptions {
 }
 
 /** 没有真正执行时的原因。 */
-export type SyncSkipCode = 'already-running' | 'backoff' | 'unconfigured'
+export type SyncSkipCode = 'already-running' | 'backoff' | 'unconfigured' | 'not-in-scope' | 'lease-held'
 
 /** 同步开始前的完整列表条目。 */
 export interface PlannedSyncSession {
@@ -641,6 +641,119 @@ export class SyncController {
   }
 
   /**
+   * 逐个执行任务表（展示顺序由 ordinal 固定；新拉取的子代理先于父会话创建）。
+   * @param errors - 收集失败项。
+   */
+  private async executeTaskList(
+    errors: Array<{ kind: SyncErrorKind; message: string }>,
+  ): Promise<void> {
+    const runner = this.options.tasks!
+      // 展示顺序由 ordinal 固定；执行时新拉取的子代理先于父会话创建。
+      const execution = [...this.taskViews].sort((left, right) => {
+        const leftNewPull = left.direction === 'pull' && left.reason === 'local-missing'
+        const rightNewPull = right.direction === 'pull' && right.reason === 'local-missing'
+        if (leftNewPull && rightNewPull && left.depth !== right.depth) return right.depth - left.depth
+        return left.ordinal - right.ordinal
+      })
+      for (const task of execution) {
+        if (task.state === 'failed' || task.state === 'deferred' || task.state === 'blocked') continue
+        this.updateTask({ ...task, state: 'running' })
+        try {
+          const result = await runner.execute(task, (patch) => {
+            const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
+            this.updateTask({ ...current, ...patch })
+          })
+          if (result.state === 'done') {
+            // 保留完成结果，直到下一轮 scan 建立新任务表。
+            const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
+            this.updateTask({
+              ...current,
+              state: 'done',
+              stage: 'done',
+              progress: 1,
+              totalEvents: result.totalEvents ?? current.totalEvents,
+              doneEvents: result.doneEvents ?? result.totalEvents ?? current.totalEvents,
+              ...result.totalBytes === undefined ? {} : { totalBytes: result.totalBytes },
+              ...result.doneBytes === undefined ? {} : { doneBytes: result.doneBytes },
+            })
+            continue
+          }
+          const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
+          this.updateTask({
+            ...current,
+            ...result,
+            state: result.state,
+            progress: result.totalEvents === undefined || result.totalEvents <= 0
+              ? 0
+              : Math.min(1, (result.doneEvents ?? 0) / result.totalEvents),
+          })
+          if (result.state === 'failed') {
+            errors.push({ kind: 'unknown', message: result.error ?? `会话 ${task.sessionId} 同步失败` })
+          }
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          errors.push({ kind: classified.kind, message: classified.message })
+          const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
+          this.updateTask({
+            ...current,
+            state: 'failed',
+            stage: 'failed',
+            error: classified.message,
+          })
+          this.options.logger?.warn(`dsh-session-cloudsync: ${task.sessionId} 任务失败（${classified.kind}）：${classified.message}`)
+        }
+      }
+  }
+
+  /**
+   * 执行给定的任务表（单会话推送/拉取等定向操作）。
+   *
+   * 与整轮任务模式共用执行与收尾逻辑，但不做规划：调用方负责先把任务建好。
+   * @param tasks - 已建好的任务视图。
+   * @param options - `manual: true` 表示用户显式触发。
+   * @returns 本轮结果与结束后的状态快照。
+   */
+  async runTasks(tasks: readonly SyncTaskView[], options: { readonly manual?: boolean } = {}): Promise<SyncRunResult> {
+    const now = this.now()
+    if (this.running) return this.skipped('already-running', '同步正在进行')
+    if (this.options.tasks === undefined) return this.skipped('unconfigured', '任务模式不可用')
+    this.running = true
+    this.live = []
+    this.taskViews = [...tasks]
+    this.lastAttempt = now
+    this.runView = {
+      id: this.runView.id + 1,
+      trigger: options.manual === true ? 'manual' : 'auto',
+      state: 'running',
+      mode: 'manual',
+      phase: 'transferring',
+      scan: { checked: tasks.length, total: tasks.length },
+      startedAt: now,
+      finishedAt: null,
+    }
+    this.bump()
+    const errors: Array<{ kind: SyncErrorKind; message: string }> = []
+    await this.executeTaskList(errors)
+    this.running = false
+    this.live = []
+    const finished = this.now()
+    const { phase: _finishedPhase, ...finishedRun } = this.runView
+    this.runView = {
+      ...finishedRun,
+      state: 'finished',
+      finishedAt: finished,
+    }
+    this.bump()
+    if (errors.length > 0) return this.fail(errors, finished)
+    this.retryCount = 0
+    this.nextRetryAt = 0
+    this.lastSuccess = finished
+    this.lastError = undefined
+    this.persistNow()
+    return { ok: true, status: this.snapshot() }
+  }
+
+  /**
    * 执行一轮推送 + 拉取。
    * @param options - `manual: true` 表示用户手动触发，跳过当前退避。
    * @returns 本轮结果与结束后的状态快照。
@@ -779,61 +892,7 @@ export class SyncController {
         },
       }
       this.bump()
-      // 展示顺序由 ordinal 固定；执行时新拉取的子代理先于父会话创建。
-      const execution = [...this.taskViews].sort((left, right) => {
-        const leftNewPull = left.direction === 'pull' && left.reason === 'local-missing'
-        const rightNewPull = right.direction === 'pull' && right.reason === 'local-missing'
-        if (leftNewPull && rightNewPull && left.depth !== right.depth) return right.depth - left.depth
-        return left.ordinal - right.ordinal
-      })
-      for (const task of execution) {
-        if (task.state === 'failed' || task.state === 'deferred' || task.state === 'blocked') continue
-        this.updateTask({ ...task, state: 'running' })
-        try {
-          const result = await runner.execute(task, (patch) => {
-            const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
-            this.updateTask({ ...current, ...patch })
-          })
-          if (result.state === 'done') {
-            // 保留完成结果，直到下一轮 scan 建立新任务表。
-            const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
-            this.updateTask({
-              ...current,
-              state: 'done',
-              stage: 'done',
-              progress: 1,
-              totalEvents: result.totalEvents ?? current.totalEvents,
-              doneEvents: result.doneEvents ?? result.totalEvents ?? current.totalEvents,
-              ...result.totalBytes === undefined ? {} : { totalBytes: result.totalBytes },
-              ...result.doneBytes === undefined ? {} : { doneBytes: result.doneBytes },
-            })
-            continue
-          }
-          const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
-          this.updateTask({
-            ...current,
-            ...result,
-            state: result.state,
-            progress: result.totalEvents === undefined || result.totalEvents <= 0
-              ? 0
-              : Math.min(1, (result.doneEvents ?? 0) / result.totalEvents),
-          })
-          if (result.state === 'failed') {
-            errors.push({ kind: 'unknown', message: result.error ?? `会话 ${task.sessionId} 同步失败` })
-          }
-        } catch (error: unknown) {
-          const classified = classifySyncError(error)
-          errors.push({ kind: classified.kind, message: classified.message })
-          const current = this.taskViews.find((item) => item.sessionId === task.sessionId) ?? task
-          this.updateTask({
-            ...current,
-            state: 'failed',
-            stage: 'failed',
-            error: classified.message,
-          })
-          this.options.logger?.warn(`dsh-session-cloudsync: ${task.sessionId} 任务失败（${classified.kind}）：${classified.message}`)
-        }
-      }
+      await this.executeTaskList(errors)
     } catch (error: unknown) {
       const classified = classifySyncError(error)
       errors.push({ kind: classified.kind, message: classified.message })
