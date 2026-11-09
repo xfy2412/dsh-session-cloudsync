@@ -728,6 +728,7 @@ export class SyncController {
       mode: 'manual',
       phase: 'transferring',
       scan: { checked: tasks.length, total: tasks.length },
+      scope: 'session',
       startedAt: now,
       finishedAt: null,
     }
@@ -859,6 +860,7 @@ export class SyncController {
       mode,
       phase: 'scanning',
       scan: { checked: 0, total: 0 },
+      scope: 'round',
       startedAt: now,
       finishedAt: null,
     }

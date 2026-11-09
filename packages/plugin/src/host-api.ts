@@ -13,7 +13,7 @@ import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { PerfSnapshot } from './perf.ts'
-import type { SessionSyncView, SetupInfo, SyncConfigSnapshot, SyncStatus, SyncWorkspaceList } from './status.ts'
+import type { SessionScopeResult, SessionSyncView, SetupInfo, SyncConfigSnapshot, SyncStatus, SyncWorkspaceList } from './status.ts'
 
 /** 宿主注入的控制面。 */
 export interface SyncControl {
@@ -37,6 +37,8 @@ export interface SyncControl {
   syncNow(): Promise<SyncRunResult>
   /** 单会话定向同步；`direction=push` 需要全局写入租约。 */
   syncSession(sessionId: string, direction: 'push' | 'pull'): Promise<SyncRunResult>
+  /** 单会话上传开关：等价于设置页白名单；未绑定工作区时返回候选。 */
+  sessionScope(sessionId: string, enabled: boolean, choice?: 'create' | string): Promise<SessionScopeResult>
   /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
   cwdDecision(sessionId: string, action: 'fix' | 'skip'): Promise<CwdCorrectionResult>
   /** 分叉会话的人工决定：ignore 不再自动提示；force 解除写入拦截；restore 恢复阻塞。 */
@@ -267,6 +269,34 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             }
           }
           return json({ ok: true, value: await control.syncNow() })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/session-scope',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as {
+            readonly sessionId?: unknown
+            readonly enabled?: unknown
+            readonly choice?: unknown
+          }
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+          if (sessionId === '' || typeof body.enabled !== 'boolean') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId 与 enabled' } }, 400)
+          }
+          const choice = body.choice === 'create'
+            ? 'create'
+            : typeof body.choice === 'string' && body.choice.trim() !== '' ? body.choice.trim() : undefined
+          return json({ ok: true, value: await control.sessionScope(sessionId, body.enabled, choice) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({

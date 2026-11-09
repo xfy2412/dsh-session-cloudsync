@@ -42,7 +42,7 @@ import { readPullJournal, writePlanDiagnostics, writePullJournal, STATE_VERSION,
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
 import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
 import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
-import type { SetupInfo, SyncConfigSnapshot, SyncSessionCandidate, SyncTaskView, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
+import type { SessionScopeResult, SetupInfo, SyncConfigSnapshot, SyncSessionCandidate, SyncTaskView, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
 export const name = 'dsh-session-cloudsync'
@@ -1159,17 +1159,44 @@ export function apply(ctx: Context, config: Config): void {
   const sessionStatus = async (sessionId: string) => {
     const entry = await planEntry(sessionId)
     if (entry === undefined) return undefined
+    // 会话正在跑时，磁盘/回执里的末序号是滞后的；live 对象里的内存日志才是
+    // 实时值（`ownEvents()` 是 Session 的公开方法，不触发读盘）。
+    let liveLast: number | undefined
+    let live = false
+    let tailOpen = false
+    try {
+      const session = ctx.sessions.get(entry.sessionId as SessionId) as unknown as
+        { ownEvents?: () => readonly SessionEvent[] } | undefined
+      if (session !== undefined) {
+        live = true
+        const events = typeof session.ownEvents === 'function' ? session.ownEvents() : undefined
+        if (events !== undefined) {
+          if (events.length > 0) liveLast = events[events.length - 1]!.seq
+          // 尾未闭合 = 正在生成/工具执行中，推送只能到安全边界。
+          tailOpen = interruptedTurnClosers(events).length > 0
+        }
+      }
+    } catch {
+      // 读不到 live 尾巴就退回规划值。
+    }
+    const plannedLocal = entry.localLastSeq ?? null
+    const localLastSeq = liveLast !== undefined && (plannedLocal === null || liveLast > plannedLocal)
+      ? liveLast
+      : plannedLocal
     return {
       sessionId: entry.sessionId,
       rootId: entry.rootId,
       depth: entry.depth,
       action: entry.action,
       reason: entry.reason,
-      localLastSeq: entry.localLastSeq ?? null,
+      localLastSeq,
       remoteLastSeq: entry.remoteLastSeq ?? null,
       headChainHash: entry.remote?.headChainHash ?? null,
       formatVersion: entry.remote?.formatVersion ?? entry.local?.header.version ?? null,
       blocked: entry.reason === 'blocked' ? entry.error ?? '会话被阻塞' : null,
+      upload: syncSessionIds.includes(entry.rootId),
+      live,
+      tailOpen,
     }
   }
 
@@ -1598,10 +1625,120 @@ export function apply(ctx: Context, config: Config): void {
     return result
   }
 
+  /**
+   * 改设置页同一份上传白名单；设置不可写时返回 false。
+   * @param sessionId - 目标根会话。
+   * @param enabled - 加入/移除。
+   * @returns 是否写入成功。
+   */
+  const writeUploadList = async (sessionId: string, enabled: boolean): Promise<boolean> => {
+    const settings = settingsService()
+    if (settings === undefined || settings.writable === false) return false
+    let lastError: unknown
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const descriptor = settings.describe({ redactSecrets: true }).find((entry) => {
+          if (entry.ns.includes('session-cloudsync')) return true
+          const value = entry.value
+          return value !== null && typeof value === 'object'
+            && Array.isArray((value as Record<string, unknown>)['syncSessionIds'])
+            && typeof (value as Record<string, unknown>)['serverUrl'] === 'string'
+        })
+        if (descriptor === undefined) return false
+        const rawValue = descriptor.value
+        if (rawValue === null || typeof rawValue !== 'object') return false
+        const raw = rawValue as Record<string, unknown>
+        const current = Array.isArray(raw['syncSessionIds'])
+          ? raw['syncSessionIds'].filter((entry): entry is string => typeof entry === 'string')
+          : []
+        const next = enabled
+          ? [...new Set([...current, sessionId])]
+          : current.filter((entry) => entry !== sessionId)
+        if (next.length === current.length && current.includes(sessionId) === enabled) {
+          refreshConfig()
+          return true
+        }
+        await settings.mutate(descriptor.ns, [{
+          op: 'set',
+          path: ['syncSessionIds'],
+          value: next,
+        }], descriptor.revision)
+        refreshConfig()
+        return true
+      } catch (error: unknown) {
+        lastError = error
+        const message = error instanceof Error ? error.message : String(error)
+        if (!/changed since it was read/u.test(message)) break
+      }
+    }
+    logger.warn(`dsh-session-cloudsync: 写入上传白名单失败：${lastError instanceof Error ? lastError.message : String(lastError)}`)
+    return false
+  }
+
+  /**
+   * 单会话「上传本会话」开关。
+   *
+   * 等价于改设置页的白名单；打开前同步检查工作区绑定，未绑定时返回候选
+   * 让前端弹窗——不带 `choice` 时什么都不写。
+   * @param sessionId - 目标会话。
+   * @param enabled - 打开/关闭。
+   * @param choice - `create` 按本地路径新建，或绑定到已有 workspaceKey。
+   * @returns 结果。
+   */
+  const sessionScope = async (
+    sessionId: string,
+    enabled: boolean,
+    choice?: 'create' | string,
+  ): Promise<SessionScopeResult> => {
+    refreshConfig()
+    await refreshBindings()
+    if (!enabled) {
+      return await writeUploadList(sessionId, false)
+        ? { status: 'done', enabled: false }
+        : { status: 'error', message: '设置不可写（缺少 dsh-settings）' }
+    }
+    const snapshot = await ctx.sessionPersistence.stat(sessionId as SessionId)
+    const cwd = snapshot?.header.cwd?.trim() ?? ''
+    if (cwd === '') return { status: 'unmapped', message: '会话没有可用的 cwd' }
+    if (workspaceRegistry === undefined) return { status: 'error', message: 'workspaceRegistry 不可用' }
+    const workspace = await workspaceRegistry.resolveByPath(cwd)
+    if (workspace === undefined) return { status: 'unmapped', message: '本地工作区不存在' }
+    const localKey = workspaceKeyForCwd('', workspace.path)
+    if (localKey === undefined) return { status: 'unmapped', message: '工作区路径无法映射成 key' }
+    const bound = bindings.bindings[localKey] !== undefined
+      || localWorkspacePathForKey(localKey) !== undefined
+    if (!bound && choice === undefined) {
+      const list = await workspaces()
+      const candidates = list.remoteWorkspaces.map((entry) => ({
+        key: entry.workspaceKey ?? '',
+        label: entry.label ?? '(未命名)',
+        sessions: entry.sessions,
+      })).filter((entry) => entry.key !== '')
+      return {
+        status: 'needs-binding',
+        key: localKey,
+        path: workspace.path,
+        willCreateNew: candidates.length === 0,
+        candidates,
+      }
+    }
+    if (bindingsDir === undefined) return { status: 'error', message: '找不到绑定目录' }
+    const bindKey = bound ? localKey : choice === 'create' ? localKey : choice!
+    if (!bound) {
+      await bindWorkspaceFile(bindingsDir, bindKey, workspace.path, workspace.title)
+      await refreshBindings()
+      labelsIdentity = undefined
+    }
+    return await writeUploadList(sessionId, true)
+      ? { status: 'done', enabled: true, key: bindKey }
+      : { status: 'error', message: '设置不可写（缺少 dsh-settings）' }
+  }
+
   const control: SyncControl = {
     status: () => controller.snapshot(),
     sessionStatus,
     syncSession,
+    sessionScope,
     perf: () => perf.snapshot(),
     config: async (): Promise<SyncConfigSnapshot> => {
       const setupInfo = await setup()

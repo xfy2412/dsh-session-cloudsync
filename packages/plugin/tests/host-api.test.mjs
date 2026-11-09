@@ -120,6 +120,7 @@ test('宿主 API：注册 status/perf/config/agreement/events/setup/workspaces/t
     ['/api/session-cloudsync/workspaces', ['GET'], 'buffered'],
     ['/api/session-cloudsync/test', ['POST'], 'buffered'],
     ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/session-scope', ['POST'], 'buffered'],
     ['/api/session-cloudsync/cwd', ['POST'], 'buffered'],
     ['/api/session-cloudsync/blocked', ['POST'], 'buffered'],
     ['/api/session-cloudsync/replace', ['POST'], 'buffered'],

@@ -70,6 +70,7 @@ window.__ModuleLoader__.load({
       '.dssync-note{color:var(--dssync-faint);font-size:12px}',
       '.dssync-note.warn{color:var(--dsw-alias-state-warn-primary,#f0b64a)}',
       '.dssync-note.bad{color:var(--dsw-alias-state-error-primary,#ffb1b1)}',
+      '.dssync-note.dssync-idle{font-style:italic;opacity:.82;letter-spacing:.01em}',
       '.dssync-perf-pre{margin:0;padding:9px 10px;max-height:180px;overflow:auto;border:1px solid var(--dssync-line);border-radius:8px;background:rgba(127,127,127,.07);color:var(--dssync-muted);font:10.5px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}',
       '.dssync-wslist{display:flex;flex-direction:column;gap:7px}',
       '.dssync-bindlist,.dssync-maplist{display:flex;flex-direction:column;gap:7px;margin-top:8px}',
@@ -152,6 +153,7 @@ window.__ModuleLoader__.load({
       '.dssync-wizard{width:min(680px,100%);max-height:calc(100vh - 56px);overflow:auto;scrollbar-gutter:stable;border:1px solid var(--dssync-line-strong);border-radius:18px;background:var(--dsw-alias-bg-layer-1,#1d1d1f);box-shadow:0 28px 80px rgba(0,0,0,.5);padding:26px 28px 22px;animation:dssync-wizard-in .32s cubic-bezier(.16,1,.3,1) both}',
       '.dssync-wizard-body{display:flex;flex-direction:column;gap:14px;min-height:150px;animation:dssync-step-next .24s cubic-bezier(.16,1,.3,1) both}',
       '.dssync-step-back{animation-name:dssync-step-back}',
+      '@keyframes dssync-pulse{0%,100%{opacity:1}50%{opacity:.3}}',
       '@keyframes dssync-overlay-in{from{opacity:0}to{opacity:1}}',
       '@keyframes dssync-wizard-in{from{opacity:0;transform:translateY(-14px) scale(.97)}to{opacity:1;transform:none}}',
       '@keyframes dssync-step-next{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:none}}',
@@ -2426,7 +2428,8 @@ window.__ModuleLoader__.load({
         if (currentIds.has(item.sessionId)) return
         items.push({ sessionId: item.sessionId, task: item.task, phase: ' exit', exit: true })
       })
-      if (items.length === 0) return null
+      // 空态交给调用方渲染：组件保持挂载，退场动画才不会被整块替换打断。
+      if (items.length === 0) return props.empty === undefined ? null : props.empty
       return h(React.Fragment, null, items.map(function (item) {
         return h('div', {
           className: 'dssync-task-anim' + item.phase,
@@ -2435,6 +2438,44 @@ window.__ModuleLoader__.load({
           'aria-hidden': item.exit ? 'true' : undefined,
         }, renderRow(item.task, scan))
       }))
+    }
+
+    // —— 任务列表为空时的句子 ——
+    var SYNC_IDLE_LINES = [
+      '所有会话都在同一页上。',
+      '没有待办，云端很安静。',
+      '两边末序号一样长，像对过表。',
+      '链哈希对齐，一个字节都不差。',
+      '这一刻没有要搬运的东西。',
+      '心跳正常，租约在手，无事发生。',
+      '加密后的原文，只有你我看得见。',
+      '会话在生长，同步在等它停下来。',
+      '先歇一会儿，有变化我会记账。',
+      '远端在点头，本地也在点头。',
+      '别点啦，再点也不会突然多出新事件来的。',
+      '真的没有更多要同步的啦。',
+      '云在飘。没有别的事。',
+    ]
+
+    /**
+     * 挑一句空闲文案：日期彩蛋优先，再按"每次变空"递增轮换。
+     * @param now - 当前时间。
+     * @param tick - 变空次数（每空一次 +1）。
+     * @param lastSuccess - 上次成功同步时间；null 表示从未成功。
+     * @returns 文案。
+     */
+    function syncIdleLine(now, tick, lastSuccess) {
+      var month = now.getMonth() + 1
+      var day = now.getDate()
+      if (month === 4 && day === 1) return '今天同步会倒着走。愚人节快乐。'
+      if (month === 2 && day === 14) return '本地和远端今天终于对齐了。'
+      if (month === 10 && day === 24) return '1024 个事件，一个不多。程序员节快乐。'
+      if (now.getDay() === 5 && day === 13) return '链哈希今天格外可靠。'
+      if (now.getHours() === 0 && now.getMinutes() < 5) return '零点刚过，昨天的尾巴收好了。'
+      if (lastSuccess === null || lastSuccess === undefined) return '第一次同步之前，先聊两句？'
+      if (now.getTime() - lastSuccess > 24 * 3600 * 1000) return '一整天没动过，我替你看着。'
+      var index = Math.abs(Math.floor(tick)) % SYNC_IDLE_LINES.length
+      return SYNC_IDLE_LINES[index]
     }
 
     function Bubble(props) {
@@ -2475,8 +2516,23 @@ window.__ModuleLoader__.load({
       var hoveringRef = useRef(false)
       var focusWithinRef = useRef(false)
       var activeRef = useRef(false)
+      // 自动收回时长（ms）；0 / 负数 = 不自动收回。
+      var autoCollapseRef = useRef(0)
       var laneRunRef = useRef(null)
       var laneHighRef = useRef({})
+      var idleTickState = useState(0)
+      var idleTick = idleTickState[0]
+      var setIdleTick = idleTickState[1]
+      var wasEmptyRef = useRef(false)
+      // 只在"变空"这一刻换一句；一直空着不刷。必须放在任何早退之前。
+      useEffect(function () {
+        var tasks = statusTasks(status)
+        var empty = tasks !== null
+          ? tasks.length === 0
+          : !(status && Array.isArray(status.sessions) && status.sessions.length > 0)
+        if (empty && !wasEmptyRef.current) setIdleTick(function (value) { return value + 1 })
+        wasEmptyRef.current = empty
+      }, [status])
 
       useEffect(function () { pinnedRef.current = pinned }, [pinned])
       activeRef.current = !!(status && (status.running || status.pending !== null))
@@ -2490,10 +2546,12 @@ window.__ModuleLoader__.load({
       useEffect(function () {
         if (status && setup === null) return
         if (setup && !setup.configured && !dismissed()) return
+        // 单会话定向操作由底栏展示，不自动弹气泡。
+        var single = !!(status && status.run && status.run.scope === 'session')
         if (status && (status.running || status.pending !== null || status.lastError !== null) && !visible) {
-          setVisible(true)
+          expand(false, single ? 3000 : 0)
         }
-      }, [status && status.running, status && status.pending, status && status.lastError, setup && setup.configured])
+      }, [status && status.running, status && status.pending, status && status.lastError, setup && setup.configured, status && status.run && status.run.scope])
 
       useEffect(function () {
         function onVisibility() {
@@ -2512,14 +2570,11 @@ window.__ModuleLoader__.load({
         }
         if (!was || activeRef.current || !visible || pinned) return
         // 完成结果保留到下一轮任务进来；不要 3 秒后把结果一起隐藏。
-        if (status && status.run && Array.isArray(status.run.tasks) && status.run.tasks.length > 0) return
+        // 单会话定向操作不保留结果面板，跑完照常收起。
+        var single = !!(status && status.run && status.run.scope === 'session')
+        if (!single && status && status.run && Array.isArray(status.run.tasks) && status.run.tasks.length > 0) return
         if (status && status.lastError !== null && status.lastError !== undefined) return
-        hideTimer.current = setTimeout(function () {
-          hideTimer.current = null
-          if (!visible || activeRef.current || pinnedRef.current || hoveringRef.current || focusWithinRef.current) return
-          setVisible(false)
-          setOpen(false)
-        }, 3000)
+        scheduleAutoCollapse()
       }, [status && status.running, status && status.pending, status && status.lastError, visible, pinned])
 
       useEffect(function () {
@@ -2756,8 +2811,34 @@ window.__ModuleLoader__.load({
         }, 5000)
       }
 
-      function expand(pin) {
+      /**
+       * 按当前时长安排一次自动收回；仍在跑或被占用时稍后重试。
+       */
+      function scheduleAutoCollapse() {
+        clearHide()
+        var delay = autoCollapseRef.current
+        if (!(delay > 0) || !visible) return
+        hideTimer.current = setTimeout(function () {
+          hideTimer.current = null
+          if (!visible) return
+          if (pinnedRef.current) return
+          if (activeRef.current || hoveringRef.current || focusWithinRef.current) {
+            scheduleAutoCollapse()
+            return
+          }
+          setVisible(false)
+          setOpen(false)
+        }, delay)
+      }
+
+      /**
+       * 展开气泡。
+       * @param pin - 是否钉住（用户主动操作）。
+       * @param autoCollapseMs - 自动收回时长；0 / 负数表示不自动收回。
+       */
+      function expand(pin, autoCollapseMs) {
         touched.current = true
+        autoCollapseRef.current = typeof autoCollapseMs === 'number' ? autoCollapseMs : 0
         if (pin !== false) {
           pinnedRef.current = true
           setPinned(true)
@@ -2765,6 +2846,7 @@ window.__ModuleLoader__.load({
         clearHide()
         clearBlur()
         setVisible(true)
+        scheduleAutoCollapse()
       }
 
       function collapse() {
@@ -3053,10 +3135,15 @@ window.__ModuleLoader__.load({
             onWheel: pauseFollowOnUserScroll,
             onTouchMove: pauseFollowOnUserScroll,
           }, useTasks
-            ? h(AnimatedTaskRows, { tasks: taskList, scan: scan, renderRow: renderTaskRow })
+            ? h(AnimatedTaskRows, {
+              tasks: taskList, scan: scan, renderRow: renderTaskRow,
+              empty: taskList.length === 0
+                ? h('div', { className: 'dssync-note dssync-idle' }, syncIdleLine(new Date(), idleTick, status ? status.lastSuccess : null))
+                : undefined,
+            })
             : rows.length > 0
               ? rows
-              : h('div', { className: 'dssync-note' }, '暂无会话记录')),
+              : h('div', { className: 'dssync-note dssync-idle' }, syncIdleLine(new Date(), idleTick, status ? status.lastSuccess : null))),
           leaseBlocked ? h('div', { className: 'dssync-error' }, lease.state === 'foreign'
             ? '另一台设备持有全局同步锁；本机只拉取，不上传'
             : '全局同步租约丢失；本机暂停上传并重试') : null,
@@ -3117,6 +3204,459 @@ window.__ModuleLoader__.load({
         return function () { props.setBlock(sessionId, null) }
       }, [sessionId, reason])
       return null
+    }
+
+    // —— 会话同步状态条（shell.bottom）——
+    // 底栏是 root 作用域拿不到会话，所以由 dock（会话作用域）发布当前会话 id。
+    var activeSessionId = ''
+    var activeSessionListeners = []
+
+    /** 发布当前会话 id，通知所有订阅者。 */
+    function publishActiveSession(next) {
+      var value = typeof next === 'string' ? next : ''
+      if (value === activeSessionId) return
+      activeSessionId = value
+      activeSessionListeners.forEach(function (listener) { listener(value) })
+    }
+
+    /** 订阅当前会话 id。 */
+    function useActiveSession() {
+      var pair = React.useState(activeSessionId)
+      React.useEffect(function () {
+        function listener(value) { pair[1](value) }
+        activeSessionListeners.push(listener)
+        listener(activeSessionId)
+        return function () {
+          var at = activeSessionListeners.indexOf(listener)
+          if (at >= 0) activeSessionListeners.splice(at, 1)
+        }
+      }, [])
+      return pair[0]
+    }
+
+    /** 不可见组件：把当前会话 id 发布给底栏。 */
+    function SessionSyncTracker(props) {
+      var session = props.session
+      var sessionId = session && session.sessionId ? String(session.sessionId) : ''
+      React.useEffect(function () {
+        publishActiveSession(sessionId)
+        return function () { publishActiveSession('') }
+      }, [sessionId])
+      return null
+    }
+
+    var SYNC_BAR_STYLE = {
+      bar: {
+        height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px',
+        padding: '0 12px', borderTop: '1px solid var(--dsw-alias-border-l3, rgba(127,127,127,.28))',
+        background: 'var(--dsw-alias-bg-layer-1, #17171c)',
+        color: 'var(--dsw-alias-label-secondary, #c3c7cf)',
+        font: '12px/1 ui-sans-serif, system-ui, sans-serif', whiteSpace: 'nowrap', overflow: 'hidden',
+      },
+      dot: { width: '7px', height: '7px', borderRadius: '4px', flex: '0 0 auto' },
+      label: { fontWeight: 600, color: 'var(--dsw-alias-label-primary, #e6e8ec)' },
+      id: { opacity: 0.45, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+      nums: {
+        display: 'flex', flexDirection: 'column', gap: '1px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '10.5px', lineHeight: 1.15, opacity: 0.8,
+      },
+      chip: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '11px', padding: '0 6px', borderRadius: '4px' },
+      button: { height: '22px', padding: '0 9px', borderRadius: '6px', cursor: 'pointer', font: '11px/1 ui-sans-serif, system-ui', border: '1px solid transparent' },
+      primary: { background: 'var(--dsw-alias-interactive-bg-accent, #3d6ff0)', color: '#fff' },
+      disabled: { background: 'rgba(127,127,127,.14)', color: 'inherit', opacity: 0.45, cursor: 'default' },
+    }
+
+    /**
+     * 双细条：绿色是共同前缀，尾段是差值（本地领先橙、远端领先蓝）。
+     * @param localLast - 本地末序号。
+     * @param remoteLast - 远端末序号。
+     * @returns 元素。
+     */
+    function syncMeterRows(localLast, remoteLast) {
+      var diff = localLast - remoteLast
+      var deltaPx = diff === 0
+        ? 0
+        : Math.max(6, Math.round((Math.abs(diff) / Math.max(localLast, remoteLast, 1)) * 100))
+      var green = { height: '3px', borderRadius: '2px', background: '#3fb950', flex: '1 1 auto' }
+      function tip(color) {
+        return h('span', { style: { height: '3px', borderRadius: '2px', background: color, flex: '0 0 ' + deltaPx + 'px' } })
+      }
+      function row(key, color) {
+        return h('span', { key: key, style: { display: 'flex', gap: '2px', width: '100px' } },
+          h('span', { style: green }),
+          diff > 0 && key === 'local' ? tip('#d29922') : null,
+          diff < 0 && key === 'remote' ? tip('#58a6ff') : null)
+      }
+      return h('span', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } }, row('local'), row('remote'))
+    }
+
+    /**
+     * 会话级同步状态条：跟随当前会话，右对齐贴在 shell.bottom。
+     * @param props - 槽位属性（含 model）。
+     */
+    function SessionSyncBar(props) {
+      var state = useModel(props.model)
+      var sessionId = useActiveSession()
+      var viewPair = React.useState(null)
+      var view = viewPair[0]
+      var setView = viewPair[1]
+      var busyPair = React.useState(false)
+      var busy = busyPair[0]
+      var setBusy = busyPair[1]
+      var tickPair = React.useState(0)
+      var tick = tickPair[0]
+      var setTick = tickPair[1]
+      var dialogPair = React.useState(null)
+      var dialog = dialogPair[0]
+      var setDialog = dialogPair[1]
+      var collapsedPair = React.useState(function () {
+        try { return localStorage.getItem('dssync.bar.collapsed') === '1' } catch (error) { return false }
+      })
+      var collapsed = collapsedPair[0]
+      var setCollapsed = collapsedPair[1]
+      var pushingRef = React.useRef(false)
+      var detailPair = React.useState(false)
+      var showDetail = detailPair[0]
+      var setShowDetail = detailPair[1]
+
+      /** 收起/展开底栏，记住选择。 */
+      function toggleCollapsed() {
+        try { localStorage.setItem('dssync.bar.collapsed', collapsed ? '0' : '1') } catch (error) { /* 忽略 */ }
+        setCollapsed(!collapsed)
+      }
+
+      React.useEffect(function () {
+        if (sessionId === '') {
+          setView(null)
+          return undefined
+        }
+        var cancelled = false
+        function load() {
+          fetchJson('/session-status?id=' + encodeURIComponent(sessionId)).then(function (value) {
+            if (!cancelled) setView(value || null)
+          }, function () {
+            if (!cancelled) setView(null)
+          })
+        }
+        load()
+        // 单会话状态很便宜（宿主侧 2 秒缓存），轮询比多开一条 SSE 简单。
+        var timer = setInterval(load, 2000)
+        return function () {
+          cancelled = true
+          clearInterval(timer)
+        }
+      }, [sessionId, tick])
+
+      /** 重新拉一次状态（动作完成后）。 */
+      function reload() { setTick(tick + 1) }
+
+      /**
+       * 切换「上传本会话」；未绑定工作区时后端返回 needs-binding 交给弹窗。
+       * @param choice - 绑定的 workspaceKey，或 'create' 按本地路径新建。
+       */
+      function scope(choice) {
+        if (busy) return
+        var enabled = !(view && view.upload === true)
+        setBusy(true)
+        var body = { sessionId: sessionId, enabled: enabled }
+        if (choice !== undefined) body.choice = choice
+        fetchJson('/session-scope', { method: 'POST', body: JSON.stringify(body) }).then(function (result) {
+          setBusy(false)
+          if (result && result.status === 'needs-binding') {
+            setDialog(result)
+            return
+          }
+          setDialog(result && result.status === 'error' ? result : null)
+          reload()
+        }, function (error) {
+          setBusy(false)
+          setDialog({ status: 'error', message: error && error.message ? String(error.message) : '写入失败' })
+        })
+      }
+
+      /**
+       * 「上传本会话」开关；未纳入同步时也要能打开，所以两个分支共用。
+       * @param upload - 当前是否在白名单里。
+       */
+      function scopeSwitch(upload) {
+        return h('span', {
+          className: 'dssync-bar-scope',
+          style: {
+            display: 'flex', alignItems: 'center', gap: '7px', paddingLeft: '10px',
+            borderLeft: '1px solid rgba(127,127,127,.22)', cursor: 'pointer',
+          },
+          onClick: function () { scope(undefined) },
+          title: '上传本会话（等价于设置页的会话列表）',
+        },
+        h('span', { style: { fontSize: '11px', opacity: 0.7 } }, '上传本会话'),
+        h('span', {
+          style: {
+            position: 'relative', width: '30px', height: '16px', borderRadius: '9px',
+            background: upload ? '#3d6ff0' : 'rgba(127,127,127,.35)',
+            transition: 'background .15s', flex: '0 0 auto',
+          },
+        }, h('span', {
+          style: {
+            position: 'absolute', top: '2px', left: upload ? '16px' : '2px',
+            width: '12px', height: '12px', borderRadius: '6px', background: '#fff',
+            transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.4)',
+          },
+        })))
+      }
+
+      // 官方 SSE（/status）是实时的：本轮任务的 doneEvents 直接覆盖轮询结果。
+      // 起点在任务首次出现时记一次，避免把上一次轮询的滞后值当成真实起点。
+      var runView = state.status && state.status.run ? state.status.run : null
+      var runId = runView ? runView.id : 0
+      var liveTask = sessionId === '' ? null : taskOf(state.status, sessionId)
+      var baselineRef = React.useRef(null)
+      React.useEffect(function () {
+        if (sessionId === '') {
+          baselineRef.current = null
+          return
+        }
+        if (view === null || liveTask === null) return
+        // 新页面挂载时模型里可能已经带着上一轮的完成任务：它没有可用起点，别记。
+        if (liveTask.state === 'done') return
+        var current = baselineRef.current
+        if (current === null || current.runId !== runId || current.sessionId !== sessionId) {
+          baselineRef.current = {
+            runId: runId,
+            sessionId: sessionId,
+            local: typeof view.localLastSeq === 'number' ? view.localLastSeq : -1,
+            remote: typeof view.remoteLastSeq === 'number' ? view.remoteLastSeq : -1,
+          }
+        }
+      }, [runId, sessionId, liveTask === null, view === null])
+
+      if (sessionId === '') return null
+      var task = liveTask
+      var running = task !== null && task.state !== 'done' && task.state !== 'failed'
+        && task.state !== 'deferred' && task.state !== 'blocked'
+      var leaseState = state.status && state.status.deviceLease ? state.status.deviceLease.state : null
+      // 没有租约时推送会被宿主拒绝；这里提前置灰，别让用户白点。
+      var leaseHeld = leaseState === null || leaseState === 'held'
+      if (collapsed) {
+        var collapsedAligned = view !== null && typeof view.localLastSeq === 'number'
+          && typeof view.remoteLastSeq === 'number' && view.localLastSeq === view.remoteLastSeq
+        return h('div', { className: 'dssync-bar', style: Object.assign({}, SYNC_BAR_STYLE.bar, { height: '18px', fontSize: '11px', gap: '6px' }) },
+          h('span', { style: { cursor: 'pointer', opacity: 0.7 }, onClick: toggleCollapsed, title: '展开同步状态条' }, '▸'),
+          h('span', {
+            style: Object.assign({}, SYNC_BAR_STYLE.dot, {
+              background: view === null
+                ? '#8a8f98'
+                : collapsedAligned
+                  ? '#3fb950'
+                  : (typeof view.localLastSeq === 'number' && typeof view.remoteLastSeq === 'number' && view.localLastSeq < view.remoteLastSeq)
+                    ? '#58a6ff'
+                    : '#d29922',
+            }, running ? { animation: 'dssync-pulse 1.1s ease-in-out infinite' } : {}),
+          }),
+          h('span', { style: { opacity: 0.8 } }, view === null ? '未纳入上传' : running ? '同步中…' : collapsedAligned ? '已同步' : '未同步'),
+          h('span', { style: SYNC_BAR_STYLE.id }, shortDisplaySessionId(sessionId)))
+      }
+      if (view === null) {
+        return h('div', { className: 'dssync-bar', style: SYNC_BAR_STYLE.bar, title: '会话 ' + sessionId },
+          h('span', { style: Object.assign({}, SYNC_BAR_STYLE.dot, { background: '#8a8f98' }) }),
+          h('span', { style: SYNC_BAR_STYLE.label }, running ? '同步中…' : '未纳入上传'),
+          h('span', { style: SYNC_BAR_STYLE.id }, shortDisplaySessionId(sessionId)),
+          scopeSwitch(false))
+      }
+      var localLast = typeof view.localLastSeq === 'number' ? view.localLastSeq : -1
+      var remoteLast = typeof view.remoteLastSeq === 'number' ? view.remoteLastSeq : -1
+      // 官方 SSE 覆盖轮询：任务存在时，"起点 + 已完成"就是实时值（完成则用总数），
+      // 跑完的瞬间就能对齐，不必等下一次 2 秒轮询。
+      var liveDone = task !== null && typeof task.doneEvents === 'number' ? task.doneEvents : 0
+      var baseline = baselineRef.current !== null
+        && baselineRef.current.runId === runId
+        && baselineRef.current.sessionId === sessionId
+        ? baselineRef.current
+        : null
+      if (task !== null && baseline !== null) {
+        // 轮询是否还停在起点：只有停在起点时，完成态才用 total 补一次；
+        // 否则以轮询值为准，避免把同一批事件算两遍。
+        var stale = view.localLastSeq === baseline.local && view.remoteLastSeq === baseline.remote
+        if (task.state === 'done') {
+          if (stale && typeof task.totalEvents === 'number') {
+            if (task.direction === 'push') remoteLast = Math.max(remoteLast, baseline.remote + task.totalEvents)
+            else localLast = Math.max(localLast, baseline.local + task.totalEvents)
+          }
+        } else if (task.direction === 'push') {
+          remoteLast = Math.max(remoteLast, baseline.remote + liveDone)
+        } else {
+          localLast = Math.max(localLast, baseline.local + liveDone)
+        }
+      }
+      var diff = localLast - remoteLast
+      var blocked = typeof view.blocked === 'string' && view.blocked !== ''
+      // 颜色只表达对齐状态：绿=一致 黄=本地领先 蓝=远端领先 红=分叉；
+      // 运行中不抢颜色，用呼吸动画表达。
+      var dot = blocked ? '#f85149' : diff === 0 ? '#3fb950' : diff > 0 ? '#d29922' : '#58a6ff'
+      // 差值由 chip 表达，这里只留过程态（运行/分叉/已对齐）。
+      var label = blocked
+        ? '历史分叉'
+        : running
+          ? (task && task.direction === 'pull' ? '正在下载' : '正在上传')
+            + ' ' + liveDone + '/' + (task && typeof task.totalEvents === 'number' ? task.totalEvents : '?')
+          : diff === 0 ? '已同步' : ''
+      var canPush = !blocked && !running && diff > 0
+      /** 真正发起单会话推送。 */
+      function pushNow() {
+        // busy 是异步 state，同一帧里的第二次点击读到的还是 false。
+        if (pushingRef.current) return
+        pushingRef.current = true
+        setBusy(true)
+        fetchJson('/sync', {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: sessionId, direction: 'push' }),
+        }).then(function () {
+          pushingRef.current = false
+          setBusy(false)
+          reload()
+        }, function () {
+          pushingRef.current = false
+          setBusy(false)
+        })
+      }
+      function push(event) {
+        if (event) {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+        if (busy || blocked || pushingRef.current) return
+        if (!leaseHeld) {
+          setDialog({ status: 'error', message: '全局同步租约被其他设备占用，稍后再试。' })
+          return
+        }
+        // 会话正在生成（尾未闭合）时，推送只能到安全边界：先确认。
+        if (view.tailOpen === true) {
+          setDialog({ status: 'confirm', message: '会话正在运行，推送只会推到安全边界（约 ' + diff + ' 条）。继续？' })
+          return
+        }
+        if (!canPush) return
+        pushNow()
+      }
+      var pushDisabled = busy || blocked || !leaseHeld || (!canPush && !running)
+      var pushStyle = blocked || !leaseHeld
+        ? { background: 'rgba(248,81,73,.22)', color: '#ff9a92' }
+        : running
+          ? { background: 'rgba(248,81,73,.9)', color: '#fff' }
+          : canPush ? SYNC_BAR_STYLE.primary : SYNC_BAR_STYLE.disabled
+      var pushLabel = busy ? '推送中…' : running ? '同步中…' : '↑ 推送'
+      var pushTitle = blocked ? (view.blocked || '历史分叉') : !leaseHeld ? '等待全局同步租约' : view.tailOpen === true ? '会话运行中，只推到安全边界' : running ? '本会话正在同步' : ''
+      /** 详情：head 哈希、差异、租约等可核对字段。 */
+      function detailRow(key, value) {
+        return h('div', { key: key, style: { display: 'flex', justifyContent: 'space-between', gap: '10px' } },
+          h('span', { style: { opacity: 0.6 } }, key),
+          h('span', { style: { fontFamily: 'ui-monospace, monospace' } }, String(value)))
+      }
+      function detailCard() {
+        return h('div', {
+          style: {
+            position: 'fixed', right: '14px', bottom: '40px', width: '300px', zIndex: 2147483000,
+            padding: '10px 12px', borderRadius: '10px', background: 'var(--dsw-alias-bg-layer-1, #1b1b20)',
+            border: '1px solid var(--dsw-alias-border-l3, rgba(127,127,127,.3))',
+            boxShadow: '0 12px 32px rgba(0,0,0,.5)', fontSize: '11.5px', lineHeight: 1.6,
+            color: 'var(--dsw-alias-label-primary, #e6e8ec)', whiteSpace: 'normal',
+          },
+        },
+        h('div', { style: { fontWeight: 600, marginBottom: '4px' } }, '会话同步'),
+        detailRow('会话', shortDisplaySessionId(sessionId)),
+        detailRow('本地', localLast),
+        detailRow('远端', remoteLast + ' · ' + (view.headChainHash ? String(view.headChainHash).slice(0, 8) : '-')),
+        detailRow('差异', diff === 0 ? '一致' : diff > 0 ? '本地领先 ' + diff : '远端领先 ' + (-diff)),
+        detailRow('格式', 'v' + (view.formatVersion === null ? '?' : view.formatVersion)),
+        detailRow('租约', leaseState === null ? '未知' : leaseState === 'held' ? '已持有' : '被其他设备占用'),
+        view.blocked ? detailRow('阻塞', view.blocked) : null)
+      }
+      return h('div', { className: 'dssync-bar', style: SYNC_BAR_STYLE.bar, title: blocked ? view.blocked : '会话 ' + sessionId },
+        h('span', { style: Object.assign({}, SYNC_BAR_STYLE.dot, { background: dot }, running ? { animation: 'dssync-pulse 1.1s ease-in-out infinite' } : {}) }),
+        h('span', { style: SYNC_BAR_STYLE.label }, label),
+        h('span', { style: SYNC_BAR_STYLE.id }, shortDisplaySessionId(sessionId)),
+        syncMeterRows(localLast, remoteLast),
+        h('span', { style: SYNC_BAR_STYLE.nums },
+          h('span', null, '本地 ' + localLast),
+          h('span', null, '远端 ' + remoteLast)),
+        h('span', {
+          style: Object.assign({}, SYNC_BAR_STYLE.chip, {
+            background: diff === 0 ? 'rgba(63,185,80,.16)' : diff > 0 ? 'rgba(210,153,34,.18)' : 'rgba(88,166,255,.18)',
+            color: diff === 0 ? '#3fb950' : diff > 0 ? '#e0b143' : '#79b8ff',
+          }),
+        }, diff === 0 ? '一致' : diff > 0 ? '+' + diff : String(diff)),
+        h('button', {
+          type: 'button',
+          disabled: pushDisabled,
+          onClick: push,
+          title: pushTitle,
+          style: Object.assign({}, SYNC_BAR_STYLE.button, pushStyle),
+        }, pushLabel),
+        scopeSwitch(view.upload === true),
+        h('button', {
+          type: 'button',
+          onClick: function () { setShowDetail(!showDetail) },
+          style: Object.assign({}, SYNC_BAR_STYLE.button, { border: '1px solid rgba(127,127,127,.3)', background: 'transparent', color: 'inherit' }),
+        }, '详情 ' + (showDetail ? '▾' : '▸')),
+        h('span', { style: { cursor: 'pointer', opacity: 0.55, fontSize: '11px' }, onClick: toggleCollapsed, title: '收起底栏' }, '收起'),
+        showDetail ? detailCard() : null,
+        dialog === null ? null : h('div', {
+          style: {
+            position: 'fixed', right: '14px', bottom: '40px', width: '320px', zIndex: 2147483000,
+            padding: '11px 12px', borderRadius: '10px', background: 'var(--dsw-alias-bg-layer-1, #1b1b20)',
+            border: '1px solid var(--dsw-alias-border-l3, rgba(127,127,127,.3))',
+            boxShadow: '0 12px 32px rgba(0,0,0,.5)', whiteSpace: 'normal', lineHeight: 1.5,
+            fontSize: '12px', color: 'var(--dsw-alias-label-primary, #e6e8ec)',
+          },
+        }, dialog.status === 'needs-binding'
+          ? h('div', null,
+            h('div', { style: { fontWeight: 600, marginBottom: '6px' } }, '「' + dialog.path + '」还没绑定远程工作区'),
+            h('div', { style: { opacity: 0.7, marginBottom: '8px' } },
+              dialog.willCreateNew
+                ? '远端还没有可用工作区：确认后会按本地路径新建一个。'
+                : '选一个要绑定到的远程工作区：'),
+            (dialog.candidates || []).map(function (candidate) {
+              return h('button', {
+                key: candidate.key,
+                type: 'button',
+                onClick: function () { scope(candidate.key) },
+                style: {
+                  display: 'block', width: '100%', marginBottom: '4px', height: '24px', borderRadius: '6px',
+                  border: '1px solid rgba(127,127,127,.3)', background: 'transparent', color: 'inherit',
+                  cursor: 'pointer', font: '11px/1 ui-sans-serif, system-ui',
+                },
+              }, candidate.label + ' · ' + candidate.sessions + ' 个会话')
+            }),
+            h('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+              h('button', {
+                type: 'button',
+                onClick: function () { scope('create') },
+                style: Object.assign({}, SYNC_BAR_STYLE.button, SYNC_BAR_STYLE.primary),
+              }, '按本地路径新建'),
+              h('button', {
+                type: 'button',
+                onClick: function () { setDialog(null) },
+                style: Object.assign({}, SYNC_BAR_STYLE.button, { border: '1px solid rgba(127,127,127,.3)' }),
+              }, '取消')))
+          : dialog.status === 'confirm'
+            ? h('div', null,
+              h('div', { style: { marginBottom: '8px' } }, dialog.message),
+              h('div', { style: { display: 'flex', gap: '6px' } },
+                h('button', {
+                  type: 'button',
+                  onClick: function () { setDialog(null); pushNow() },
+                  style: Object.assign({}, SYNC_BAR_STYLE.button, { background: 'rgba(248,81,73,.9)', color: '#fff' }),
+                }, '继续推送'),
+                h('button', {
+                  type: 'button',
+                  onClick: function () { setDialog(null) },
+                  style: Object.assign({}, SYNC_BAR_STYLE.button, { border: '1px solid rgba(127,127,127,.3)' }),
+                }, '取消')))
+          : h('div', null,
+            h('div', { style: { marginBottom: '8px' } }, dialog.message || '操作失败'),
+            h('button', {
+              type: 'button',
+              onClick: function () { setDialog(null) },
+              style: Object.assign({}, SYNC_BAR_STYLE.button, { border: '1px solid rgba(127,127,127,.3)' }),
+            }, '关闭'))))
     }
 
     function SyncRowMark(props) {
@@ -3364,12 +3904,29 @@ window.__ModuleLoader__.load({
         installOpenGuardFrom(ctx)
       }
 
-      ctx.slots.inject('conversation.input.dock', function () {
-        return ctx.slots.register({
+      ctx.slots.inject('conversation.input.dock', function* () {
+        yield ctx.slots.register({
           name: 'conversation.input.dock', id: 'session-cloudsync-guard', order: 90,
           inject: function () { return { model: model, setBlock: setBlock } },
         }, SyncComposerGuard)
+        // 会话作用域的发布器：底栏靠它知道当前会话。
+        yield ctx.slots.register({
+          name: 'conversation.input.dock', id: 'session-cloudsync-active-session', order: 95,
+          inject: function () { return {} },
+        }, SessionSyncTracker)
       })
+
+      // 会话同步状态条：老版本 DSH 没有 shell.bottom 槽位时静默降级。
+      try {
+        ctx.slots.inject('shell.bottom', function* () {
+          yield ctx.slots.register({
+            name: 'shell.bottom', id: 'session-cloudsync-bar', order: 40,
+            inject: function () { return { model: model } },
+          }, SessionSyncBar)
+        })
+      } catch (error) {
+        // 没有该槽位：不显示状态条，其余功能不受影响。
+      }
 
       ctx.slots.inject('sidebar.session.row.leading', function () {
         return ctx.slots.register({

@@ -95,6 +95,12 @@ export interface SessionSyncView {
   readonly formatVersion: number | null
   /** 分叉阻塞说明；未阻塞时为 null。 */
   readonly blocked: string | null
+  /** 是否已在上传白名单里（开关状态）。 */
+  readonly upload: boolean
+  /** 会话在本进程是否已打开（live）。 */
+  readonly live: boolean
+  /** 尾未闭合（正在生成/工具执行中）：推送只到安全边界。 */
+  readonly tailOpen: boolean
 }
 
 /** 一个会话在所有方向上的聚合状态。 */
@@ -191,6 +197,8 @@ export interface SyncRunView {
   readonly state: 'idle' | 'running' | 'finished'
   /** 当前 run 的模式。 */
   readonly mode?: 'auto' | 'manual'
+  /** 本轮范围：整轮同步，还是单会话定向操作。 */
+  readonly scope?: 'round' | 'session'
   /** 当前 run 的阶段。 */
   readonly phase?: 'scanning' | 'transferring'
   /** 手动同步的校验进度。 */
@@ -337,6 +345,34 @@ export interface SetupInfo {
     readonly passphrase: string
   }
 }
+
+/** 单会话「是否上传」开关的结果。 */
+export type SessionScopeResult =
+  | {
+    /** 已写入白名单（或已移除）。 */
+    readonly status: 'done'
+    readonly enabled: boolean
+    /** 会话所属工作区的 workspaceKey。 */
+    readonly key?: string
+  }
+  | {
+    /** 本地工作区还没绑定，需要用户选择远端工作区或直接新建。 */
+    readonly status: 'needs-binding'
+    readonly key: string
+    readonly path: string
+    /** 远端没有任何可绑定的工作区：确认后按本地路径新建。 */
+    readonly willCreateNew: boolean
+    readonly candidates: readonly {
+      readonly key: string
+      readonly label: string
+      readonly sessions: number
+    }[]
+  }
+  | {
+    /** 无法确定工作区或设置不可写。 */
+    readonly status: 'unmapped' | 'error'
+    readonly message: string
+  }
 
 /** 同步列表里的一个工作区（或未注册的 cwd 分组）。 */
 export interface SyncWorkspaceCandidate {
