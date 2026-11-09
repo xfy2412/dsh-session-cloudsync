@@ -271,6 +271,14 @@ export interface SessionSyncReport {
   readonly totalEvents?: number
   /** 本次已完成上传的事件数。 */
   readonly doneEvents?: number
+  /**
+   * 推送完成（或已是最新）后，远端与本机共同到达的最末事件序号。
+   * 调用方据此写回执；不要用规划阶段的估算值，否则下一轮会把刚上传的
+   * 事件重新算成“待下载”。
+   */
+  readonly lastSeq?: number
+  /** 推送完成后的链头哈希；无法确定时省略（回执按通配处理）。 */
+  readonly headChainHash?: string
   /** 等待拉取的事件数（例如 push 看到 remote-ahead）。 */
   readonly pendingEvents?: number
   readonly error?: string
@@ -1127,6 +1135,8 @@ async function syncSession<Session>(
   if (remote !== undefined && totalEvents === 0) {
     return {
       sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen,
+      lastSeq: localLast,
+      ...remote.frames.at(-1) === undefined ? {} : { headChainHash: remote.frames.at(-1)!.chainHash },
       ...remoteCompression === undefined ? {} : { compression: remoteCompression },
       ...cwdNonPortable ? { cwdNonPortable } : {},
     }
@@ -1311,6 +1321,8 @@ async function syncSession<Session>(
     bytes: totalBytes,
     totalEvents,
     doneEvents: totalEvents,
+    lastSeq: localLast,
+    ...frames.at(-1) === undefined ? {} : { headChainHash: frames.at(-1)!.chainHash },
     tailOpen,
     ...cwdNonPortable ? { cwdNonPortable } : {},
   }

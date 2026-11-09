@@ -38,7 +38,7 @@ import { PerfCollector } from './perf.ts'
 import { DevLogSink, withDevLog } from './dev-log.ts'
 import { DeviceLeaseKeeper } from './device-lease.ts'
 import { SyncScheduler } from './scheduler.ts'
-import { readPullJournal, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
+import { readPullJournal, writePlanDiagnostics, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
 import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
 import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
@@ -1008,9 +1008,16 @@ export function apply(ctx: Context, config: Config): void {
         const remoteSame = receipt !== undefined
           && receipt.remoteLastSeq === remoteSummary.lastSeq
           && (receipt.remoteHeadChainHash === '' || receipt.remoteHeadChainHash === remoteSummary.headChainHash)
+        // 字节数不变即没有新事件（追加型日志），这是最便宜的判定；
+        // 命中时不必再去读一遍大日志。
+        const sizeSame = receipt !== undefined
+          && receipt.localSizeBytes !== undefined
+          && snapshot.sizeBytes !== undefined
+          ? receipt.localSizeBytes === snapshot.sizeBytes
+          : undefined
         // revision/receipt 足够判断方向时不读本地大日志；只有“两边都变了”
         // 或没有 receipt 的远端已存在会话才补读 lastSeq。
-        const needLastSeq = !localKnown && (
+        const needLastSeq = !localKnown && sizeSame !== true && (
           receipt === undefined
           || (receipt.localRevision !== undefined && localRevision !== undefined
             && receipt.localRevision !== localRevision && !remoteSame)
@@ -1049,6 +1056,45 @@ export function apply(ctx: Context, config: Config): void {
       // 未在 syncSessionIds 里的根只允许 pull，不能因为本机领先而上传。
       const entries = plan.entries.filter((entry) =>
         entry.action !== 'push' || selected.has(entry.rootId))
+      if (mode === 'manual') {
+        const counts = { push: 0, pull: 0, none: 0, blocked: 0 }
+        for (const entry of entries) {
+          if (entry.reason === 'blocked') counts.blocked += 1
+          else counts[entry.action] += 1
+        }
+        // 一次手动规划的构成，用于复核“全部待上传/待拉取”这类误判：
+        // 远端摘要条数与三个动作的数应能对上账。
+        logger.info(`dsh-session-cloudsync: 本轮规划 push=${counts.push} pull=${counts.pull} 已对齐=${counts.none} 阻塞=${counts.blocked}（远端摘要 ${remote.length} 条，本地 ${snapshots.length} 条）`)
+        // 同一份信息落一份诊断文件：产品 profile 没有 console exporter，
+        // logger 不一定可见；出问题时可以直接读这个文件对账。
+        if (statePath !== undefined) {
+          try {
+            writePlanDiagnostics(join(dirname(statePath), 'last-plan.json'), {
+              at: Date.now(),
+              remoteCount: remote.length,
+              localCount: snapshots.length,
+              counts,
+              entries: entries.map((entry) => {
+                const receipt = receipts[entry.sessionId]
+                const revision = entry.local?.revision
+                return {
+                  sessionId: entry.sessionId,
+                  action: entry.action,
+                  reason: entry.reason,
+                  ...entry.localLastSeq === undefined ? {} : { localLastSeq: entry.localLastSeq },
+                  ...entry.remoteLastSeq === undefined ? {} : { remoteLastSeq: entry.remoteLastSeq },
+                  hasReceipt: receipt !== undefined,
+                  ...receipt === undefined || revision === undefined
+                    ? {} : { revisionSame: receipt.localRevision === revision },
+                  remoteKnown: entry.remote !== undefined,
+                }
+              }),
+            })
+          } catch (error: unknown) {
+            logger.warn(`dsh-session-cloudsync: 写规划诊断失败：${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+      }
       // up-to-date 不产生任务，但顺手把 receipt 的 revision 补齐，下一轮
       // 不再因为旧 receipt 没有 revision 而重新读取/拉取。
       for (const entry of entries) {
@@ -1058,6 +1104,7 @@ export function apply(ctx: Context, config: Config): void {
         receipts[entry.sessionId] = {
           sessionId: entry.sessionId,
           ...entry.local.revision === undefined ? {} : { localRevision: entry.local.revision },
+          ...entry.local.sizeBytes === undefined ? {} : { localSizeBytes: entry.local.sizeBytes },
           localEventCount: previous?.localEventCount ?? Math.max(0, (entry.remote.safeThroughSeq ?? entry.remote.lastSeq) + 1),
           localLastSeq: entry.localLastSeq ?? entry.remote.lastSeq,
           remoteLastSeq: entry.remote.lastSeq,
@@ -1163,21 +1210,36 @@ export function apply(ctx: Context, config: Config): void {
           }
         }
         if (report.status === 'remote-ahead') {
+          // 远端在这一轮里已经前进；缓存必须失效，否则紧接着的一轮会拿旧摘要
+          // 把本机算成领先，把整批会话误报成“待上传”。
+          remoteInventory = undefined
           return { state: 'deferred', totalEvents: task.totalEvents, doneEvents: task.doneEvents, error: '远端已领先，等待下一轮拉取' }
         }
         if (report.status === 'skipped') {
           return { state: 'deferred', totalEvents: task.totalEvents, doneEvents: task.doneEvents, error: report.error ?? '会话本轮跳过' }
         }
+        if (report.status === 'up-to-date') {
+          // 规划说“本地领先”，执行时却已是最新：几乎只可能是规划用的远端摘要
+          // 过期（15s 缓存）。丢掉缓存并在日志里留一条，下一轮就能自愈。
+          remoteInventory = undefined
+          logger.info(`dsh-session-cloudsync: 会话 ${entry.sessionId} 规划为推送但远端已是最新，已丢弃远端摘要缓存`)
+        }
         // 远端摘要已经变化；下一轮必须重读，不能继续用 15s 缓存。
         remoteInventory = undefined
-        const localLast = entry.localLastSeq ?? Math.max(-1, (entry.local.eventCount ?? 0) - 1)
+        // 回执必须落在「实际推送到的位置」上：规划阶段的 localLastSeq 可能来自
+        // 旧回执（例如本地只多出一条 end-seed 时不会补读最后序号），照抄会让
+        // 下一轮把刚上传的事件重新算成待下载，再白跑一次拉取才自愈。
+        const localLast = report.lastSeq
+          ?? entry.localLastSeq
+          ?? Math.max(-1, (entry.local.eventCount ?? 0) - 1)
         receipts[entry.sessionId] = {
           sessionId: entry.sessionId,
           ...entry.local.revision === undefined ? {} : { localRevision: entry.local.revision },
+          ...entry.local.sizeBytes === undefined ? {} : { localSizeBytes: entry.local.sizeBytes },
           localEventCount: entry.local.eventCount ?? Math.max(0, localLast + 1),
           localLastSeq: localLast,
           remoteLastSeq: localLast,
-          remoteHeadChainHash: '',
+          remoteHeadChainHash: report.headChainHash ?? '',
           formatVersion: entry.local.header.version,
           checkedAt: Date.now(),
         }
@@ -1209,11 +1271,15 @@ export function apply(ctx: Context, config: Config): void {
         return { state: 'deferred', totalEvents: report.totalEvents ?? task.totalEvents, doneEvents: 0, error: report.error ?? '等待会话写入结束' }
       }
       const safe = entry.remote?.safeThroughSeq ?? entry.remoteLastSeq ?? -1
+      // 拉取也会推进远端（别的设备可能在同一轮里推送），缓存必须失效，
+      // 否则紧接着的一轮会拿旧摘要规划出方向相反的空任务。
+      remoteInventory = undefined
       if (entry.remote !== undefined) {
         const after = await ctx.sessionPersistence.stat(entry.sessionId as SessionId)
         receipts[entry.sessionId] = {
           sessionId: entry.sessionId,
           ...after?.revision === undefined ? {} : { localRevision: after.revision },
+          ...after?.sizeBytes === undefined ? {} : { localSizeBytes: after.sizeBytes },
           localEventCount: Math.max(0, safe + 1),
           localLastSeq: safe,
           remoteLastSeq: entry.remote.lastSeq,

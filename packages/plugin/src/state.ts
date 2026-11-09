@@ -190,6 +190,7 @@ function receiptsFrom(value: unknown): Readonly<Record<string, SyncReceipt>> | u
     const checkedAt = entry['checkedAt']
     const localRevision = typeof entry['localRevision'] === 'string' && entry['localRevision'] !== ''
       ? entry['localRevision'] : undefined
+    const localSizeBytes = entry['localSizeBytes']
     if (!Number.isSafeInteger(localEventCount) || (localEventCount as number) < 0
       || !Number.isSafeInteger(localLastSeq) || (localLastSeq as number) < -1
       || !Number.isSafeInteger(remoteLastSeq) || (remoteLastSeq as number) < -1
@@ -200,6 +201,8 @@ function receiptsFrom(value: unknown): Readonly<Record<string, SyncReceipt>> | u
     receipts[sessionId] = {
       sessionId,
       ...localRevision === undefined ? {} : { localRevision },
+      ...Number.isSafeInteger(localSizeBytes) && (localSizeBytes as number) >= 0
+        ? { localSizeBytes: localSizeBytes as number } : {},
       localEventCount: localEventCount as number,
       localLastSeq: localLastSeq as number,
       remoteLastSeq: remoteLastSeq as number,
@@ -220,5 +223,40 @@ export function writePullJournal(file: string, journal: PullJournal): void {
   mkdirSync(dirname(file), { recursive: true })
   const temp = `${file}.${process.pid}.tmp`
   writeFileSync(temp, `${JSON.stringify(journal)}\n`, { mode: 0o600 })
+  renameSync(temp, file)
+}
+
+/** 一条会话在最近一次手动规划里的判定依据。 */
+export interface PlanDiagnosticsEntry {
+  readonly sessionId: string
+  readonly action: string
+  readonly reason: string
+  readonly localLastSeq?: number
+  readonly remoteLastSeq?: number
+  readonly hasReceipt: boolean
+  /** receipt 的 localRevision 与当前快照一致时为 true；无法判断时省略。 */
+  readonly revisionSame?: boolean
+  /** 远端摘要里是否有这条会话。 */
+  readonly remoteKnown: boolean
+}
+
+/** 最近一次手动同步的规划快照，用于复核方向误判（例如“全部待上传”）。 */
+export interface PlanDiagnostics {
+  readonly at: number
+  readonly remoteCount: number
+  readonly localCount: number
+  readonly counts: { readonly push: number; readonly pull: number; readonly none: number; readonly blocked: number }
+  readonly entries: readonly PlanDiagnosticsEntry[]
+}
+
+/**
+ * 原子写入最近一次手动规划的诊断文件；失败不影响同步。
+ * @param file - 诊断文件路径。
+ * @param diagnostics - 规划快照。
+ */
+export function writePlanDiagnostics(file: string, diagnostics: PlanDiagnostics): void {
+  mkdirSync(dirname(file), { recursive: true })
+  const temp = `${file}.${process.pid}.tmp`
+  writeFileSync(temp, `${JSON.stringify(diagnostics)}\n`, { mode: 0o600 })
   renameSync(temp, file)
 }

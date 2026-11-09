@@ -13,6 +13,11 @@ export interface LocalPlanSnapshot extends ClosureSnapshot {
   readonly header: ClosureHeader & { readonly version: number }
   /** DSH 的 opaque 文件修订；list() 不返回 eventCount，靠它判断本地是否变化。 */
   readonly revision?: string
+  /**
+   * 本地日志的物理字节数；JSONL 后端会提供。追加型日志上它比 revision 可靠：
+   * 历史代际会话的 revision 会随整个存储根变化，字节数只随本会话追加而变。
+   */
+  readonly sizeBytes?: number
   /** 已由宿主补读的最末事件序号；只在无法用 revision/receipt 判断时使用。 */
   readonly lastSeq?: number
   /** 旧后端可能提供；当前 JSONL list() 通常不提供。 */
@@ -40,6 +45,12 @@ export interface SyncReceipt {
   readonly sessionId: string
   /** 上次 receipt 记录时的本地 opaque revision；旧 receipt 可能没有。 */
   readonly localRevision?: string
+  /**
+   * 上次 receipt 记录时的本地日志字节数。追加型日志上字节数不变就等价于
+   * 没有新事件，比 revision 可靠：历史代际会话的 revision 末尾混入了整个
+   * 存储根的语料指纹，别的会话一写就会变，会把会话误判成“本地领先”。
+   */
+  readonly localSizeBytes?: number
   readonly localEventCount: number
   readonly localLastSeq: number
   readonly remoteLastSeq: number
@@ -118,6 +129,12 @@ function remoteUnchanged(receipt: SyncReceipt, remote: RemoteSessionSummary): bo
  * @returns true/false；无法判断时为 undefined。
  */
 function localUnchanged(receipt: SyncReceipt, snapshot: LocalPlanSnapshot): boolean | undefined {
+  // 优先用字节数：JSONL 是追加型日志，字节数不变就是没有新事件。不能用
+  // revision 判等——历史代际会话的 revision 会带上整个存储根的语料指纹，
+  // 别的会话一写它就变，把整批老会话误判成“本地领先”（全部待上传）。
+  if (receipt.localSizeBytes !== undefined && snapshot.sizeBytes !== undefined) {
+    return receipt.localSizeBytes === snapshot.sizeBytes
+  }
   if (receipt.localRevision !== undefined && snapshot.revision !== undefined) {
     return receipt.localRevision === snapshot.revision
   }

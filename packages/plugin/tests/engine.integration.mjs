@@ -395,9 +395,15 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
       assert.equal(manifest1.body.value.manifest.safeThroughSeq, 119)
       assert.equal(manifest1.body.value.manifest.batches[0].seqFrom, -1)
       assert.equal(manifest1.body.value.manifest.batches[1].seqFrom, 0)
+      // 推送结果要带上「实际推到的位置」，宿主据此写回执（不能用规划阶段的估算值）。
+      assert.equal(first.sessions[0].lastSeq, 119)
+      assert.equal(first.sessions[0].headChainHash, manifest1.body.value.manifest.batches.at(-1).chainHash)
 
       const second = await syncOnce({ persistence, sessions, config, isTailOpen })
       assert.equal(second.sessions[0].status, 'up-to-date')
+      // 已经是最新时也要报出同一位置，避免下一轮把已上传事件重新算成待下载。
+      assert.equal(second.sessions[0].lastSeq, 119)
+      assert.equal(second.sessions[0].headChainHash, manifest1.body.value.manifest.batches.at(-1).chainHash)
 
       state.events = events(0, 149)
       const third = await syncOnce({ persistence, sessions, config, isTailOpen })

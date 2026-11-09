@@ -171,3 +171,74 @@ test('规划器：receipt 命中时 up-to-date，不产生任务', () => {
   assert.equal(plan.entries[0].action, 'none')
   assert.equal(plan.entries[0].reason, 'up-to-date')
 })
+
+test('规划器：回执要落在实际推送位置，否则下一轮会幻影拉取', () => {
+  // 场景：本地 101 条（最后一条是冷打开补的 end-seed），推送前远端到 100。
+  // 推送实际把 101 推上去了，回执若照抄规划时的 localLastSeq(100)，下一轮
+  // 就会把刚上传的那条算成“待下载”，白跑一次拉取才自愈。
+  const local = {
+    header: { id: 'root', createdAt: 1, version: 4, cwd: 'D:/work' },
+    revision: 'rev1',
+  }
+  const remoteAfter = remote('root', 101, { headChainHash: 'b'.repeat(64) })
+  const baseReceipt = {
+    sessionId: 'root',
+    localRevision: 'rev1',
+    formatVersion: 4,
+    checkedAt: 1,
+  }
+  const stale = { ...baseReceipt, localEventCount: 101, localLastSeq: 100, remoteLastSeq: 100, remoteHeadChainHash: '' }
+  const actual = { ...baseReceipt, localEventCount: 102, localLastSeq: 101, remoteLastSeq: 101, remoteHeadChainHash: 'b'.repeat(64) }
+
+  const stalePlan = planSync({
+    local: [local], remote: [remoteAfter], selectedRoots: ['root'], includeSubagents: false,
+    receipts: { root: stale },
+  })
+  assert.equal(stalePlan.entries[0].action, 'pull')
+  assert.equal(stalePlan.entries[0].reason, 'remote-ahead')
+  assert.equal(stalePlan.entries[0].remoteLastSeq - stalePlan.entries[0].localLastSeq, 1)
+
+  const fixedPlan = planSync({
+    local: [local], remote: [remoteAfter], selectedRoots: ['root'], includeSubagents: false,
+    receipts: { root: actual },
+  })
+  assert.equal(fixedPlan.entries[0].action, 'none')
+  assert.equal(fixedPlan.entries[0].reason, 'up-to-date')
+})
+
+test('规划器：字节数不变即本地未变（历史代际会话的 revision 会漂）', () => {
+  // 历史代际会话的 revision 末尾带“整个存储根”的语料指纹：别的会话一写，
+  // 它的 revision 就变，但本会话字节数没变。按 revision 判等会把它误判成
+  // 本地领先（全部待上传），所以规划优先看字节数。
+  const local = {
+    header: { id: 'root', createdAt: 1, version: 4, cwd: 'D:/work' },
+    revision: '308183645:1:100:1:1:corpus-b',
+    sizeBytes: 100,
+  }
+  const remoteSame = remote('root', 4, { headChainHash: 'a'.repeat(64) })
+  const receipt = {
+    sessionId: 'root',
+    localRevision: '308183645:1:100:1:1:corpus-a',
+    localSizeBytes: 100,
+    localEventCount: 5,
+    localLastSeq: 4,
+    remoteLastSeq: 4,
+    remoteHeadChainHash: 'a'.repeat(64),
+    formatVersion: 4,
+    checkedAt: 1,
+  }
+
+  const unchanged = planSync({
+    local: [local], remote: [remoteSame], selectedRoots: ['root'], includeSubagents: false,
+    receipts: { root: receipt },
+  })
+  assert.equal(unchanged.entries[0].action, 'none')
+  assert.equal(unchanged.entries[0].reason, 'up-to-date')
+
+  const grown = planSync({
+    local: [{ ...local, sizeBytes: 160 }], remote: [remoteSame], selectedRoots: ['root'], includeSubagents: false,
+    receipts: { root: receipt },
+  })
+  assert.equal(grown.entries[0].action, 'push')
+  assert.equal(grown.entries[0].reason, 'local-ahead')
+})
