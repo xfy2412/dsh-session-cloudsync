@@ -28,6 +28,7 @@ import {
   type EngineConfig,
   type PullState,
   type RemoteSessionMeta,
+  type WriteHandleLike,
   type SyncLogger,
   type SyncProgress,
 } from './engine.ts'
@@ -102,7 +103,7 @@ export const Config = z.object({
   deviceName: z.string().default('').volatile(),
   syncSessionIds: z.array(z.string()).default([]).volatile(),
   autoBindSamePath: z.boolean().default(false).volatile(),
-  autoSync: z.boolean().default(true).volatile(),
+  autoSync: z.boolean().default(false).volatile(),
   intervalMs: z.number().min(1000).default(60000).volatile(),
   includeSubagents: z.boolean().default(true).volatile(),
   batchEvents: z.number().min(1).default(50).volatile(),
@@ -253,7 +254,7 @@ export function apply(ctx: Context, config: Config): void {
   let deviceName = envSyncDeviceName !== ''
     ? envSyncDeviceName
     : (readVolatile<string>(config.deviceName) ?? '')
-  let autoSync = readVolatile<boolean>(config.autoSync) !== false
+  let autoSync = readVolatile<boolean>(config.autoSync) === true
   let batchEvents = readVolatile<number>(config.batchEvents) ?? 50
   let batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
   let requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
@@ -299,7 +300,7 @@ export function apply(ctx: Context, config: Config): void {
     deviceName = envSyncDeviceName !== ''
       ? envSyncDeviceName
       : (readVolatile<string>(config.deviceName) ?? '')
-    autoSync = readVolatile<boolean>(config.autoSync) !== false
+    autoSync = readVolatile<boolean>(config.autoSync) === true
     batchEvents = readVolatile<number>(config.batchEvents) ?? 50
     batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
     requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
@@ -390,6 +391,7 @@ export function apply(ctx: Context, config: Config): void {
       get: (id: string): LiveSession | undefined => ctx.sessions.get(id as SessionId),
       flush: (session: LiveSession) => ctx.sessions.flush(session),
     },
+    openWrite: (id: string) => ctx.sessionPersistence.open(id as SessionId, 'write'),
     config: engineConfig,
     logger,
     isTailOpen: (events: readonly { readonly seq: number }[]) =>
@@ -820,6 +822,9 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
+  /** 启动/整轮前预占的写句柄：防前端在拉取前把会话"复活"。 */
+  const pullHolds = new Map<string, WriteHandleLike>()
+
   const pullDeps = {
     persistence: {
       stat: (id: string) => ctx.sessionPersistence.stat(id as SessionId),
@@ -832,6 +837,12 @@ export function apply(ctx: Context, config: Config): void {
     },
     sessions: deps.sessions,
     config: engineConfig,
+    takeHeldHandle: (id: string) => {
+      const handle = pullHolds.get(id)
+      if (handle === undefined) return undefined
+      pullHolds.delete(id)
+      return handle
+    },
     attach: async (sessionId: string, mappedPath?: string): Promise<void> => {
       if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
       if (mappedPath === undefined || mappedPath === '') throw new Error('会话没有可用的本地工作区落点')
@@ -1201,6 +1212,37 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   taskRunner = {
+    /**
+     * 传输前把"要拉取"的本地会话写句柄全部占住。
+     *
+     * 前端在页面加载后会恢复上次会话（占写句柄），导致拉取只能等它关闭；
+     * 提前占住可以让 resume 直接失败，把拉取窗口保住。已 live/本地不存在的
+     * 会话跳过；任何失败只记日志，不影响本轮。
+     * @param tasks - 本轮任务表。
+     */
+    async hold(tasks) {
+      for (const task of tasks) {
+        if (task.direction !== 'pull' || task.state === 'blocked') continue
+        const id = task.sessionId
+        if (pullHolds.has(id)) continue
+        if (ctx.sessions.get(id as SessionId) !== undefined) continue
+        const snapshot = await ctx.sessionPersistence.stat(id as SessionId)
+        if (snapshot === undefined) continue
+        try {
+          pullHolds.set(id, await ctx.sessionPersistence.open(id as SessionId, 'write'))
+        } catch (error: unknown) {
+          // 已被别的 writer 占住：交给拉取自己的 deferral。
+        }
+      }
+    },
+    /** 释放所有预占句柄。 */
+    async releaseHolds() {
+      const handles = [...pullHolds.values()]
+      pullHolds.clear()
+      for (const handle of handles) {
+        try { await handle.close() } catch { /* 关闭失败不影响结果 */ }
+      }
+    },
     async scan(mode, hooks) {
       const { entries, remote, snapshots } = await planRound(mode)
       // up-to-date 不产生任务，但顺手把 receipt 的 revision 补齐，下一轮

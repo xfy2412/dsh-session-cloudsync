@@ -236,6 +236,8 @@ export interface SyncDeps<Session> {
    * `interruptedTurnClosers(events).length > 0`。缺省按闭合处理。
    */
   readonly isTailOpen?: (events: readonly SyncEvent[]) => boolean
+  /** 打开写句柄；冷会话推送前补 end-seed 用，缺省时跳过补 marker。 */
+  readonly openWrite?: (id: string) => Promise<WriteHandleLike>
   /** 实时阶段回调；不抛异常，调用方负责容错。 */
   readonly onProgress?: (progress: SyncProgress) => void
   /** 操作级墙钟样本；只在调试性能采集时提供。 */
@@ -310,6 +312,8 @@ export interface PullDeps<Session> {
   readonly attach?: (sessionId: string, workspacePath?: string) => Promise<void>
   /** 首次拉取成功的根会话；宿主可据此加入上传选择。 */
   readonly onFirstPull?: (sessionId: string) => void
+  /** 取启动时预占的写句柄（抢占成功时用它，避免再 open 撞所有权）；缺省时自行 open。 */
+  readonly takeHeldHandle?: (id: string) => WriteHandleLike | undefined
   readonly logger?: SyncLogger
   readonly fetch?: typeof fetch
   /** 在第一次本地写入之前落盘 pending 记录。 */
@@ -818,6 +822,81 @@ export function safeThroughSeqOf(events: readonly SyncEvent[], tailOpen: boolean
 }
 
 /**
+ * 尾部是否适合补一条 `session/end-seed`。
+ *
+ * 与 DSH 恢复会话时的规则一致（尾不是 marker 才补）。turn 未闭合时不能补；
+ * 未闭合的 `compaction/start` 也不能补——DSH 会把"未闭合 compaction 之后的
+ * end-seed"当成上一生命周期的残留而放行 compaction 锁（compaction-basic 的
+ * assertCompactionInactive），补进去会让锁被误判为空闲。
+ * @param events - 完整事件列表。
+ * @param tailOpen - 是否还有未闭合的 turn。
+ * @returns 是否可补。
+ */
+export function canAppendTailMarker(events: readonly SyncEvent[], tailOpen: boolean): boolean {
+  if (events.length === 0 || tailOpen) return false
+  const tail = events[events.length - 1]!
+  if ((tail as { readonly type?: unknown }).type === 'session/end-seed') return false
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const type = (events[index] as { readonly type?: unknown }).type
+    if (type === 'compaction/end') return true
+    if (type === 'compaction/start') return false
+  }
+  return true
+}
+
+/**
+ * 推送前保证本地尾是一条 `session/end-seed`，并返回补后的事件列表。
+ *
+ * live 会话走 `Session.append` + `flush`（不抢 DSH 的写句柄）；冷会话走
+ * `open(id, 'write')`。补 marker 只是优化：任何失败都退回原事件，不让推送失败。
+ * @param deps - 引擎依赖。
+ * @param sessionId - 会话 id。
+ * @param events - 当前完整事件。
+ * @returns 可能是追加了 marker 的事件列表。
+ */
+async function appendTailMarker<Session>(
+  deps: SyncDeps<Session>,
+  sessionId: string,
+  events: readonly SyncEvent[],
+): Promise<readonly SyncEvent[]> {
+  if (!canAppendTailMarker(events, deps.isTailOpen?.(events) ?? false)) return events
+  try {
+    const live = deps.sessions.get(sessionId) as unknown as
+      { append?: (type: string, data: unknown) => SyncEvent } | undefined
+    if (live !== undefined && typeof live.append === 'function') {
+      live.append('session/end-seed', {})
+      await deps.sessions.flush(live as never)
+    } else {
+      if (deps.openWrite === undefined) return events
+      const marker = {
+        type: 'session/end-seed',
+        seq: events[events.length - 1]!.seq + 1,
+        time: Date.now(),
+        data: {},
+      } as SyncEvent
+      const handle = await deps.openWrite(sessionId)
+      try {
+        await handle.append([marker])
+        await handle.flush()
+      } finally {
+        await handle.close()
+      }
+    }
+    // 重新读一遍：追加可能作用在同一份快照上，别让调用方拿到重复尾巴。
+    const rereadHandle = await deps.persistence.open(sessionId, 'read')
+    try {
+      const reread = await rereadHandle.read()
+      return reread.events
+    } finally {
+      await rereadHandle.close()
+    }
+  } catch (error: unknown) {
+    deps.logger?.warn(`dsh-session-cloudsync: ${sessionId} 补 end-seed 失败：${error instanceof Error ? error.message : String(error)}`)
+    return events
+  }
+}
+
+/**
  * 取会话最后一条 `working-directory/change` 的 cwd。
  * @param events - 完整事件。
  * @returns 最后 cwd；没有 change 事件时为 undefined。
@@ -1070,7 +1149,7 @@ async function syncSession<Session>(
 
   const meta = headerMetaOf(handle.header, handle.inheritedEventCount)
   const cwd = handle.header.cwd ?? ''
-  const localLast = events.length === 0 ? -1 : events[events.length - 1]!.seq
+  let localLast = events.length === 0 ? -1 : events[events.length - 1]!.seq
   const tailOpen = deps.isTailOpen?.(events) ?? false
   const cwdNonPortable = cwdNonPortableOf(events, cwd)
   let safeThroughSeq = safeThroughSeqOf(events, tailOpen)
@@ -1131,7 +1210,7 @@ async function syncSession<Session>(
   }
 
   const startAfterSeq = remote?.lastSeq ?? -1
-  const totalEvents = Math.max(0, events.length - (startAfterSeq + 1))
+  let totalEvents = Math.max(0, events.length - (startAfterSeq + 1))
   if (remote !== undefined && totalEvents === 0) {
     return {
       sessionId, status: 'up-to-date', totalEvents: 0, doneEvents: 0, tailOpen,
@@ -1141,6 +1220,16 @@ async function syncSession<Session>(
       ...cwdNonPortable ? { cwdNonPortable } : {},
     }
   }
+
+  // 已确认本轮真的要推送（持租约、远端不领先）：补一条 end-seed 再读。
+  // 这样远端尾也是 marker，另一台设备打开时不会再补自己的，双 marker 从源头消失。
+  const markedEvents = await appendTailMarker(deps, sessionId, events)
+  // 有的后端 read 返回的是同一份数组（追加后引用不变），所以别用引用比较判断
+  // 是否追加过；无条件按当前事件重算一遍。
+  events = markedEvents
+  localLast = events[events.length - 1]!.seq
+  safeThroughSeq = Math.max(safeThroughSeq, safeThroughSeqOf(events, tailOpen))
+  totalEvents = Math.max(0, events.length - (startAfterSeq + 1))
 
   notifyProgress(deps, {
     sessionId,
@@ -2055,7 +2144,7 @@ async function pullSession<Session>(
 
     let handle: WriteHandleLike
     try {
-      handle = await deps.persistence.open(sessionId, 'write')
+      handle = deps.takeHeldHandle?.(sessionId) ?? await deps.persistence.open(sessionId, 'write')
     } catch (error: unknown) {
       if (isSessionAlreadyOwned(error)) {
         const pendingEvents = safe - observed.last

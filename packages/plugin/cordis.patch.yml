@@ -24,8 +24,8 @@
         syncSessionIds: []
         # 是否在同步后自动绑定同路径的远端工作区（一次性绑定）；默认关闭。
         autoBindSamePath: false
-        # 是否按间隔自动推送；false 时只做一次启动推送。
-        autoSync: true
+        # 是否按间隔自动推送；false（默认）时只做一次启动推送。
+        autoSync: false
         # 自动推送间隔（毫秒）。
         intervalMs: 60000
         # 是否同步子代理会话（根 + 后代闭包）。

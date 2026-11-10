@@ -1024,7 +1024,7 @@ window.__ModuleLoader__.load({
           ? source.syncSessionIds.slice()
           : (Array.isArray(fallback.syncSessionIds) ? fallback.syncSessionIds.slice() : []),
         autoBindSamePath: source.autoBindSamePath !== undefined ? source.autoBindSamePath === true : fallback.autoBindSamePath === true,
-        autoSync: source.autoSync !== undefined ? source.autoSync !== false : fallback.autoSync !== false,
+        autoSync: source.autoSync !== undefined ? source.autoSync === true : fallback.autoSync === true,
         intervalMs: source.intervalMs !== undefined ? source.intervalMs : (fallback.intervalMs || 60000),
         includeSubagents: source.includeSubagents !== undefined ? source.includeSubagents !== false : fallback.includeSubagents !== false,
       }
@@ -1475,7 +1475,7 @@ window.__ModuleLoader__.load({
           { op: 'set', path: ['syncSessionIds'], value: fields.syncSessionIds.slice() },
           { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
-          { op: 'set', path: ['intervalMs'], value: Number(fields.intervalMs) || 60000 },
+          { op: 'set', path: ['intervalMs'], value: Math.max(5000, Number(fields.intervalMs) || 60000) },
           { op: 'set', path: ['includeSubagents'], value: fields.includeSubagents === true },
         ]
         var accepted = await form.mutate(ops, revision)
@@ -1718,11 +1718,22 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dssync-rowtext' },
               h('b', null, '同步间隔'),
               h('span', null, '自动同步开启时生效')),
-            h('select', {
-              value: String(fields.intervalMs), disabled: disabled || !fields.autoSync,
-              style: { width: 120, height: 30, border: '1px solid var(--dssync-line-strong)', borderRadius: 8, background: 'transparent', color: 'inherit' },
-              onChange: function (event) { set('intervalMs', Number(event.target.value)) },
-            }, INTERVALS.map(function (item) { return h('option', { value: String(item.ms), key: item.ms }, item.label) }))),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            h('input', {
+              type: 'number', min: 5, max: 86400, step: 5,
+              value: String(Math.round((Number(fields.intervalMs) || 60000) / 1000)),
+              disabled: disabled || !fields.autoSync,
+              onChange: function (event) { set('intervalMs', Math.max(0, Number(event.target.value) || 0) * 1000) },
+              style: { width: 96, height: 30, border: '1px solid var(--dssync-line-strong)', borderRadius: 8, background: 'transparent', color: 'inherit', padding: '0 8px' },
+            }),
+            h('span', { className: 'dssync-note' }, '秒'),
+            [10, 30, 60, 300].map(function (seconds) {
+              return h('button', {
+                key: seconds, type: 'button', className: 'dssync-mini',
+                disabled: disabled || !fields.autoSync,
+                onClick: function () { set('intervalMs', seconds * 1000) },
+              }, seconds < 60 ? seconds + 's' : (seconds / 60) + 'm')
+            }))),
           h('div', { className: 'dssync-row' },
             h('div', { className: 'dssync-rowtext' },
               h('b', null, '同步子代理会话'),
@@ -1998,7 +2009,7 @@ window.__ModuleLoader__.load({
           { op: 'set', path: ['syncSessionIds'], value: fields.syncSessionIds.slice() },
           { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
-          { op: 'set', path: ['intervalMs'], value: Number(fields.intervalMs) || 60000 },
+          { op: 'set', path: ['intervalMs'], value: Math.max(5000, Number(fields.intervalMs) || 60000) },
           { op: 'set', path: ['includeSubagents'], value: fields.includeSubagents === true },
         ]
         var accepted = await props.writeSettings(ops)

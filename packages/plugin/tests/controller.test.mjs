@@ -752,3 +752,34 @@ test('控制器：全局租约不在时跳过推送，但仍拉取', async () =>
   assert.equal(result.status.deviceLease.state, 'foreign')
   assert.equal(result.status.sessions.find((session) => session.sessionId === 's1').pull.applied, 2)
 })
+
+test('控制器：执行前占住拉取会话，结束后释放（异常也释放）', async () => {
+  const events = []
+  const tasks = [{
+    ordinal: 0, sessionId: 's1', rootId: 's1', depth: 0, direction: 'pull',
+    state: 'queued', reason: 'remote-ahead', totalEvents: 1, doneEvents: 0, progress: 0,
+  }]
+  const make = (fail) => new SyncController({
+    tasks: {
+      scan: async () => ({ tasks }),
+      hold: async (list) => { events.push('hold:' + list.map((task) => task.sessionId).join(',')) },
+      releaseHolds: async () => { events.push('release') },
+      execute: async () => {
+        events.push('execute')
+        if (fail) throw new Error('boom')
+        return { state: 'done', totalEvents: 1, doneEvents: 1 }
+      },
+    },
+    persist: () => {},
+    configuration: () => ({ configured: true }),
+    intervalMs: 60_000,
+  })
+  const ok = await make(false).run({ manual: true })
+  assert.equal(ok.ok, true)
+  assert.deepEqual(events, ['hold:s1', 'execute', 'release'])
+
+  events.length = 0
+  const failed = await make(true).run({ manual: true })
+  assert.equal(failed.ok, false)
+  assert.deepEqual(events, ['hold:s1', 'execute', 'release'])
+})

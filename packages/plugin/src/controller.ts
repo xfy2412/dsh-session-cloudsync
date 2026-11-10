@@ -75,6 +75,10 @@ export interface TaskRunner {
     task: SyncTaskView,
     update: (patch: Partial<SyncTaskView>) => void,
   ) => Promise<TaskExecutionResult>
+  /** 执行前占住需要拉取的会话写句柄；实现方负责释放。 */
+  readonly hold?: (tasks: readonly SyncTaskView[]) => Promise<void>
+  /** 释放 hold 占用的句柄。 */
+  readonly releaseHolds?: () => Promise<void>
 }
 
 /** 控制器依赖。 */
@@ -734,7 +738,12 @@ export class SyncController {
     }
     this.bump()
     const errors: Array<{ kind: SyncErrorKind; message: string }> = []
-    await this.executeTaskList(errors)
+    await this.options.tasks.hold?.(this.taskViews)
+    try {
+      await this.executeTaskList(errors)
+    } finally {
+      await this.options.tasks.releaseHolds?.()
+    }
     this.running = false
     this.live = []
     const finished = this.now()
@@ -894,7 +903,12 @@ export class SyncController {
         },
       }
       this.bump()
-      await this.executeTaskList(errors)
+      await runner.hold?.(this.taskViews)
+      try {
+        await this.executeTaskList(errors)
+      } finally {
+        await runner.releaseHolds?.()
+      }
     } catch (error: unknown) {
       const classified = classifySyncError(error)
       errors.push({ kind: classified.kind, message: classified.message })

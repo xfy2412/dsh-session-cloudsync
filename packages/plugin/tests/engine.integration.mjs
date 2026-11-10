@@ -1313,3 +1313,51 @@ test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', asyn
     temp.dispose()
   }
 })
+
+test('推送前补 end-seed：尾不是 marker 时补一条，之后不重复', async () => {
+  const temp = createTempHome('plugin-marker')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'marker-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      await holdLease(base, device)
+      const sessionId = 'session-marker-test'
+      const header = {
+        id: sessionId,
+        version: 4,
+        createdAt: 778,
+        isSeeded: false,
+        delegationDepth: 0,
+        agentPreset: 'standard',
+        cwd: localCwd,
+      }
+      const store = fakeStore(header, events(0, 4))
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'correct horse battery staple',
+        batchEvents: 50,
+      }
+      const openWrite = (id) => store.open(id)
+      const isTailOpen = () => false
+
+      const first = await syncOnce({ persistence: store, sessions, config, isTailOpen, openWrite })
+      assert.equal(first.sessions[0].status, 'pushed', JSON.stringify(first.sessions[0]))
+      const local = store.sessions.get(sessionId).events
+      assert.equal(local.at(-1).type, 'session/end-seed')
+      assert.equal(local.at(-1).seq, 5)
+      const firstManifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
+      assert.equal(firstManifest.body.value.manifest.lastSeq, 5)
+
+      const second = await syncOnce({ persistence: store, sessions, config, isTailOpen, openWrite })
+      assert.equal(second.sessions[0].status, 'up-to-date')
+      assert.equal(store.sessions.get(sessionId).events.length, 6)
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
