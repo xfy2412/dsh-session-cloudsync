@@ -1,6 +1,7 @@
 # 同步列表与气泡状态聚合
 
-> 状态：设计稿。本文只描述目标模型，不改变传输协议。
+> 状态：设计稿（部分已被 0.1.4 的实现取代）。界面语义以
+> [OPERATIONS](../guides/OPERATIONS.md) 为准；本文保留目标模型与推理过程。
 >
 > 前端和 host 使用同一个插件版本，不需要为旧气泡保留兼容字段；状态 schema
 > 可以直接随插件一起升级，安装后两侧同时生效。
@@ -8,6 +9,23 @@
 > 目标：会话列表在同步开始前就是完整的；一条会话在同步过程中只更新状态，
 > 不在列表中间突然出现/消失；气泡用明确的 stage 和持续动效表达“正在做什么”，
 > 而不是只显示一个静止的黄点和“等待”。
+
+## 0. 实现现状（0.1.4，以代码为准）
+
+下表只记录“设计稿 vs 现有代码”的差异，不改写后文的推理过程：
+
+| 本文 | 0.1.4 实现 | 依据 |
+|---|---|---|
+| §2 完整列表不变量 | **已被“本轮任务表”取代**：气泡读 `status.run.tasks`，任务行在 scan/传输中增减，整轮结束后保留到下一轮 scan；`status.sessions` 仍保留，供侧栏标记、输入拦截与旧列表路径使用 | `packages/plugin/src/status.ts`（`SyncTaskView` 注释“不再表示完整会话列表”）、`controller.ts` `runTaskMode()`、`client/index.js` `statusTasks()` |
+| §3 稳定顺序 | 已实现：`controller.ordinals` 首次观察到会话时分配，任务表与会话视图都按 ordinal 排序；重启后按观察顺序重排，不按 `createdAt` | `controller.ts` `sessionViews()` / `updateTask()` |
+| §4 per-session 状态 | 部分实现：`SyncStatus.sessions` 跨轮保留，字段为 `phase/stage/push/pull/pending/tailOpen/remoteAhead/cwdPending/unmapped/blocked/decision`；没有 `SyncLaneState` / `transaction` | `status.ts` `SyncSessionStatus` |
+| §5 stage | 已实现，`SyncStage` 取值与本节一致 | `engine.ts` `SyncStage` |
+| §6 / §7 summary 与计数 | 未按此实现：没有 `summary`，头部是标题/副标题 + `已完成/总数` 计数（任务模式另有“校验 N/M”副标题） | `client/index.js` Bubble 头部 |
+| §8 动效 | 已实现：旧列表路径是上下两层各 4px，任务表模式每段只有一条 4px 方向条（push 左起黄、pull 右起蓝）；圆点旋转 1.15s / 光晕 1.6s / 涟漪 2.4s、reduced-motion 都有；`failed` 只有静态红点，“首次轻微闪烁”未实现 | `client/index.js` CSS `dssync-orbit/halo/ripple`、两种 `dssync-seg` 分支 |
+| §9 自动滚动 | 只在旧 `status.sessions` 列表路径生效；任务表模式不做 ongoing 跟随（`focusSessions = useTasks ? [] : sessions`） | `client/index.js` Bubble 焦点计算 |
+| §10 / §11 接口与 selector | 未按此实现：实际 `SyncStatus.schemaVersion = 2`，接口见 `status.ts`；没有 `selectBubbleView` | `status.ts`、`controller.ts` `snapshot()` |
+| §14 状态传输 | 已实现：单页一条 `/events`、心跳 15s、合并 200ms、约 40s 无字节重连、失败时 1s `/status` 兜底；stage 变化跳过合并窗口 | `event-stream.ts`、`client/index.js` `openStream()` |
+| §15 气泡收起 | 见该节“实现”注记 | `client/index.js` `expand()` / `scheduleAutoCollapse()` |
 
 ## 1. 当前问题
 
@@ -22,6 +40,9 @@
    看起来像卡住。
 
 ## 2. 完整列表不变量
+
+> 实现（0.1.4）：气泡已改为展示**本轮任务表**（`status.run.tasks`），不再是这里定义的
+> 完整会话列表；下面的谓词只作设计目标保留（见第 0 节）。
 
 气泡的同步列表**在同步开始前**由 Host 计算完整，任何时刻都应包含：
 
@@ -219,6 +240,9 @@ blocked > failed > write-owned > unmapped > cwd
 
 ## 7. 气泡计数
 
+> 实现（0.1.4）：头部没有按下面的三段文案改；计数仍是标题/副标题加 `已完成/总数`
+> 计数 chip（`client/index.js` Bubble）。
+
 计数必须来自完整、稳定的列表：
 
 ```text
@@ -300,6 +324,9 @@ waiting-write / waiting-live / waiting-cwd / waiting-retry
 
 ## 9. 自动滚动：跟随当前同步会话
 
+> 实现（0.1.4）：任务表模式下焦点集合为空，不按 ongoing 行自动滚动，也不会出现
+> “回到当前同步”按钮（按钮要求 `focusSessionId !== null`）；下面仍是设计目标。
+
 自动滚动的焦点不是“列表底部”或“新追加的行”，而是**当前正在进行的同步行**。
 
 `ongoing` 定义为：
@@ -347,6 +374,9 @@ offscreenChanges: number   // 暂停期间焦点/阶段变化的提示计数
 暂停状态下的按钮文案优先使用“回到当前同步”，不要只说“回到底部”。
 
 ## 10. 状态接口
+
+> 实现（0.1.4）：实际接口是 `SyncStatus`（`schemaVersion: 2`，含 `run.tasks` 与
+> `sessions`），下面这份 schema 没有落地。
 
 前端和 host 同版本，不需要旧气泡兼容层；直接替换为新 schema，并同步更新两端。
 
@@ -429,7 +459,10 @@ selectBubbleView(status) => {
 
 ## 15. 气泡收起
 
-- `status.running` 或 `status.pending !== null` 时禁止自动收起；
-- 同步完成后的自动收起延迟 3s，且只在未 pin、未 hover、未 focus-within 时执行；
-- 用户点击/展开气泡后 pin 住；pointerleave/blur 的 5s 收起只在非同步中执行；
-- 鼠标进入、焦点进入会取消完成收起计时。
+> 实现（0.1.4）：整轮同步结束后保留结果列表、不按 3s 自动收回；只有单会话定向操作
+> （`run.scope === 'session'`）展开后空闲 3s 收回。以本节下列实现为准。
+
+- 同步进行中（`status.running` 或 `status.pending !== null`）不自动收起；
+- 整轮同步完成后保留结果，直到下一轮任务进入；单会话定向操作展开后空闲 3s 自动收回；
+- 用户点开/钉住后不算“空闲 3s”自动收回；
+- 指针离开或窗口失焦 5s 后收起，但仅在没有保留结果、非同步中、且未 hover/未 focus 时执行；鼠标进入、焦点进入会取消计时。

@@ -1,6 +1,6 @@
 # cwd 可移植性：跨设备会话里的工作目录
 
-> 状态：**最终设计**（2026-10-21）。插件未公开发布，不考虑历史数据迁移。
+> 状态：**最终设计**（2026-10-21；2026-11-10 按 0.1.4 代码复核）。插件已发布，设计层面仍不考虑历史数据迁移。
 > 决策经过见 [DECISIONS.md](../plans/DECISIONS.md)；会话身份见 [RECONCILE.md](../sync/RECONCILE.md)；
 > 用户协议见 [USAGE-AGREEMENT.md](../guides/USAGE-AGREEMENT.md)。
 >
@@ -60,6 +60,9 @@ DSH 源码关系：
 - canonical header 不承诺整个会话跨平台可用。
 
 ## 2. DSH 源码事实
+
+> 本节引用的是 DSH `0.2.x` 的源码行为；本仓库不含 DSH 源码，插件侧只依赖事件文本，
+> 本次复核**未逐条重验**这些宿主内部结论，相关条目按**未核实**处理。可核实的插件侧结论见 §5。
 
 ### 2.1 会话头的 cwd 决定物理位置
 
@@ -126,7 +129,8 @@ system-prompt context，工具也用它解析相对路径；session log 的契�
 
 **`ensure()` 不是迁移标记**：它只做本地目录一致性恢复，可能发生在首条用户消息之前，
 不能区分设备迁移/目录删除/仓库移动，也不提供工具链信息。迁移通知应走独立的
-`agent/pre-step`/system-reminder。
+`agent/pre-step`/system-reminder（**当前未实现**，见 [DESIGN.md](DESIGN.md) 的「换设备与设备标记」；
+现有 `agent/pre-step` 只用于拒绝分叉会话）。
 
 `working_directory` 工具带 `cd` 的典型场景是模型想改变后续工具调用的会话级目录：
 
@@ -215,27 +219,30 @@ Windows: 两者都 accepted
 
 ### 5.3 `nonPortable` 本地警告
 
-- 依据 projection 的**当前/最后 cwd**，不逐条检查历史；
-- 当前 cwd 在工作区外 → 本地提示“跨设备可能无法正确恢复”；
+- 依据**最后一条 `working-directory/change` 的 cwd**（`lastWorkingDirectoryOf` 从事件读，不扫 projection，
+  也不逐条检查历史），`packages/plugin/src/engine.ts:825-857`；API/状态里的字段名是 `cwdNonPortable`
+  （`packages/plugin/src/status.ts:52`）；
+- 最后 cwd 在工作区外 → 本地提示“跨设备可能无法正确恢复”，并把会话标成 `cwdPending`；
 - 不是同步身份、不影响批次哈希、不永久锁死会话；
-- 用户可以：
-  - 忽略并继续（接受风险）；
-  - 确认追加修正；
-  - 取消本次操作。
+- 用户可以（同步气泡里该会话行上的两个按钮，`packages/plugin/client/index.js:2908-2934`）：
+  - **修正 cwd**（`fix`）：追加一条修正事件并立即推送；
+  - **skip**：按远端 raw cwd 直接挂载（“按原 cwd 导入”），只清除本地 pending，不改历史。
+- 不点这两个动作、关掉气泡，就等价于“忽略并继续（接受风险）”；没有单独的“取消”动作。
 
 ### 5.4 接收端修正
 
-在 pull/apply 后、attach/resume 前：
+实际实现（`packages/plugin/src/engine.ts:2235-2328` 的 `correctCwd` + `packages/plugin/src/index.ts:1609-1626,1766-1779`）：
 
-1. 读 projection 最后 cwd；
-2. 若在工作区外或不可用，显示本地警告；
-3. 用户确认后，确保本地 workspace root 存在；
-4. 向服务端申请租约；
-5. 持有租约时确认远端 lastSeq 没有推进；
-6. 本地 append 一条 `working-directory/change`，cwd = 本地 workspace canonical root；
-7. 立即用租约推送到服务端；
-8. 成功后再 attach；失败按 pending/重试处理，不能假装成功；
-9. 若租约冲突或远端已推进，放弃本次修正并重新对账。
+0. 会话**不能正在运行**（`engine.ts:2242-2244`），且目标路径来自本地会话 header 的 `cwd`（本地工作区根，`index.ts:1613`）；
+1. 读最后一条 `working-directory/change` 的 cwd；已经在目标工作区里则返回 `already-portable`（只补推未同步的本地事件或提示先同步）；
+2. 若在工作区外，显示本地警告并把会话标成 `cwdPending`；
+3. 用户点 `fix` 后，宿主先确保**全局写租约**（`index.ts:1773`），拿不到返回 `lease-held`；
+4. 远端必须与本地 `lastSeq` 一致、尾已闭合（`tailOpen !== true`、`safeThroughSeq === lastSeq`），再重新读一遍 manifest 复核（`engine.ts:2269-2284`），否则返回 `needs-sync`；
+5. 本地 append 一条 `working-directory/change`，cwd = 本地工作区根；封成 zstd 批次上传（`engine.ts:2297-2307`）；
+6. append 以 `baseIndex = 当前最后一个批次`、`baseChainHash` 对上，`safeThroughSeq = 新 seq`（`engine.ts:2310-2321`）；
+7. 成功（`corrected` / `already-portable`）后才 attach；`skip` 直接用远端 raw cwd 挂载并清 pending，**不**追加事件。
+
+结果状态是 `corrected` / `already-portable` / `needs-sync` / `lease-held` / `error`；失败不会假装成功，下一轮重新对账。
 
 这条修正事件是普通 raw 事件，会进入历史并同步到其他设备。
 
@@ -268,9 +275,9 @@ Windows: 两者都 accepted
 - header cwd 不参与同步哈希；
 - 最后 cwd 在工作区内 → 不警告；
 - 最后 cwd 在工作区外 → 本地警告；
-- 用户确认 → 追加修正并立即推送；
-- 用户取消 → 不追加；
-- 租约冲突/推送失败 → pending/重试，不假装成功；
+- 用户 `fix` → 追加修正并立即推送；
+- 用户 `skip` → 不追加，按远端 raw cwd 挂载；
+- 租约冲突/远端已推进/推送失败 → 返回 `lease-held`/`needs-sync`/`error` 并保留 `cwdPending`，不假装成功；
 - 修正后 attach 成功；
 - 历史外部 cwd 不被改写；
 - 消息/工具调用完全不变；

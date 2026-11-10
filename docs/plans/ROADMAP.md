@@ -1,6 +1,6 @@
 # 里程碑与当前状态
 
-> 当前真值，2026-10-27。以本文件为准。
+> 当前真值，2026-11-10。以本文件为准。
 
 ```
 M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件同步 → M4 自动化/故障/客户端防护
@@ -11,14 +11,14 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 |---|---|---|
 | **M0** | 免重启 ingest 实验：外部写入会话 + `attachSession`，运行中的客户端能看到 | ✅ 已完成；结论见 [tests/m0/README.md](../../tests/m0/README.md) |
 | **M1** | 骨架 + `shared`：帧工具、封帧/加密、协议类型、真实会话夹具、官方校验器 | ✅ 基础完成；帧工具保留给本地导出/兼容，**同步链已改为事件批次** |
-| **M2** | 自部署服务端：设备 token、blob、manifest、租约、append、墓碑、会话快照/变更流、批量 blob、zstd 封帧、配额、管理台、首次初始化 | 🚧 服务端 0.1.0 已实现 v2-only（`PROTOCOL_VERSION=3`）；插件已迁移 v2 路径、cursor、幂等 append、批量 blob 与 zstd，0.0.x 插件不再兼容 |
-| **M3** | 插件 MVP：枚举会话、事件批次哈希、推送/拉取、免重启 ingest、手动触发/状态、断网降级、安全边界（`tailOpen`/`safeThroughSeq`）与 apply journal | ✅ v1 链路已通过；0.1.0 已完成 v2、批量 blob、zstd 与 opaque cursor 迁移；发布收口待定 |
-| **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | 🚧 A1–A5、B1–B5、C1–C4/C6、E1 已完成；C5 GUI 回归、D5 UI 文案演练与 E3 文档收口顺延到 Vault V0–V2 之后 |
+| **M2** | 自部署服务端：设备 token、blob、manifest、租约、append、墓碑、会话快照/变更流、批量 blob、zstd 封帧、配额、管理台、首次初始化 | ✅ 服务端 0.1.2 已实现 v2-only（`PROTOCOL_VERSION=3`）；插件走 v2 路径、cursor、幂等 append、批量 blob 与 zstd，0.0.x 插件不再兼容 |
+| **M3** | 插件 MVP：枚举会话、事件批次哈希、推送/拉取、免重启 ingest、手动触发/状态、断网降级、安全边界（`tailOpen`/`safeThroughSeq`）与 apply journal | ✅ 已完成；0.1.4 已发布（单会话推送、底部会话状态条、上传范围开关、空闲文案） |
+| **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | ✅ 主要项已完成（A1–A5、B1–B5、C1–C4/C6、E1）；C5 GUI 回归、D5 故障文案演练、E3 文档收口顺延，不阻塞发布 |
 | **Vault V0–V2.1** | 密钥域/记录链 → 服务端 append/cursor + 最小设备台账 → `workspaceKey` + 一次性绑定 + 未映射阻断 → 根会话级同步选择 + label 映射 | ✅ V0–V2.1 已完成（133 tests）；V3/V4 设计稿；见 [VAULT.md](../sync/VAULT.md) |
+| **附件同步** | 会话附件（图片/文件）的跨设备同步 | 🚧 规划中；当前只同步会话事件 |
 | **M5** | 公共多租户公益服 | ❌ 不在当前范围；独立 package/仓库，只共享插件对接协议 |
 
-> **当前优先级**：服务端 0.1.0 与插件 0.1.0 的 v2-only、opaque cursor、批量 I/O、zstd
-> 与压缩状态均已落地；下一步做发布收口、真实大会话验证与 WAF 观测。M5 公益服不塞进自部署包。
+> **当前优先级**：0.1.4 已发布并可用于插件市场；下一步是附件同步与 Vault V3/V4。M5 公益服不塞进自部署包。
 
 ## 当前阶段的验收
 

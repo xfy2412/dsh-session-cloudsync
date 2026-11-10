@@ -1,6 +1,6 @@
 # 同步安全边界与客户端防误操作
 
-> 状态：设计已定；M3 的安全边界（`tailOpen` / `safeThroughSeq`）与拉取已经落地，M4 客户端防误操作已实现（composer block / 列表拦截 / leading 标记），剩真实 GUI 的 C5 回归。文中的源码结论来自 DSH `0.2.1-rc.2`。
+> 状态：设计已定；M3 的安全边界（`tailOpen` / `safeThroughSeq`）与拉取已经落地，M4 客户端防误操作已实现（composer block / 列表拦截 / leading 标记），剩真实 GUI 的 C5 回归。文中的 DSH 源码结论按 `0.2.1-rc.2` 核对；当前 dev/peer 已是 `0.2.2-rc.1`（本插件已实测），未逐条复核 0.2.2 的源码差异。
 > 2026-10-23 按源码校正：`session/end-seed` 是 seed 边界（不是 turn/session 结束），只在 resume/fork 的构造路径补；拦截矩阵改为“冷会话硬拦、live 只拦输入”。本机 83 个会话的只读统计由维护者工作区记录（不随仓库分发）。
 
 ## 1. 为什么开放尾只能备份，不能直接给远端 resume
@@ -40,28 +40,48 @@ interface SessionSummary {
 }
 ```
 
+manifest 还带 `workspaceKey`（根会话，V2）以及 `parentSession` / `origin` /
+`delegationDepth`（子树字段）；`tailOpen` / `safeThroughSeq` 只是给读者的安全边界。
+
 写入方：
 
 - `tailOpen = interruptedTurnClosers(events).length > 0`；
 - `safeThroughSeq`：尾巴闭合时是最后一个事件 seq；开放时是**最后一个 `turn/end` 的 seq**；
-- 封批时在 `safeThroughSeq` 处强制对齐，保证安全边界落在批次边界上。
+- 安全边界不强制切批：批次仍按事件数/字节切分，读取方只取 `seq <= safeThroughSeq`
+  的事件（`engine.ts` 的 `downloadSafeEvents`），跨边界的批次会被截断。
 
 读取方：
 
-- 只 apply `seqTo <= safeThroughSeq` 的批次；
-- 开放尾批次默认不下载、不写入本地 DSH 会话，只留在服务端当备份；
+- 只 apply `seq <= safeThroughSeq` 的事件；含开放尾的批次会下载，但只写入安全边界以内的部分；
+- `safeThroughSeq` 之后的开放尾事件不写入本地 DSH 会话，只留在服务端当备份；
 - `safeThroughSeq` 前进后才补拉并 append 新变为安全的批次。
+
+共享前缀不是逐字节相同：同一 seq 上两条 `session/end-seed` 标记（只携带 `{}` 或
+`{ inherited: true }`，只有 `time` 不同）被当作等价，远端那条会被采用
+（`shared/src/chain.ts` 的 `markerEquivalent`、`engine.ts` 的 `verifySharedPrefix`）；
+其他任何事件不一致仍然是 `diverged`。
 
 这样长任务也能持续备份，但远端始终拿不到“半截可 resume”的会话。开放尾的 adopt/ignore 需要显式操作，不自动决定。
 
 ## 2.1 同步范围：根会话选择与子代理闭包
 
-- 同步范围按**根会话**选择，不再有工作区白名单。默认不选任何根会话；本地 `syncSessionIds` 是显式白名单，新会话不会自动加入。
-- 首启/设置页的同步列表由 `GET /api/session-cloudsync/workspaces` 提供：每个根会话带 `sessionId`、工作区路径、创建时间、事件数、子代理数；「全选/清空会话」直接更新这份本地白名单。
+- 同步范围按**根会话**选择，不再有工作区白名单。上传侧默认不选任何根会话，
+  `syncSessionIds` 是显式**上传**白名单，新会话不会自动加入；它不限制拉取（见下一条）。
+- 首启/设置页的同步列表由 `GET /api/session-cloudsync/workspaces`（`/config.workspaces`
+  是同一份数据）提供：每个根会话带 `sessionId`、工作区路径、创建时间、事件数、子代理数；
+  「全选/清空会话」改的是设置页草稿，仍需点顶部「保存配置」才落盘（底栏「上传本会话」
+  开关经 `POST /session-scope` 立即写入）。
 - 子代理后代跟随根，不单独勾选。只有 `origin === 'subagent'` 算后代；fork 虽然也有 `parentSession`，但它是独立根。
-- 推送顺序是**后代深到浅、根最后**；拉取按远端封好的 `delegationDepth` 从深到浅创建，子代理先建、根后建。找不到父会话或父链成环的子代理进入 `skipped`，不会静默丢进同步链。
-- 不在白名单里的根及其整棵子代理在推送/拉取两侧都跳过；选择只在本设备生效，不会删除远端历史。
-- 拉取按远端 `workspaceKey` 查本机绑定；未找到绑定时标记 `unmapped`，不创建本地会话，也不猜落点。
+- 任务模式里每个会话是一个独立单向任务，推送没有跨会话顺序保证（任务表按根→深度
+  排序，见 `sync-plan.ts` 的 `planSync`）；只有**新拉取**的子代理会按深度从深到浅
+  先建、根后建（`controller.ts` 的 `executeTaskList`）。找不到父会话或父链成环的
+  子代理进入 `skipped`，不会静默丢进同步链。
+- 不在白名单里的根及其整棵子代理**只跳过推送**；拉取范围是「已绑定工作区下的根 +
+  已选根」（`index.ts` 的 `plannedRoots` / `planSync` 的 `boundWorkspaceKeys`），落点仍
+  由 `workspaceKey` 解析决定。选择只在本设备生效，不会删除远端历史。
+- 拉取按远端 `workspaceKey` 查本机绑定；本机路径派生出的 key 与远端相同也算已映射
+  （`index.ts` 的 `localWorkspacePathForKey`）。未映射时标记 `unmapped`，不创建本地
+  会话，也不猜落点。
 
 ## 3. 拉取原子性
 
@@ -73,21 +93,26 @@ DSH 的 `append` 不是多事件事务：崩溃可能留下半个 turn；持久�
 
 所以拉取必须自带恢复日志：
 
-1. 下载、解密、校验目标 turn 的全部事件；
-2. 原子写 apply journal（`sessionId / targetSeq / nextSeq / phase`）；
+1. 下载、解密、校验到目标安全边界（`safeThroughSeq`）的全部事件；
+2. 原子写 pending（`{sessionId, targetSeq, at}`，`state.ts` 的 `PullJournal`）；
 3. `open(id,'write')` 或 `create(header)`；
-4. 尽量一次 `append` 整个 turn；太大才分批，journal 记 `nextSeq`；
+4. 按 500 事件切片 `append`（`appendPulledEvents`）；pending 只记目标边界，不记逐批进度；
 5. `flush()`；
 6. 清除 pending（事件已耐久）；
-7. **整轮 apply 完成后统一 `attachSession`**：子代理先、根最后；这样前端列表不会在闭包只同步一半时刷新；
-8. 挂载失败时 revision 不前进，下一轮会因本地已是最新而重试挂载。
+7. **挂载**：任务模式下每个 pull 任务在 append+flush 后立即 `attachSession`
+   （新会话 `attachMode='new'`，已存在会话不重复挂载），新拉取的子代理按深度从深到浅
+   先建；旧 `pullOnce` 的“整轮 apply 完再统一 attach”仍保留，但正常轮次不走；
+8. 挂载失败时本轮不算成功、不记 receipt（旧 `pullOnce` 不推进游标）；下一轮会因本地已是最新而重试挂载。
 
-启动时对未完成 journal 做 reconcile：
+进程重启后的恢复（任务模式）：
 
-- 读本地日志，校验前缀与服务端 manifest 一致；
-- 补齐 `nextSeq..targetSeq` 的缺失事件；
-- `flush` 后再 attach；
-- 如果发现本地已有 synthetic closers 或前缀哈希不一致，**停止追加**，标记 `diverged`，要求 fork/人工处理。
+- 没有单独的启动修复步骤；下一轮 `scan` 若发现 pending 会话已 `up-to-date` 就清掉
+  pending（`index.ts` 的 `taskRunner.scan`），否则该会话的下一轮拉取重新读本地日志、校验前缀，
+  并从本地末尾续写；
+- 旧的 `pullOnce` 仍有 pending 恢复分支（读日志、校验前缀、补齐缺失事件、`flush` 后
+  attach），正常轮次不走；
+- 如果发现本地已有 synthetic closers 或前缀哈希不一致，**停止追加**，标记 `diverged`，
+  要求 fork/人工处理。
 
 服务器侧：先传 blob，再 append manifest；崩溃留下的孤儿 blob 由 GC 处理，append 重试按 `baseIndex + baseChainHash` 幂等。
 
@@ -151,7 +176,7 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 
 **方案**：
 
-1. **空闲会话**：注册 `sidebar.session.row.leading`，`id: 'sync-mark'`，画小锁/同步点；完整状态放 hover 卡片；
+1. **空闲会话**：注册 `sidebar.session.row.leading`，`id: 'session-cloudsync-mark'`，画小锁/同步点；完整状态放 hover 卡片；
 2. **冷会话 + 危险状态**（最需要防误 resume）：左侧图标拿不到，用捕获阶段拦截：
    ```ts
    document.addEventListener('click', handler, true)
@@ -174,11 +199,12 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 
 客户端需要知道哪些会话处于 `applying` / `openTail` / safe 落后 / `diverged`。M4 已落地：
 
-- **宿主 API**：`GET /api/session-cloudsync/status`（schema v2）提供运行中/上次结果/退避/pending、全局 `deviceLease`，以及每个会话一行的聚合视图：`phase`、`push`/`pull` 方向、`pending.upload/download`、`tailOpen`、`remoteAhead`；`GET /api/session-cloudsync/events?until=idle` 提供同一快照的 SSE 增量流（心跳、合并、abort 清理、空闲关闭）；`POST /api/session-cloudsync/sync` 手动触发；自动同步由 `nextRunAt` 自调度；
-- **全局单写者租约**：`/status.deviceLease` 投影本机对 `sync` 资源的持有状态；进程存活期间 20s 续租，服务端 TTL 60s；没有 held 时宿主**跳过上传、仍然拉取**；`foreign`/`lost` 时 composer 停止写入、冷会话 open guard 拦打开，live 行仍允许切换查看；
+- **宿主 API**：`GET /api/session-cloudsync/status`（schema v2）提供运行中/上次结果/退避/pending、全局 `deviceLease`，以及每个会话一行的聚合视图：`phase`、`push`/`pull` 方向、`pending.upload/download`、`tailOpen`、`remoteAhead`；`GET /api/session-cloudsync/session-status?id=` 返回单会话只读规划（与整轮 scan 共用 `planRound`，宿主侧 2s 缓存）；`GET /api/session-cloudsync/events?until=idle` 提供同一快照的 SSE 增量流（心跳、合并、abort 清理、空闲关闭）；`POST /api/session-cloudsync/sync` 空 body = 手动整轮，`{sessionId, direction}` = 单会话定向；`POST /api/session-cloudsync/session-scope {sessionId, enabled, choice?}` 切换上传白名单（未绑定工作区时返回候选）；自动同步由 `nextRunAt` 自调度；
+- **全局单写者租约**：`/status.deviceLease` 投影本机对 `sync` 资源的持有状态；进程存活期间 20s 续租，服务端 TTL 60s；没有 held 时宿主**跳过上传、仍然拉取**；租约只限制上传，不限制本机继续打开/写入会话——client 的 `sessionBlockReason` 已不看租约，只把底栏「推送」按钮置灰、气泡显示「只读同步」（`client/index.js`）；
 - **apply 中**：`pending.sessionId` 命中时 composer 与列表行都拦；
 - **开放尾**：冷会话 `tailOpen: true` 时拦列表打开与 composer；live 会话允许打开，只拦输入；
 - **safe 落后**：冷会话 `remote-ahead` 按 safe 落后处理，拦列表打开与输入；live 会话允许打开，只拦输入。`lag` 必须来自当前聚合状态，不能只用上一轮 push 的 `remote-ahead`；同轮 pull 已补齐时应清掉；
+- **远端领先 + 会话已打开**：本机会话一旦打开，写句柄归 DSH 会话对象所有，拉取只会得到 `write-owned`/`local-active`；底栏因此只提供推送，远端领先时显示蓝点，需关闭该会话后重启再同步（见 [OPERATIONS](../guides/OPERATIONS.md)）；
 - **diverged/未同步**：由 [RECONCILE.md](RECONCILE.md) 的状态机提供给前端；冷会话拦打开，live 允许打开；两者都拦输入并展示风险确认；
 - **冷打开会写日志**：DSH 的 `history.follow` 对冷会话会 `promote` → `resume`，可能补 synthetic closers 和 `session/end-seed`；所以“拦打开”不是 UI 偏好，而是同步安全边界。已有 marker 的尾部不会重复补 marker，但仍会变 live、堵住 pull；
 - 不写临时同步事件，避免污染会话日志；逐会话 projection 仍可作为后续优化，但当前等价状态已由 `/status` 提供。
@@ -196,13 +222,13 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 
 脚本路径和备份目录由宿主 API `POST /api/session-cloudsync/replace` 返回，前端展示完整步骤和可复制命令。用户必须自己退出 DSH、运行脚本、再启动 DSH；插件不会重启应用。
 
-远端必须仍在同一 `sessionId / createdAt / formatVersion` 下；如果远端已经变成新生命周期，拉取会按新会话处理。脚本只保证本地被安全移除和备份，不保证远端一定还能重建：执行前要确认远端仍有该会话，且其工作区在同步白名单内。
+远端必须仍在同一 `sessionId / createdAt / formatVersion` 下；如果远端已经变成新生命周期，拉取会按新会话处理。脚本只保证本地被安全移除和备份，不保证远端一定还能重建：执行前要确认远端仍有该会话，且其工作区已绑定到本机。
 
 ## 6. 已知限制与待验证
 
 - 客户端 projection 在列表行里的可见性还没端到端验证；
-- **durable revision + pending journal 已实现**：拉取前落盘 `{sessionId,targetSeq}`，成功后清除；启动先补 pending。若崩溃到 reconcile 前用户 resume，仍可能写入 closers 造成冲突，这条竞态仍需 UI/守卫兜底；
-- **pending 只有一条**：一个会话失败后 `pullOnce` 立即停止，不再开始下一个会话，避免覆盖前一个未完成的恢复记录；代价是失败会话解决前，本轮后续会话暂不拉取。逐会话 journal 条目留到后续按需再拆；
+- **durable revision + pending journal 已实现**：拉取前落盘 `{sessionId,targetSeq,at}`，成功后清除；重启后由下一轮 scan/拉取处理（见 §3）。若崩溃到 pending 清理前用户 resume，仍可能写入 closers 造成冲突，这条竞态仍需 UI/守卫兜底；
+- **pending 只有一条**：apply 中途失败后，其他会话的拉取会在 `beginApply` 被拒绝而失败，直到该 pending 处理完；逐会话 journal 条目留到后续按需再拆；
 - `data-row-key` 是应用内部属性，不是公开 API；捕获拦截依赖它，升级时要回归；捕获层只覆盖侧栏会话行；
 - 搜索结果（`SearchResultItem` 没有 `data-row-key`）以及 `ui-schedule` / `ui-message-feedback` / `ui-workflow-run` / `ui-subagent` 等直接调用 `uiWorkspace.openSession` 的入口由 client 侧包装覆盖；服务探测失败、`openSession` 不可写、状态未加载时 fail-open。不能把该包装当成稳定 API，DSH 升级后要跑一次 capability 回归；
 - 即使 open 被 guard 拦住，其他直接调用 `replaceMain`/私有导航的路径、提前解构缓存 `openSession` 的消费者、以及 `openWorkspace` 复用已有会话的路径仍可能绕过；composer block 只能阻止继续输入，不能撤回已经发生的 resume/end-seed 写入；
@@ -225,9 +251,9 @@ closers/end-seed。所以 composer block 与列表拦截是防误 resume/分叉�
 - [x] 运行中行的 hover 卡片状态说明（`sidebar.session.row.hover` 的 `session-cloudsync-hover`）；
 - [x] 冷/live 拦截矩阵落地：冷 `remote-ahead`（含尾部已是 end-seed 的会话）硬拦，live 放宽为只拦输入；
 - [x] 全局单写者租约：进程存活期间续租；没有 held 时只拉取；服务端 append/create/delete 强制要求；
-- [x] 客户端 foreign/lost 时 composer 拦输入、冷会话 open guard 拦打开；
+- [x] 客户端 foreign/lost 时只置灰上传（底栏推送按钮 / 气泡「只读同步」），不阻止本机打开/写入；
 - [x] client `uiWorkspace.openSession` 包装：覆盖搜索结果/ schedule / feedback 等入口，探测/安装失败 fail-open；
-- [ ] `diverged`/未同步会话的输入拦截、风险说明与“强行写入分叉”确认；
+- [x] `diverged` 会话的 composer/列表拦截与「忽略 / 强行写入 / 接受远端」处理（`POST /blocked`、`POST /replace`）；“未同步”不是独立状态，不单独拦；
 - [ ] `nonPortable` 会话的本地警告、确认后接收端追加修正与租约推送；
 - [ ] 可选视觉蒙版；
 - [ ] GUI 回归：下拉、拖拽、键盘操作、深链打开都不误 resume；

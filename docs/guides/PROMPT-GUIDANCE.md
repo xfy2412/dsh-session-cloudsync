@@ -1,14 +1,16 @@
 # Agent 提示词：cwd 与同步可移植性
 
-> 状态：**设计稿，未实现**（2026-10-21）。
+> 状态：**设计稿，未实现**（2026-10-21；2026-11-10 对代码核对：插件暂无 `systemPrompt`
+> 注入、无对应设置开关，见第 4 节）。
 > 目标：减少 agent 主动把会话 cwd 切到工作区外，降低 `nonPortable` 会话数量；
 > **不是**限制 agent 访问工作区外文件，也**不是**安全边界。
-> 相关：[CWD.md](../architecture/CWD.md)、[RECONCILE.md](../sync/RECONCILE.md)、[GLOSSARY.md](GLOSSARY.md)。
+> 相关：[CWD.md](../architecture/CWD.md)、[RECONCILE.md](../sync/RECONCILE.md)、[GLOSSARY.md](GLOSSARY.md)；
+> cwd 警告与修正的界面流程见 [OPERATIONS.md](OPERATIONS.md)。
 
 ## 1. 为什么要提示
 
-同步插件能处理 `working-directory/change`，但工作区外 cwd 只能本地警告 `nonPortable`；
-修正由用户确认后在接收端追加。
+同步插件能处理 `working-directory/change`，但工作区外 cwd 在本地只做警告（`nonPortable`，
+界面显示「cwd 外」）；修正由用户确认后在接收端追加。
 
 - 会话仍可同步/备份；
 - 不映射到工作区根；

@@ -1,6 +1,6 @@
 # 加密附加数据层（Vault）与工作区映射
 
-> 状态：**V2 已完成，V3+ 设计稿**（2026-10-22）。
+> 状态：**V2 已完成，V3+ 设计稿**（2026-10-22 起草；2026-11-10 按插件 0.1.4 的当前代码校正）。
 > 本文件承接 [DESIGN.md](../architecture/DESIGN.md) 的 L2 设备台账 / L3 agent 笔记；M4 的单一
 > `workspacePath` 已由本文的工作区绑定替换。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
 > 会话内部的 cwd 处理另见 [CWD.md](../architecture/CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
@@ -18,19 +18,24 @@ Vault 负责同步**会话事件之外**的加密数据：
   `DSH_HOME`、工作区、最后在线；
 - 工作区身份与「远端工作区 → 本地工作区」绑定；
 - L3 agent 笔记（append-only）；
-- 会话生产者的插件/版本戳，用于跨设备兼容性提示和「一键匹配版本」。
+- 会话生产者的插件/版本戳，用于跨设备兼容性提示和「一键匹配版本」（V3+ 设计）。
+
+当前实现只有最小 `device/profile`（不含插件/工具链）与 `workspace/profile`（见 §3.3）；
+L3 笔记、会话生产者戳、工具链与版本匹配仍是 V3+/V4 设计。
 
 不做：
 
 - 会话事件本身（仍走现有 manifest + 批次 + 租约）；
-- 工作区项目文件、附件正文（附件仍走会话同步的 blob 路径）；
+- 工作区项目文件、附件正文（**附件同步未实现**：插件只同步会话事件；服务端虽预留
+  `kind=attachment` 的 blob，客户端不写也不读）；
 - 服务端读取明文。Vault 默认全量 E2E，服务端只做 append 校验、存储与 cursor。
 
 ### 已接受的决策
 
 1. **Vault 粒度**：V0/V1 一台服务端实例 = 一个 Vault；公益服的多租户/Vault 路由另开 package 或仓库，只共享插件对接所需的协议边界；
 2. **设备与 writer**：一个 DSH profile/安装实例 = 一个 device token = 一条 writer stream；`device/profile` 保留 profile 字段，但 stream 按 deviceId 隔离；同一 token 被多个进程并发使用视为配置错误；
-3. **工作区身份**：远端 workspace 的正式可读名由 `workspace/profile` 记录承载；`workspace/bind` 只表示本机 `workspaceKey → localPath` 绑定；
+3. **工作区身份**：远端 workspace 的正式可读名由 `workspace/profile` 记录承载；本机
+   `workspaceKey → localPath` 绑定只存本机 `vault/bindings.json`，不上行 Vault（`bindings.ts`）；
 4. **不改绑**：首次绑定后不提供 workspace/session 迁移或改绑；DSH 本身也不支持工作区/会话迁移，强行走文件搬运破坏性太大；
 5. **子代理继承**：子代理跟随根会话的 key；子代理 manifest 不重复 key，拉取前先读根 manifest；
 6. **未映射行为**：不 apply、不猜落点，标 `unmapped` 等用户选择；
@@ -69,12 +74,9 @@ Vault 复用现有 **封帧原语、blob 存储、配额、cursor、错误分类
 
 ```text
 device/<deviceId>
-  seq 1: device/profile
-  seq 2: workspace/profile
-  seq 3: workspace/bind
-  seq 4: session/producer
-  seq 5: note/append
-  ...
+  seq 1: device/profile        # 已实现
+  seq 2: workspace/profile     # 已实现
+  # 设计稿（未实现）：workspace/bind、session/producer、note/append
 ```
 
 - 一台 DSH profile/安装实例对应一个 device token 与一条 stream；同一 token 不允许被多个进程当作两个 writer 并发使用；
@@ -127,43 +129,31 @@ device/<deviceId>
   "deviceName": "X2411",
   "os": { "platform": "win32", "arch": "x64", "release": "10.0.26100" },
   "dsh": {
-    "version": "0.2.1-rc.2",
-    "source": "global-package-json",
+    "version": "0.2.2-rc.1",
     "profile": "web",
     "node": "v24.20.0",
     "sessionFormatVersion": 4
   },
-  "plugins": [
-    { "id": "session-cloudsync", "name": "dsh-session-cloudsync", "version": "0.0.0",
-      "disabled": false, "state": "active", "source": "loaded" }
-  ],
-  "toolchain": {
-    "auto": [
-      { "name": "pnpm", "version": "12.4.1", "path": "C:\\…\\pnpm.exe",
-        "source": "spawn", "at": 1790000000000 }
-    ],
-    "authored": [
-      { "name": "uv", "version": "0.5.2", "path": "D:\\tools\\uv.exe",
-        "source": "agent", "sessionId": "session-…", "at": 1790000000000,
-        "note": "用 winget 装到 D:\\tools" }
-    ]
-  },
   "workspaces": [
-    { "key": "opaque-key", "path": "D:\\work\\project", "exists": true }
+    { "key": "opaque-key", "label": "project", "path": "D:\\work\\project" }
   ],
   "dshHome": "C:\\Users\\…\\.dsh",
   "lastSeenAt": 1790000000000
 }
 ```
 
-约束：
+当前代码只写上述字段（`vault-sync.ts`）：`plugins`、`toolchain`、`dsh.source`、
+周期刷新的 `lastSeenAt` 都没有实现；`sessionFormatVersion` 固定写 4。
+
+设计约束（`device/profile` 当前只有最小字段；下列多为 V3+ 目标）：
 
 - **版本来源要标**：`ctx.loader.entries()` = 加载了什么；`package.json` = 装了什么；
   `spawn` = 实际工具链是什么。三者可能不一致，不能合并成一个“版本”；
 - 工具链分 `auto` / `authored` 两源，自动采集只刷新 `auto`；同名渲染时 `authored` 优先；
-- 台账写插件自己的目录（如 `<DSH_HOME>/session-cloudsync/vault/ledger/<deviceId>.json`），
-  随 Vault 上行；本地可渲染人类可读的 `DEVICES.md`；
-- `device/profile` 只在内容 digest 变化时 append；`lastSeenAt` 最多每小时更新一次，不能每次同步都写一条；
+- 本地状态是 `<DSH_HOME>/session-cloudsync/vault/state.json`（writer/seq/prevHash/digest），
+  随 Vault 上行的是加密记录本身；`ledger/<deviceId>.json` / `DEVICES.md` 未实现；
+- `device/profile` 只在内容 digest（含工作区列表）变化时 append，不是每轮都写；
+  `lastSeenAt` 只在写新记录时带一次，没有按小时刷新的实现；
 - 工具链自动采集只在启动或手动刷新时执行，不能每轮同步都跑；
 - agent 写入走工具白名单字段，不允许改 `deviceId`/`dshHome` 这类身份字段；
 - 不采集用户名、环境变量值、密钥路径、token；
@@ -200,40 +190,40 @@ pathKey = base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)
 
 - 任何从该 workspace 推送会话的设备都应自动写一条 `workspace/profile`；它描述的是**远端逻辑工作区**，不是某台机器的本地路径；
 - `label` 是远端工作区的显示名；多台设备写不同 label 时按记录时间取最新，UI 可标注来源设备；
-- `workspace/profile` 只负责“远端工作区是什么”，`workspace/bind` 只负责“本机把它放到哪里”，两者不能混用。
+- `workspace/profile` 只负责“远端工作区是什么”，本机绑定只负责“本机把它放到哪里”，
+  两者不能混用。
 
-绑定记录：
+绑定记录：设计稿里是 Vault 的 `workspace/bind`；当前实现不上行 Vault，绑定只写本机
+`<DSH_HOME>/session-cloudsync/vault/bindings.json`（`bindings.ts`）：
 
 ```jsonc
 {
-  "schema": "dsh-session-cloudsync/vault/1",
-  "kind": "workspace/bind",
-  "entity": "opaque-key",
-  "data": {
-    "key": "opaque-key",          // 远端/逻辑工作区 key
-    "pathKey": "derived-key",     // 本机路径派生的 key，可用于反向索引
-    "localPath": "D:\\work\\project",
-    "label": "project",
-    "mode": "manual",             // manual | auto-suggested
-    "updatedAt": 1790000000000
+  "version": 1,
+  "bindings": {
+    "opaque-key": {
+      "key": "opaque-key",
+      "localPath": "D:\\work\\project",
+      "label": "project",
+      "createdAt": 1790000000000
+    }
   }
 }
 ```
 
 - 绑定是**每台设备自己的**；A 的绑定不会自动改 B 的路径；
-- 其他设备的绑定可以作为建议展示，但不能静默采用；
-- 同一 `localPath` 可以接收多个远端工作区（UI 警告可能混放），但只能有一个绑定作为
-  该路径的**推送身份**（否则从该路径上传的会话归属不确定）；
-- 同一远端 key 只能绑定一个本地路径；**首次绑定后不提供改绑或工作区迁移**；
-  DSH 本身也不支持工作区/会话迁移，强行走文件搬运破坏性太大；
+- 其他设备的绑定不参与同步，也不作为建议展示（没有 `workspace/bind` 记录）；
+- 同一 `localPath` 不能绑定多个远端 key：`bindWorkspace` 直接拒绝；同一远端 key 只能
+  绑定一个本地路径；**首次绑定后不提供改绑或工作区迁移**；DSH 本身也不支持工作区/
+  会话迁移，强行走文件搬运破坏性太大；
 - 当 `key !== pathKey` 时，这是**别名绑定**：本机以后从该 `localPath` 推送会话时，
   应使用绑定的 `key`，而不是本机派生的 `pathKey`，这样两台设备的会话才会汇入同一个
   remote workspace；
-- 推送时先按 `localPath` 查绑定：有绑定用 `binding.key`，无绑定用 `pathKey`；
-- UI 必须阻止为同一 `localPath` 建立两个“推送身份”的绑定。
+- 推送时先按 `localPath` 查绑定：有绑定用 `binding.key`，无绑定用 `pathKey`
+  （`index.ts` 的 `workspaceKeyForCwd`）；
+- UI 以“本机一个路径只能有一个推送身份”为约束。
 
 会话 manifest 增加可选的明文 `workspaceKey`（opaque，不含路径）；子代理继承根会话的 key。
-未发布阶段只支持带 key 的新 manifest；缺失 key 直接视为 `unmapped`，不猜落点。
+当前只支持带 key 的新 manifest；缺失 key 的根直接视为 `unmapped`，不猜落点。
 
 ### 3.5 写者租约
 
@@ -256,7 +246,8 @@ TTL      = 60s
 - 全局 `sync` 租约让同一时间只有一台设备上传会话；Vault writer 租约独立，两者互不阻塞；
 - V0/V1 先不做租约续租接口；单次 append 远小于 60 秒，后续确有长写入再加；
 - 服务端租约是权威，本地再加 `$DSH_HOME/session-cloudsync/vault/writer.lock`
-  （`{pid, clientInstanceId, acquiredAt}`）做快速失败；启动时 PID 已死则清掉 stale lock。
+  （`{pid, clientId, at}`）做快速失败；发现锁的持有 PID 已死或 clientId 不同就清掉
+  stale lock（`vault-sync.ts` 的 `withWriterLock`）。
 
 加入 `clientInstanceId` 后，同一 token 的第二个进程会被服务端以 `lease-held` 拒绝；
 会话侧现在使用全局 `sync` 租约，Vault 侧使用 `vault-writer` 租约，互不阻塞。
@@ -274,7 +265,7 @@ Vault 写入流程：
 append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已有记录，不生成
 第二条同 seq 记录；租约已释放也允许幂等重放。
 
-### 3.6 L3 agent 笔记
+### 3.6 L3 agent 笔记（V4 设计，未实现）
 
 `kind: "note/append"`，只追加：
 
@@ -322,16 +313,16 @@ vaultKey  ──HMAC("workspace|"+path)────▶ workspaceKey
 
 ```text
 session manifest
-  └─ workspaceKey ──▶ 查本机 workspace/bind ──▶ 有：落到 localPath
+  └─ workspaceKey ──▶ 查本机 bindings.json ──▶ 有：落到 localPath
                                           └─ 无：unmapped，不 apply
 ```
 
 - 不走任何“旧路径 fallback”；没有 key 或没有映射都标 `unmapped`；
 - **绝不**把未映射的远端会话塞进第一个工作区；
-- 未映射会话（`sessionId + workspaceKey + cursor revision`）会持久化进本机状态文件；游标越过或进程重启后仍然保留，直到映射成功或会话消失；
-- 映射页合并两类来源：持久化的未映射会话，以及 Vault 里已有 `workspace/profile` 但本机未绑定的远端工作区。后者保证首启映射步骤在第一次同步之前也能看到远端工作区；
+- 未映射会话持久化在宿主状态文件的 `unmapped` 列表里（`state.ts` 的 `PullJournal.unmapped`，旧 `pullOnce` 路径写入）；任务模式下映射页展示的未映射工作区主要来自 `workspace/profile` label 与远端摘要清单（`index.ts` 的 `workspaces()`），不依赖逐会话回放；已持久化的条目在游标越过或进程重启后仍然保留，直到映射成功或会话消失；
+- 映射页合并来源：controller 的未映射会话、Vault 里已有 `workspace/profile` 但本机未绑定的远端工作区、以及远端摘要清单里的 workspaceKey。后两者保证首启映射步骤在第一次同步之前也能看到远端工作区；
 - 状态/气泡显示 `unmapped` 数量和原因；
-- 用户完成映射后，从该工作区未映射会话的最小 cursor revision 之前重放一次（回填），不推进主游标；回填成功后才从持久集合移除。这样即使映射页打开时游标已经越过，也不会永久丢会话；
+- 用户完成映射后，不需要重放游标：下一轮 `planRound` 会把该工作区下的远端-only 会话规划成 `local-missing` 并拉取（`index.ts` 的 `pullRoots` / `planSync` 的 `boundWorkspaceKeys`）；旧的 cursor 回填入口（`controller.beginBackfill` / `recordBackfill`）已无调用方；
 - 本机已注册工作区自己的 key（路径派生 key 或已绑定 key）直接解析到该路径，不需要“自己映射自己”；映射列表也会排除它；
 - 已有远端 manifest 的会话沿用远端 `workspaceKey`；映射只改变新会话的推送身份。这样把远端 key 绑到已有本地会话的路径时，旧会话不会因为 key 变化被判成 `diverged`；
 - 映射目标是本机注册工作区；不再要求它们在某个同步白名单内。已绑定到别的 key 的本地路径不再出现在候选里；
@@ -403,7 +394,7 @@ GET    /v2/vault/stream/:writer?from=<seq>&limit=<n>
 - cursor 返回记录索引，不返回载荷；
 - 每记录上限 1 MiB，stream 总上限按配额；超限 `507`；
 - 删除用 tombstone 记录，旧记录不物理删除；GC 需要单独设计；
-- 服务端升级是增量的；插件未发布，不需要为旧客户端保留 Vault 兼容分支。
+- 服务端升级是增量的；插件已发布 0.1.4，但 0.x 不做历史数据迁移，不需要为旧客户端保留 Vault 兼容分支。
 
 ### 6.1 V0 记录封帧与链
 
@@ -438,7 +429,7 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 统一小写、`\` 归一为 `/`，但 HMAC 输入保留一份确定的平台规范形式。跨平台不同根目录不做
 自动换算，走别名绑定。
 
-## 7. 插件版本匹配与一键切换
+## 7. 插件版本匹配与一键切换（V3+ 设计，未实现）
 
 ### 7.1 版本来源
 
@@ -479,7 +470,7 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 - 用户点一次执行；
 - 默认不自动安装、不自动降级、不自动批准 build script；后续若要自动，必须是显式开关 + 白名单。
 
-## 8. 工具链识别
+## 8. 工具链识别（V4 设计，未实现）
 
 沿用既有 L2 设计：
 
@@ -500,6 +491,9 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 - **版本匹配**：差异列表 + 「匹配插件版本」；
 - **笔记**：按工作区/设备分组，agent 写入入口在后续里程碑。
 
+当前设置页只有连接、凭据、上传范围、工作区映射、同步行为与性能面板
+（`client/index.js`）；设备台账 / 版本匹配 / 笔记三个面板属于 V3+/V4 设计。
+
 首启和设置页都可以设置工作区映射：
 
 - 首启选完同步工作区后，展示可用的远端工作区映射步骤；可跳过，稍后在设置页处理；
@@ -508,12 +502,12 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 - 没有匹配的远端工作区进入“待映射”，不阻止其他会话同步；
 - 「只推送」= 不建立任何映射，而不是把路径留空。
 
-## 10. 兼容性（未发布，无需迁移）
+## 10. 兼容性（0.x 不做迁移）
 
-- 插件尚未公开发布，没有已发布的历史数据、旧客户端或旧 manifest 需要兼容；
+- 插件已发布 0.1.4，但仍不考虑 0.x 历史数据迁移；没有旧客户端或旧 manifest 的兼容层；
 - 不保留旧 manifest 的 cwd 兼容层或迁移提示；
 - V2 开发数据可以清空重拉；
-- 仍保留 Vault 记录 schema / `workspaceKey` 的**协议版本字段**，用于发布后的正常演进，
+- 仍保留 Vault 记录 schema / `workspaceKey` 的**协议版本字段**，用于后续正常演进，
   这不是迁移负担；
 - Vault 记录/协议版本独立，失败时不影响会话同步。
 
@@ -535,8 +529,9 @@ V2 已完成工作区落点替换，不需要迁移分支。
 > 未映射 `unmapped` 阻断、设置页映射入口。
 > V2.1 已完成：本地根会话级白名单（默认不选、新会话不自动加入、子代理继承）、
 > `workspace/profile` label 读取与映射 UI、映射候选为本机全部注册工作区、
-> 未映射会话持久化与映射后回填、本地 key 自动解析、映射二次确认；
-> 当前测试 133 通过。
+> 未映射会话持久化、本地 key 自动解析、映射二次确认；映射后由下一轮扫描自动补拉。
+> 2026-10-22 记录的是 133 个测试通过；当前仓库有 121 个插件用例与 26 个服务端用例
+> （按 `test(` 计数），本轮未运行。
 
 ## 12. 已定
 
@@ -544,7 +539,7 @@ V2 已完成工作区落点替换，不需要迁移分支。
    没有 workspace 记录时才退回绝对路径归一化。这样同一工作区的符号链接别名不会被拆成
    两个 key，也与 `attachSession()` 的 cwd/workspace 校验一致；
 2. **远端工作区可读名**：由 `workspace/profile` 记录承载，label 在加密载荷里同步，UI 解密后显示；默认不显示完整路径；
-3. **绑定共享**：绑定是每设备自己的；其他设备的绑定只作为 UI 建议，不自动采用；
+3. **绑定共享**：绑定是每设备自己的；其他设备的绑定不参与同步，也不自动采用；
 4. **一次性绑定**：首次确认后不改绑；不实现工作区/会话迁移，也不改写已有会话 header cwd；
 5. **插件版本**：默认“检测差异 + 一键切换精确版本”；自动匹配作为后续显式开关；
 6. **Vault 保留**：V0 先保留全量；压缩/归档等体量上来后按实际阈值再做，不进入首版；

@@ -3,7 +3,7 @@
   "version": "0.1.4",
   "private": false,
   "type": "module",
-  "description": "DSH 会话云同步插件：自部署服务端、端到端加密，同步会话、附件、设备台账与 agent 笔记。",
+  "description": "把 DSH 会话同步到你自部署的服务器：端到端加密、按会话增量、多设备共用。",
   "license": "MIT",
   "icon": "assets/icon.svg",
   "main": "lib/index.js",
@@ -32,7 +32,8 @@
     ".": "./lib/index.js",
     "./client": "./client/index.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib/**/*.js",
@@ -41,7 +42,8 @@
     "assets/**/*",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "locale/**/*.json"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

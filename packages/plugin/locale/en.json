@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Cloud Sync",
+    "description": "Sync DSH sessions to your self-hosted server: end-to-end encrypted, per-session deltas, shared across devices."
+  }
+}

@@ -144,6 +144,9 @@ sessionId + createdAt + formatVersion
 | **pending** | 拉取前落盘的恢复记录；崩溃后用于补完 |
 | **fork** | DSH 的会话分叉；同步层不自动合并 |
 | **diff / 分叉** | 同一生命周期但内容历史不同；需要用户处理 |
+| **单会话推送** | `POST /sync {sessionId, direction}`，只推一个会话并持全局租约；完成后不在气泡里保留结果面板 |
+| **上传本会话** | 底栏开关，等价于设置页 `syncSessionIds` 里的一项；**只控制上传**，拉取范围由绑定工作区决定 |
+| **只读规划 / plan** | 拉远端摘要、本地快照与 receipt 算出每个会话方向与差值；不传输、不写 receipt，`/session-status` 与整轮扫描共用 |
 
 ## 7. 加密与协议
 
@@ -158,7 +161,7 @@ sessionId + createdAt + formatVersion
 | **HKDF** | 从主密钥派生用途分离的子密钥 |
 | **sealed envelope** | 密文封装格式；包含版本、keyId、nonce、密文等 |
 | **revision** | 服务端 cursor 的单调版本号 |
-| **protocol version** | `/v1` 协议版本；与 DSH 会话格式代际不同 |
+| **protocol version** | `/v2` 设备 API 的协议版本（`PROTOCOL_VERSION=3`）；与 DSH 会话格式代际不同 |
 
 ## 8. 设备与层级
 
@@ -179,3 +182,13 @@ sessionId + createdAt + formatVersion
    header cwd 的同步头表示，不处理事件 cwd。
 3. **“同一个 sessionId” vs “同一个会话”**：前者只是 ID；后者还要求生命周期、canonical
    header 和 raw 共享前缀一致。
+
+## 10. 界面
+
+| 术语 | 说明 |
+|---|---|
+| **同步气泡** | 顶部常驻入口；本轮任务表、进度带（本机 ↔ 服务端）与「立即同步」 |
+| **底部会话状态条** | `shell.bottom` 上跟随当前会话的状态条；本地/远端末序号、差值细条、单会话推送、上传开关、详情、收起 |
+| **行标记** | 侧栏会话行前的 `↑` / `↓` / `!` / 闪烁点，表示正在上传/下载/需要处理/等待 |
+| **远端领先** | 本机落后于远端。会话已打开时写句柄被 DSH 占用，本机无法拉取，只能关闭会话后再同步 |
+| **空闲文案** | 气泡任务列表为空时显示的一句话；每次列表清空换一句，纯本地 |

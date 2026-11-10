@@ -1,7 +1,7 @@
 # 文档索引
 
-> 先看这里。文档按“架构 / 同步 / 界面 / 计划 / 参考”分组；
-> 根目录 [README](../README.md) 只保留入口与开发控制台说明。
+> 先看这里。文档按“架构 / 同步 / 界面 / 指南 / 计划 / 参考”分组；
+> 根目录 [README](../README.md) 只保留入口、安装与开发说明。
 
 ## 架构
 
@@ -21,7 +21,11 @@
 ## 界面
 
 - [UI-GUIDELINES](ui/UI-GUIDELINES.md)：视觉与交互约束。
-- [SYNC-STATE](ui/SYNC-STATE.md)：同步状态列表、圆点动效、滚动。
+- [SYNC-STATE](ui/SYNC-STATE.md)：同步列表与气泡状态聚合的**设计稿**（部分已被 0.1.4 实现取代；界面语义见 [OPERATIONS](guides/OPERATIONS.md)）。
+
+## 指南
+
+- [OPERATIONS](guides/OPERATIONS.md)：界面与操作指引（四块界面、状态语义、常见处理）；界面语义以它为准。
 
 ## 计划
 
@@ -32,5 +36,5 @@
 ## 参考
 
 - [GLOSSARY](guides/GLOSSARY.md)：术语。
-- [PROMPT-GUIDANCE](guides/PROMPT-GUIDANCE.md)：提示/文案约定。
+- [PROMPT-GUIDANCE](guides/PROMPT-GUIDANCE.md)：agent 提示词设计稿（让会话 cwd 留在工作区内；未实现）。
 - [USAGE-AGREEMENT](guides/USAGE-AGREEMENT.md)：使用协议。

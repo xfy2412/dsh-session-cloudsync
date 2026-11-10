@@ -20,7 +20,8 @@
 同步层传入 `sealFrame` 的明文是：
 
 ```text
-serializeEventBatch(events) 的规范 JSON
+事件批次：serializeEventBatch(events) 的规范 JSON（数组）
+会话头：  stableStringify(headerMeta) 的规范 JSON（不含 cwd）
 ```
 
 不是 DSH 日志文件里的原始 zstd 帧。物理帧边界、压缩参数属于 DSH 存储实现，
@@ -39,7 +40,7 @@ serializeEventBatch(events) 的规范 JSON
                                                             → frameKey(32B)
 ```
 
-- `keyId = HKDF(sessionKey, "v1|key-id")[:8]`，每帧记录；
+- `keyId = HKDF(sessionKey, "v1|key-id")[:8]`，每帧记录（清单里是 16 位十六进制）；
 - nonce 固定为 0；安全性依赖每帧唯一密钥；
 - v2 的帧密钥绑定 `compressedHash`，所以即使同一明文在不同环境压缩出不同字节，
   也不会复用 key + nonce。
@@ -60,6 +61,7 @@ v1 与 v2 共用相同的 26 字节固定头：
 
 - v1 的 `payload` 是未压缩规范 JSON；
 - v2 的 `payload` 是先做 zstd、再 AES-GCM 的密文；
+- `flags` 目前恒为 0（保留位，解析时不校验但也不使用）；
 - `blobSha256 = sha256(整个封帧字节)`，用于寻址、去重和 HEAD；
 - 单帧固定开销仍为 26 字节头 + 16 字节 tag；压缩收益来自 payload。
 
@@ -76,6 +78,9 @@ chainHash(32B)
 
 `sealedVersion` 因此绑定压缩/未压缩语义；换版本、换会话、重排、截断都会认证失败。
 
+会话头（链上下标 0）没有事件序号：封装与解开时 `seqFrom`/`seqTo` 都写成 u32 哨兵
+`0xffffffff`（`HEADER_SEQ = -1`，见 `packages/shared/src/sealed-frame.ts:144-167`）。
+
 ## 6. 清单条目
 
 v1：
@@ -87,11 +92,14 @@ v1：
   "blobSha256": "<密文 sha256>",
   "bytes": 1234,
   "sealedVersion": 1,
-  "keyId": "<hex8>",
-  "seqFrom": 0,
-  "seqTo": 0
+  "keyId": "<16 位十六进制>",
+  "seqFrom": -1,
+  "seqTo": -1
 }
 ```
+
+- `index = 0` 是**封好的会话头**，`seqFrom`/`seqTo` 固定 `-1`；事件批次从 `index = 1` 开始，
+  `seqFrom`/`seqTo` 是批内首尾事件序号（`packages/shared/src/batches.ts:14-18`）。
 
 v2 额外带：
 
@@ -104,7 +112,8 @@ v2 额外带：
 ```
 
 `manifestDigest` 只在 v2 条目上纳入 `compression` / `compressedHash`，因此旧 v1
-manifest 的摘要与之前保持一致。
+manifest 的摘要与之前保持一致。摘要不包含 `updatedAt`，也不包含 `parentSession`/`origin`/
+`delegationDepth`（`packages/shared/src/chain.ts:230-259`）。
 
 服务端无法验证 `chainHash` 或 `compressedHash` 是否对应真实明文；它只校验字段形状、
 `blobSha256`、字节数与 blob 是否存在。完整性由客户端在打开封帧时验证。

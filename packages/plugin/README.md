@@ -1,75 +1,95 @@
 # dsh-session-cloudsync
 
-DSH 会话云同步插件：自部署服务端、端到端加密，同步根会话与子代理闭包。
+把 DSH 的会话同步到你自己部署的服务器：端到端加密，多台设备共用同一份，换台机器接着工作接着聊。
 
-## 能力
+- **端到端加密**：服务端只存密文，口令不离开你的设备；
+- **按会话增量**：只传新增事件，不必每次全量搬运；
+- **可选范围**：默认不同步任何会话，只勾选你在意的；
+- **看得见的状态**：顶部气泡看整轮进度，底部状态条看当前会话与远端差多少；
+- **多设备协作**：同一时间只有一台设备写，其余只拉取，避免互相覆盖；
+- **工作区映射**：不同机器的路径可以映射到同一份远端工作区。
 
-- v2 API：`/v2/*`、opaque changes cursor、幂等 append；
-- 事件批次增量推送/拉取；批次哈希、zstd 压缩后 AES-256-GCM 封批次；
-- 批量 blob 上传/下载：8 MiB / 64 条分组，Vault blob 复用同一接口；
-- 连接测试校验 `/health` 的 `apiVersions` / `protocols`；0.0.x 旧服务端会明确提示升级；
-- 服务端只存密文、manifest、压缩状态与 blob 去重，不持有明文口令；
-- **多设备必须使用同一同步口令**；默认盐由 `serverUrl` 派生，所以服务端地址写法也必须一致（不要混用 `localhost` / `127.0.0.1` 或省略 `//`）。设备 token 只用于鉴权，不参与解密；口令、地址或 `salt` 任一不同都会报 `keyId` 不符；
-- 开放尾只备份、不直接 apply；拉取带 durable pending journal；
-- 根会话选择：**默认不选中任何根会话**，`syncSessionIds` 是白名单；子代理跟随根会话闭包，fork 是独立根；新会话不会自动进入白名单；
-- 工作区映射：未映射会话持久化，映射后由下一轮摘要扫描补拉；本地工作区自己的 key 自动解析；已有远端会话沿用原 key；设置页/首启显示本机↔远端配对表（已绑定/本机身份/仅本机/待映射）、统计和待映射选择，绑定前二次确认；
-- 兼容旧服务端：摘要缺少 `parentSession` / `origin` / `delegationDepth` 时，对无 workspaceKey 的远端会话补读一次加密会话头并按 headChainHash 缓存；旧服务端会忽略 append 中新增的可选树字段；
-- Plugins 页自定义设置页 + 首启向导 + 顶部同步气泡；气泡是本轮任务表，不再复制完整会话列表；会话同步状态由官方侧栏行内 mark 展示；
-- **使用协议**：首启向导在完成前展示协议并要求勾选同意；已配置用户检测到协议内容 hash 变化时弹出更新提示，接受版本记录在浏览器本地；
-- 状态 v2：一轮同步最多给一个会话一个方向。`run.tasks` 只包含本轮需要 push/pull 的任务；自动同步不把已同步会话放进任务表，手动同步先列出全部选中会话的 `checking` 行，校验完成后移除已同步项，全部校验完才开始传输。push 进度左→右，pull 进度右→左；顶层仍带全局 `deviceLease`；
-- **入口级 open guard**：client 侧包一层 `uiWorkspace.openSession`，覆盖搜索结果、schedule、feedback、workflow-run、subagent 等没有 `data-row-key` 的入口；冷危险会话直接 toast + 不导航，live 会话放行；服务探测/安装失败一律 fail-open，不影响插件加载；
-- **按需长连接**：默认只轮询 `/status`；手动同步或接近 `nextRunAt` 时打开 `/api/session-cloudsync/events?until=idle`，空闲/终态后关闭，SSE 失败退避到 1s 轮询；页面隐藏时断开；
-- **自调度**：自动同步用绝对 `nextRunAt`（`setTimeout`）取代固定 `setInterval`，手动触发会清掉当前排期并在结束后重排；失败退避时间参与下一次排期；
-- 气泡标题优先 durable title，空白会话显示“未命名会话”，不再把 cwd 目录名当标题；新拉取的冷会话在 attach 前会用本地日志预热 DSH 投影缓存，避免列表标题为空；
-- **全局单写者租约**：进程存活期间持续持有 `sync` 租约（20s 续租、服务端 TTL 60s）；没有 held 时只拉取、不上传，服务端 append/create/delete 也要求它；进程正常退出主动释放，异常退出靠 TTL；拉取始终不需要租约；租约不是会话打开锁，不影响本地打开/继续会话；
-- 冷会话在同步中/开放尾/安全边界落后时，侧栏行会被拦截并显示原因；live 会话允许打开/切换，由 composer 拦截输入；
-- “接受远端”只生成停机脚本：检查 DSH 已退出、备份并校验本地、删除 artifact、清理 blocked/ignore 状态，重启后再全量拉取。
+> 需要自部署服务端：`npm i -g dscs-server`，或 Linux/macOS 一行安装：
+>
+> ```sh
+> curl -fsSL https://raw.githubusercontent.com/xfy2412/dsh-session-cloudsync/main/scripts/install.sh | bash -s --
+> ```
+>
+> Windows 用 [install.ps1](https://github.com/xfy2412/dsh-session-cloudsync/blob/main/scripts/install.ps1)。
+> 未来插件功能全部完成后将开放一个公益服务器，敬请期待。
 
-## 配置
-
-非敏感字段：
-
-```yaml
-serverUrl: ''            # 自部署服务端地址
-deviceName: ''           # 设备短标签
-syncSessionIds: []        # 显式选中的根会话 id；空数组 = 不同步任何会话
-autoSync: true
-intervalMs: 60000
-includeSubagents: true
-batchEvents: 50
-batchBytes: 262144
-requestTimeoutMs: 10000  # 单次 HTTP 读取超时；避免挂死
-debug: false             # 开发控制台：额外发插件日志
-devLogUrl: ''            # 例如 http://127.0.0.1:3092/api/log/a
-```
-
-token 与同步口令写在 DSH 凭据库，引用名固定：
-
-- `DSH_SESSION_CLOUDSYNC_TOKEN`
-- `DSH_SESSION_CLOUDSYNC_PASSPHRASE`
-
-YAML 里的 `token` / `passphrase` 只作为 bootstrap fallback；插件每轮同步前重新解析凭据。
-
-开发控制台（`pnpm dev:panel`）会用以下环境变量覆盖上述配置，优先级高于 YAML 和
-DSH 凭据库：`DSH_SESSION_CLOUDSYNC_SERVER_URL`、`..._TOKEN`、`..._PASSPHRASE`、
-`..._DEVICE_NAME`。请不要在生产实例里设置这些变量。
-
-## 客户端
-
-浏览器半边在 `client/index.js`，通过 `dsh.client` 清单加载：
-
-- `plugins.bundle.config`：Plugins 页的会话同步设置（连接/凭据/工作区/行为）；
-- `shell.overlay`：首启向导、顶部气泡和远端覆盖本地脚本说明；
-- `conversation.input.dock`：composer 同步守卫；
-- `sidebar.session.row.leading` / `.hover`：同步标记与原因；
-- document 捕获阶段拦截 `[data-row-key^="session:"]` 的 click/pointerdown/keydown。
-
-## 开发
+## 安装
 
 ```sh
-pnpm test
-pnpm typecheck
-node packages/plugin/scripts/build.mjs
+dsh plugin --profile web add dsh-session-cloudsync
 ```
 
-协议、设计、安全边界分别见 [`docs/architecture/PROTOCOL.md`](../../docs/architecture/PROTOCOL.md)、[`docs/architecture/DESIGN.md`](../../docs/architecture/DESIGN.md)、[`docs/sync/SYNC-SAFETY.md`](../../docs/sync/SYNC-SAFETY.md)。
+要求 DSH `>=0.2.1-rc.1 <0.3.0-0`
+
+## 初次使用
+
+### 一、首次推送你的会话
+
+1. 部署服务端并完成初始化，签发设备 token；
+2. 初次安装插件时，会有启动向导引导配置，也可以打开 DSH → 插件 → **会话云同步**，填「服务端地址 / 设备 token」，并设置你自己的同步加密口令；
+3. 在「上传范围」里勾选要同步的会话，保存；
+4. 对于初次使用，服务器上没有任何工作区，无需进行工作区映射绑定，会话上传时将自动新建工作区；
+5. 点开顶部云朵气泡，展开列表，点击底部的「立即同步」；之后随时在底部状态条看当前会话的状态。
+
+### 二、在别处拉取你的会话
+
+1. 用设置的管理密码登录服务器控制台，签发新的设备token；
+2. 像之前一样填写「服务端地址 / 设备 token」，并设置**相同**的同步加密口令；
+3. 如果之前用其他软件同步过会话，无需再次勾选之前同步的会话；如果是新设备，本地会话列表是空的也没关系，插件会自动匹配云端会话并更新；
+4. 如果你之前在与原会话**相同**路径建立过工作区，会自动和云端映射并拉取会话，如果跨系统/无法在相同路径创建，则需要手动把远端工作区映射到本地路径。如果是新设备，你可以跳过这一步，创建好工作区后再在插件配置页映射；
+5. 点击立即同步，你的云端会话就会被拉取到新设备上。
+
+**多设备只需要记住一条**：所有设备用同一个同步口令，服务端地址写法也保持一致
+（`http://host:port`，不要混用 `localhost` 与 `127.0.0.1`、不要省略 `//`）。
+口令或地址写法不一致时，拉取会报 `封帧的 keyId 与当前密钥不符`。
+
+## 界面
+
+| 位置 | 看到什么 | 能做什么 |
+|---|---|---|
+| 顶部气泡 | 整轮同步的进度与每会话任务 | 立即同步、打开设置 |
+| 底部状态条 | 当前会话的本地/远端末序号、差值细条 | 单会话推送、开关上传、看一眼就知道 |
+| 侧栏会话行 | 正在上传/下载/等待/分叉的标记 | 悬停查看原因 |
+| 设置页 | 服务端、凭据、上传范围、工作区映射 | 配置与保存 |
+
+完整说明（状态颜色、禁用条件、常见处理）见仓库文档：
+<https://github.com/xfy2412/dsh-session-cloudsync/blob/main/docs/guides/OPERATIONS.md>
+
+## 常见问题
+
+**拉取报「封帧的 keyId 与当前密钥不符」**
+各设备的同步口令、服务端地址写法或显式 `salt` 不一致。统一后重试。
+
+**底部状态条是蓝点、显示远端领先**
+本机比远端少。若这个会话已被打开过，写句柄被官方占用，本机暂时无法拉取；先切换到其他会话的页面，然后重启DSH，确保在拉取完成之前不要打开会话。
+
+**红点「历史分叉」**
+本地与远端历史已经分叉，插件会阻止继续写入。可在会话行内选择忽略/强制/恢复，
+或用「接受远端」生成覆盖脚本，人工处理后重新同步。
+
+**气泡显示「只读同步」**
+全局写租约在另一台设备上，本机只拉取、不上传；等写租约释放后会自动恢复。
+
+**收不到别的设备的新会话**
+检查设置页的工作区映射：远端工作区需要绑定到本机路径才会被拉取。
+
+## 安全与隐私
+
+- 服务端只保存密文、会话清单与去重后的 blob，不持有明文口令；
+- 设备 token 与同步口令保存在 DSH 凭据库，不写进插件配置；
+- 插件只同步会话事件；**附件同步尚未实现**，上传过附件的会话谨慎同步，可能会造成会话无法继续的问题（报TRANSPORT DeepSeek Messages transport failed错误），或等待我们后续支持附件同步；
+- 使用前需同意插件内置的使用协议。
+
+## 版本
+
+当前 0.1.4。支持 DSH `>=0.2.1-rc.1 <0.3.0-0`；变更记录见仓库
+<https://github.com/xfy2412/dsh-session-cloudsync/releases>。
+
+## 许可证
+
+MIT。仓库中的服务端是 AGPL-3.0-only，详见仓库 `LICENSES/`。
