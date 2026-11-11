@@ -560,7 +560,6 @@ function renderMetrics(overview) {
     { key: '设备', value: overview.devices, hint: '已签发 token' },
     { key: '会话', value: overview.sessions, hint: overview.deletedSessions > 0 ? overview.deletedSessions + ' 个墓碑' : '没有墓碑' },
     { key: '已用存储', value: formatBytes(overview.usedBytes), hint: percent + '% · 配额 ' + formatBytes(overview.maxBytes) },
-    { key: '同步版本', value: overview.revision, hint: '服务端 revision' },
   ]
   $('metrics').replaceChildren(...items.map((item) => {
     const box = el('div', 'metric')

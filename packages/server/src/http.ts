@@ -33,7 +33,6 @@ import {
   readMaxBytes,
   readMeta,
   recordBlob,
-  readRevision,
   setAdminPassword,
   usedBlobBytes,
   writeMaxBytes,
@@ -217,13 +216,25 @@ function authenticate(db: ServerDb, req: IncomingMessage): { role: 'admin' } | {
     .prepare('SELECT device_id, label, created_at, last_seen_at, revoked_at FROM devices WHERE dataset = ? AND token_hash = ?')
     .get(DEFAULT_DATASET, hashToken(token)) as DeviceRow | undefined
   if (row === undefined || row.revoked_at !== null) return undefined
+  // 设备每次鉴权都是一次“在线”；60s 内不重复写库，避免同步请求放大写入。
+  const now = Date.now()
+  let lastSeenAt = row.last_seen_at
+  try {
+    const result = db.handle
+      .prepare(`UPDATE devices SET last_seen_at = ?
+                WHERE dataset = ? AND device_id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`)
+      .run(now, DEFAULT_DATASET, row.device_id, now - DEVICE_LAST_SEEN_THROTTLE_MS)
+    if (Number(result.changes) > 0) lastSeenAt = now
+  } catch {
+    // 在线时间只是展示信息，写失败不能影响鉴权。
+  }
   return {
     role: 'device',
     device: {
       deviceId: row.device_id,
       label: row.label,
       createdAt: row.created_at,
-      ...row.last_seen_at === null ? {} : { lastSeenAt: row.last_seen_at },
+      ...lastSeenAt === null ? {} : { lastSeenAt },
     },
   }
 }
@@ -484,6 +495,8 @@ const SETUP_COOKIE = 'dsh_sync_setup'
 
 /** 管理台会话有效期。 */
 const ADMIN_TTL_MS = 12 * 60 * 60 * 1000
+/** 设备“最后在线”的写入节流窗口。 */
+const DEVICE_LAST_SEEN_THROTTLE_MS = 60 * 1000
 
 /** 初始化向导会话有效期。 */
 const SETUP_TTL_MS = 15 * 60 * 1000
@@ -1293,7 +1306,6 @@ export function createHttpServer(options: ServerOptions): Server {
           value: {
             version,
             protocol: PROTOCOL_VERSION,
-            revision: readRevision(db),
             devices: listDevices(db).length,
             sessions: counts.total,
             deletedSessions: counts.deleted,

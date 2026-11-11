@@ -14,7 +14,7 @@ import type { SessionManifest } from '../../shared/src/protocol.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 import { SyncError } from '../../shared/src/wire.ts'
 import { blobPath } from './blobs.ts'
-import { DEFAULT_DATASET, bumpRevision, readAppendRequest, readRevision, withTransaction, writeAppendRequest, type ServerDb } from './db.ts'
+import { DEFAULT_DATASET, bumpRevision, readAppendRequest, withTransaction, writeAppendRequest, type ServerDb } from './db.ts'
 import { requireLease as requireResourceLease, SYNC_RESOURCE } from './leases.ts'
 
 /** 单个 append 请求体上限（万帧会话首次同步约 1.5 MB）。 */
@@ -655,63 +655,5 @@ export function sessionCounts(db: ServerDb): { total: number; deleted: number } 
   return { total: Number(row?.total ?? 0), deleted: Number(row?.deleted ?? 0) }
 }
 
-/** cursor 返回的会话摘要。 */
-export interface SessionChange {
-  readonly sessionId: string
-  readonly revision: number
-  readonly formatVersion: number
-  readonly createdAt: number
-  readonly batchCount: number
-  readonly headChainHash: string
-  readonly manifestDigest: string
-  readonly updatedAt: number
-  readonly deletedAt: number | null
-}
+/** cursor 返回的会话摘要已移除：服务端不再提供变更流。 */
 
-/**
- * 列出自某 revision 以来的变更摘要。
- * @param db - 已打开的数据库。
- * @param since - 客户端持有的 revision。
- * @param limit - 最大条数。
- * @returns 当前 revision、变更摘要与是否还有更多。
- */
-export function listChanges(db: ServerDb, since: number, limit: number): {
-  revision: number
-  sessions: SessionChange[]
-  tombstones: Array<{ sessionId: string; createdAt: number; deletedAt: number }>
-  hasMore: boolean
-} {
-  const rows = db.handle
-    .prepare('SELECT session_id, created_at, format_version, frame_count, head_chain_hash, manifest_digest, revision, updated_at, deleted_at FROM sessions WHERE dataset = ? AND revision > ? ORDER BY revision ASC LIMIT ?')
-    .all(DEFAULT_DATASET, since, limit + 1) as unknown as Array<{
-      session_id: string
-      created_at: number
-      format_version: number
-      frame_count: number
-      head_chain_hash: string
-      manifest_digest: string
-      revision: number
-      updated_at: number
-      deleted_at: number | null
-    }>
-  const tombstones = db.handle
-    .prepare('SELECT session_id, created_at, deleted_at FROM tombstones WHERE dataset = ? AND deleted_at > ? ORDER BY deleted_at ASC LIMIT ?')
-    .all(DEFAULT_DATASET, since, limit + 1) as unknown as Array<{ session_id: string; created_at: number; deleted_at: number }>
-  const sessions = rows.slice(0, limit).map((row) => ({
-    sessionId: row.session_id,
-    revision: row.revision,
-    formatVersion: row.format_version,
-    createdAt: row.created_at,
-    batchCount: row.frame_count,
-    headChainHash: row.head_chain_hash,
-    manifestDigest: row.manifest_digest,
-    updatedAt: row.updated_at,
-    deletedAt: row.deleted_at,
-  }))
-  return {
-    revision: readRevision(db),
-    sessions,
-    tombstones: tombstones.slice(0, limit).map((row) => ({ sessionId: row.session_id, createdAt: row.created_at, deletedAt: row.deleted_at })),
-    hasMore: rows.length > limit || tombstones.length > limit,
-  }
-}
