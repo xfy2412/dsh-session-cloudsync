@@ -87,7 +87,7 @@ dsh plugin --profile web add dsh-session-cloudsync
 
 ## 版本
 
-当前 0.1.4。支持 DSH `>=0.2.1-rc.1 <0.3.0-0`；变更记录见仓库
+当前 0.1.5。支持 DSH `>=0.2.1-rc.1 <0.3.0-0`；变更记录见仓库
 <https://github.com/xfy2412/dsh-session-cloudsync/releases>。
 
 ## 许可证
