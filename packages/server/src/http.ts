@@ -657,6 +657,43 @@ export function revokeDevice(db: ServerDb, deviceId: string): boolean {
 }
 
 /**
+ * 给设备改名。
+ * @param db - 已打开的数据库。
+ * @param deviceId - 要改名的设备。
+ * @param label - 新名字（已校验）。
+ * @returns 改名后的设备；设备不存在或已吊销时 undefined。
+ */
+export function renameDevice(db: ServerDb, deviceId: string, label: string): DeviceRef | undefined {
+  const result = db.handle
+    .prepare('UPDATE devices SET label = ? WHERE dataset = ? AND device_id = ? AND revoked_at IS NULL')
+    .run(label, DEFAULT_DATASET, deviceId)
+  if (Number(result.changes) === 0) return undefined
+  const row = db.handle
+    .prepare('SELECT device_id, label, created_at, last_seen_at FROM devices WHERE dataset = ? AND device_id = ?')
+    .get(DEFAULT_DATASET, deviceId) as { device_id: string; label: string; created_at: number; last_seen_at: number | null } | undefined
+  if (row === undefined) return undefined
+  return {
+    deviceId: row.device_id,
+    label: row.label,
+    createdAt: row.created_at,
+    ...row.last_seen_at === null ? {} : { lastSeenAt: row.last_seen_at },
+  }
+}
+
+/**
+ * 校验设备名字段。
+ * @param value - 请求体里的 label。
+ * @returns 去掉首尾空白后的名字。
+ * @throws 非字符串、为空或过长。
+ */
+function requireDeviceLabel(value: unknown): string {
+  const label = typeof value === 'string' ? value.trim() : ''
+  if (label === '') throw new SyncError('bad-request', '设备名不能为空')
+  if (label.length > 64) throw new SyncError('bad-request', '设备名最长 64 个字符')
+  return label
+}
+
+/**
  * 构造 HTTP 服务。
  * @param options - 数据库、数据目录与版本。
  * @returns 尚未 listen 的服务。
@@ -769,7 +806,7 @@ export function createHttpServer(options: ServerOptions): Server {
             apiVersions: [2],
             protocols: [PROTOCOL_VERSION],
             schemaVersion: SERVER_SCHEMA_VERSION,
-            capabilities: ['session-summary', 'changes-cursor', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame'],
+            capabilities: ['session-summary', 'changes-cursor', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame', 'me-device-info', 'me-counts', 'device-rename'],
             limits: {
               batchBytes: MAX_BATCH_BODY_BYTES,
               batchBlobs: MAX_BATCH_BLOBS,
@@ -1355,6 +1392,20 @@ export function createHttpServer(options: ServerOptions): Server {
       },
     },
     {
+      method: 'PATCH',
+      path: ADMIN_DEVICE_PATH,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const match = ADMIN_DEVICE_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
+        if (match === null) return json(res, 404, errorBody('not-found', '没有这个设备'))
+        const body = await readJson(req)
+        const label = requireDeviceLabel(body.label)
+        const device = renameDevice(db, match[1]!, label)
+        if (device === undefined) return json(res, 404, errorBody('not-found', '没有这个设备'))
+        return json(res, 200, { ok: true, value: { device } })
+      },
+    },
+    {
       method: 'GET',
       path: /^\/admin\/sessions$/u,
       handler: async (req, res) => {
@@ -1369,7 +1420,43 @@ export function createHttpServer(options: ServerOptions): Server {
         const auth = authenticate(db, req)
         if (auth === undefined) return json(res, 401, errorBody('unauthorized', '未知 token'))
         if (auth.role === 'admin') return json(res, 200, { ok: true, value: { role: 'admin' } })
-        return json(res, 200, { ok: true, value: { role: 'device', device: auth.device } })
+        const counts = sessionCounts(db)
+        const workspaceRow = db.handle
+          // workspaceKey 在 manifest_json 里（sessions 表没有单独列），用 JSON1 提取。
+          .prepare("SELECT COUNT(DISTINCT json_extract(manifest_json, '$.workspaceKey')) AS n FROM sessions WHERE dataset = ? AND deleted_at IS NULL AND json_extract(manifest_json, '$.workspaceKey') IS NOT NULL")
+          .get(DEFAULT_DATASET) as { n?: number } | undefined
+        return json(res, 200, {
+          ok: true,
+          value: {
+            role: 'device',
+            device: auth.device,
+            server: {
+              version,
+              protocolVersion: PROTOCOL_VERSION,
+              quotaBytes: effectiveMaxBytes(),
+              usedBytes: usedBlobBytes(db),
+            },
+            counts: {
+              workspaces: Number(workspaceRow?.n ?? 0),
+              // 只算存活会话；墓碑单独通过 /v2/changes 的 tombstones 体现。
+              sessions: counts.total - counts.deleted,
+            },
+          },
+        })
+      },
+    },
+    {
+      method: 'PATCH',
+      path: ME_PATH,
+      handler: async (req, res) => {
+        const auth = authenticate(db, req)
+        if (auth === undefined) return json(res, 401, errorBody('unauthorized', '未知 token'))
+        if (auth.role !== 'device') return json(res, 401, errorBody('unauthorized', '需要设备 token'))
+        const body = await readJson(req)
+        const label = requireDeviceLabel(body.label)
+        const device = renameDevice(db, auth.device.deviceId, label)
+        if (device === undefined) return json(res, 404, errorBody('not-found', '没有这个设备'))
+        return json(res, 200, { ok: true, value: { device } })
       },
     },
   ]

@@ -10,3 +10,5 @@ tsc-out/
 # Local logs and coverage output.
 *.log
 coverage/
+
+site/

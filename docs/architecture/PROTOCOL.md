@@ -74,7 +74,8 @@ GET /health
 | POST | `/v2/devices` | setup token 签发设备 token（明文只返回一次） |
 | GET | `/v2/devices` | setup token 列出未吊销设备 |
 | DELETE | `/v2/devices/:id` | setup token 吊销设备 |
-| GET | `/v2/me` | 当前 token 的角色与设备信息 |
+| GET | `/v2/me` | 当前 token 的角色；设备 token 另带服务端版本/配额/远端统计 |
+| PATCH | `/v2/me` | 设备 token 给自己改名（`{label}`，1–64 字符） |
 | POST | `/v2/blobs?kind=frame\|attachment\|vault` | 上传单个密文 blob |
 | HEAD | `/v2/blobs/:sha256` | 判断 blob 是否存在 |
 | GET | `/v2/blobs/:sha256` | 下载单个密文 blob |
@@ -352,7 +353,7 @@ HTTP 映射：
 ## 管理台端点
 
 `/admin`、`/admin/login`、`/admin/logout`、`/admin/overview`、`/admin/quota`、
-`/admin/devices`、`/admin/sessions` 保持不变；管理台不接受设备 bearer token。
+`/admin/devices`、`/admin/sessions` 保持不变，另增 `PATCH /admin/devices/:id`（`{label}`）改名；管理台不接受设备 bearer token。
 
 初始化向导的 cookie 会话接口是 `/setup/state`、`/setup/verify`、`/setup/password`、`/setup/quota`、
 `/setup/device`、`/setup/complete`（`packages/server/src/http.ts:1198-1292`；向导会话 15 分钟，

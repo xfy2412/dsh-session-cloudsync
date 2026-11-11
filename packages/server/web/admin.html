@@ -380,7 +380,7 @@
       <div>
         <span class="eyebrow">Overview</span>
         <h2>同步概览</h2>
-        <p class="muted">自部署节点、设备与会话的只读视图。</p>
+        <p class="muted">自部署节点、设备与会话视图；设备可签发、改名、吊销。</p>
       </div>
       <div class="health"><i></i><span id="healthText">服务正常</span></div>
     </section>
@@ -604,6 +604,31 @@ function renderDevices(devices) {
     )
     main.append(label, idLine, meta)
     const actions = el('div', 'device-actions')
+    const rename = el('button', 'btn small', '改名')
+    rename.type = 'button'
+    rename.onclick = async () => {
+      const next = prompt('新设备名（1–64 个字符）', device.label || 'device')
+      if (next === null) return
+      const label = next.trim()
+      if (label === '') {
+        showToast('设备名不能为空', true)
+        return
+      }
+      rename.disabled = true
+      rename.textContent = '改名中…'
+      try {
+        await api('/admin/devices/' + encodeURIComponent(device.deviceId), {
+          method: 'PATCH',
+          body: JSON.stringify({ label }),
+        })
+        showToast('设备已改名')
+        await refresh(true)
+      } catch (error) {
+        showToast(error.message, true)
+        rename.disabled = false
+        rename.textContent = '改名'
+      }
+    }
     const revoke = el('button', 'btn small danger', '吊销')
     revoke.type = 'button'
     revoke.onclick = async () => {
@@ -620,7 +645,7 @@ function renderDevices(devices) {
         revoke.textContent = '吊销'
       }
     }
-    actions.append(revoke)
+    actions.append(rename, revoke)
     row.append(main, actions)
     return row
   }))
