@@ -40,7 +40,7 @@ interface SyncConfigSnapshot {
 `SetupInfo` 里与“生效值”相关的字段：
 
 - `serverUrl` / `deviceName` 各带 `serverUrlSource` / `deviceNameSource`（`'env' | 'settings'`）；
-- `autoSync`、`intervalMs`、`includeSubagents`、`autoBindSamePath`、`syncSessionIds` 都是当前生效值；
+- `autoSync`、`intervalMs`、`includeSubagents`、`syncSessionIds` 都是当前生效值；
 - 凭据只有 `hasToken` / `hasPassphrase`、`tokenSource` / `passphraseSource` 和 `credentialRefs`，不返回值；
 - `batchEvents` / `batchBytes` / `requestTimeoutMs` 只在宿主配置里，快照不暴露。
 

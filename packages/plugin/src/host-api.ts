@@ -295,8 +295,9 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
           const body = await request.json() as { readonly serverUrl?: unknown; readonly token?: unknown }
           const serverUrl = typeof body.serverUrl === 'string' ? body.serverUrl.trim() : ''
           const token = typeof body.token === 'string' ? body.token.trim() : ''
-          if (serverUrl === '' || token === '') {
-            return json({ ok: false, error: { code: 'bad-request', message: '需要 serverUrl 与 token' } }, 400)
+          // token 允许为空：控制面会回退到已保存的凭据，设置页用它刷新状态。
+          if (serverUrl === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 serverUrl' } }, 400)
           }
           return json({ ok: true, value: await control.probe(serverUrl, token) })
         } catch (error: unknown) {
@@ -319,8 +320,9 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
           const serverUrl = typeof body.serverUrl === 'string' ? body.serverUrl.trim() : ''
           const token = typeof body.token === 'string' ? body.token.trim() : ''
           const passphrase = typeof body.passphrase === 'string' ? body.passphrase : ''
-          if (serverUrl === '' || token === '' || passphrase === '') {
-            return json({ ok: false, error: { code: 'bad-request', message: '需要 serverUrl、token 与 passphrase' } }, 400)
+          // token 允许为空：控制面会回退到已保存的凭据，设置页用它验证口令。
+          if (serverUrl === '' || passphrase === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 serverUrl 与 passphrase' } }, 400)
           }
           return json({ ok: true, value: await control.verifyPassphrase(serverUrl, token, passphrase) })
         } catch (error: unknown) {

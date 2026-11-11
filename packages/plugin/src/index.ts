@@ -78,8 +78,6 @@ export interface Config {
   deviceName?: string
   /** 显式选中的根会话 id；空数组表示不选任何会话。 */
   syncSessionIds?: string[]
-  /** 是否自动绑定同路径的远端工作区；默认关闭。 */
-  autoBindSamePath?: boolean
   /** 是否自动按间隔推送，默认 true；关闭后只做一次启动推送。 */
   autoSync?: boolean
   /** 自动推送间隔（毫秒），默认 60000，最小 1000。 */
@@ -107,7 +105,6 @@ export const Config = z.object({
   salt: z.string().default(''),
   deviceName: z.string().default('').volatile(),
   syncSessionIds: z.array(z.string()).default([]).volatile(),
-  autoBindSamePath: z.boolean().default(false).volatile(),
   autoSync: z.boolean().default(false).volatile(),
   intervalMs: z.number().min(1000).default(60000).volatile(),
   includeSubagents: z.boolean().default(true).volatile(),
@@ -253,7 +250,6 @@ export function apply(ctx: Context, config: Config): void {
   const configPassphrase = envSyncPassphrase !== '' ? envSyncPassphrase : yamlPassphrase
   let intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
   let syncSessionIds: string[] = []
-  let autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
   let salt = readVolatile<string>(config.salt) ?? ''
   let includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
   let deviceName = envSyncDeviceName !== ''
@@ -299,7 +295,6 @@ export function apply(ctx: Context, config: Config): void {
       : (readVolatile<string>(config.serverUrl) ?? '')
     intervalMs = readVolatile<number>(config.intervalMs) ?? 60000
     syncSessionIds = readSyncSessions()
-    autoBindSamePath = readVolatile<boolean>(config.autoBindSamePath) === true
     salt = readVolatile<string>(config.salt) ?? ''
     includeSubagents = readVolatile<boolean>(config.includeSubagents) !== false
     deviceName = envSyncDeviceName !== ''
@@ -1002,26 +997,6 @@ export function apply(ctx: Context, config: Config): void {
           return summary
         }
       }))
-      if (autoBindSamePath && bindingsDir !== undefined && workspaceRegistry !== undefined) {
-        let boundNow = false
-        const registered = workspaceRegistry.list?.() ?? []
-        for (const summary of remote) {
-          const workspaceKey = summary.workspaceKey
-          if (typeof workspaceKey !== 'string' || workspaceKey === '' || bindings.bindings[workspaceKey] !== undefined) continue
-          const candidate = registered.find((workspace) => workspaceKeyForCwd('', workspace.path) === workspaceKey)
-          if (candidate === undefined) continue
-          try {
-            await bindWorkspaceFile(bindingsDir, workspaceKey, candidate.path, candidate.title)
-            boundNow = true
-          } catch (error: unknown) {
-            logger.warn(`dsh-session-cloudsync: 自动绑定 ${candidate.path} 失败：${error instanceof Error ? error.message : String(error)}`)
-          }
-        }
-        if (boundNow) {
-          await refreshBindings()
-          labelsIdentity = undefined
-        }
-      }
       const localSnapshots = await Promise.all(snapshots.map(async (snapshot) => {
         const sessionId = String(snapshot.header.id)
         const remoteSummary = remote.find((summary) => summary.sessionId === sessionId)
@@ -1466,8 +1441,7 @@ export function apply(ctx: Context, config: Config): void {
       deviceName,
       deviceNameSource: envSyncDeviceName !== '' ? 'env' : 'settings',
       syncSessionIds,
-      autoBindSamePath,
-      autoSync,
+        autoSync,
       intervalMs,
       includeSubagents,
       hasToken: engineConfig.token.trim() !== '',
@@ -1906,19 +1880,28 @@ export function apply(ctx: Context, config: Config): void {
     setup,
     workspaces,
     test: async (serverUrl: string) => testConnection(serverUrl, fetch, engineConfig.requestTimeoutMs),
-    probe: (serverUrl: string, token: string): Promise<ServerProbeResult> =>
-      probeServer({ serverUrl, token }, fetch, engineConfig.requestTimeoutMs),
-    verifyPassphrase: (serverUrl: string, token: string, passphrase: string): Promise<PassphraseCheck> =>
-      verifyRemotePassphrase(
+    probe: async (serverUrl: string, token: string): Promise<ServerProbeResult> => {
+      // 设置页没有裸 token；留空时回退到已解析的凭据，避免为了看状态再输一遍。
+      if (token.trim() === '') await refreshSecrets()
+      return await probeServer(
+        { serverUrl, token: token.trim() === '' ? engineConfig.token : token },
+        fetch,
+        engineConfig.requestTimeoutMs,
+      )
+    },
+    verifyPassphrase: async (serverUrl: string, token: string, passphrase: string): Promise<PassphraseCheck> => {
+      if (token.trim() === '') await refreshSecrets()
+      return await verifyRemotePassphrase(
         {
           serverUrl,
-          token,
+          token: token.trim() === '' ? engineConfig.token : token,
           passphrase,
           ...engineConfig.salt === undefined || engineConfig.salt === '' ? {} : { salt: engineConfig.salt },
         },
         fetch,
         engineConfig.requestTimeoutMs,
-      ),
+      )
+    },
     resolveWorkspacePath: inspectWorkspacePath,
     createWorkspace,
     pickDirectory,

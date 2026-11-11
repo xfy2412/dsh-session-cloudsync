@@ -323,8 +323,6 @@ export interface SetupInfo {
   readonly deviceNameSource: 'env' | 'settings'
   /** 显式选中的根会话 id（仅上传）；空数组 = 不上传任何会话。 */
   readonly syncSessionIds: readonly string[]
-  /** 是否自动绑定同路径远端工作区。 */
-  readonly autoBindSamePath: boolean
   /** 是否按间隔自动同步。 */
   readonly autoSync: boolean
   /** 自动同步间隔（毫秒）。 */

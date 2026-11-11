@@ -487,16 +487,19 @@ export class SyncHttpError extends Error {
  * @param url - 配置里的地址。
  * @returns 去掉末尾斜杠的地址；空串表示地址非法。
  */
-function normalizeBase(url: string): string {
-  const trimmed = url.trim().replace(/\/+$/u, '')
+export function normalizeBase(url: string): string {
+  const trimmed = url.trim()
   if (trimmed === '') return ''
   try {
     const parsed = new URL(trimmed)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    // 盐与请求地址都从这里取：大小写、默认端口、尾斜杠必须归一到同一形态。
+    if (parsed.search !== '' || parsed.hash !== '') return ''
+    const path = parsed.pathname.replace(/\/+$/u, '')
+    return `${parsed.protocol}//${parsed.host}${path}`
   } catch {
     return ''
   }
-  return trimmed
 }
 
 /** 同步错误的粗分类，供退避与 UI 文案使用。 */

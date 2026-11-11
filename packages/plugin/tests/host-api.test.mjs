@@ -416,16 +416,32 @@ test('宿主 API：probe 用请求体里的地址与 token 调用控制面', asy
   assert.equal((await bodyOf(response)).value.probe.me.device.label, 'laptop')
 })
 
-test('宿主 API：probe 缺字段时返回 400', async () => {
-  const routes = createHostApi(control())
-  const response = await route(routes, '/api/session-cloudsync/probe').fetch(
+test('宿主 API：probe 缺 serverUrl 时返回 400，空 token 放行', async () => {
+  let seen
+  const routes = createHostApi(control({
+    probe: async (serverUrl, token) => {
+      seen = [serverUrl, token]
+      return { ok: true, probe: { health: { version: '0.1.3', protocols: [3], capabilities: [] }, me: { role: 'device', device: { deviceId: 'd1', label: 'laptop', createdAt: 1 } } } }
+    },
+  }))
+  const missing = await route(routes, '/api/session-cloudsync/probe').fetch(
     new Request('http://host/api/session-cloudsync/probe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ serverUrl: 'http://127.0.0.1:8787' }),
+      body: JSON.stringify({}),
     }),
   )
-  assert.equal(response.status, 400)
+  assert.equal(missing.status, 400)
+  assert.equal((await bodyOf(missing)).error.message, '需要 serverUrl')
+  const emptyToken = await route(routes, '/api/session-cloudsync/probe').fetch(
+    new Request('http://host/api/session-cloudsync/probe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serverUrl: 'http://127.0.0.1:8787', token: '' }),
+    }),
+  )
+  assert.equal(emptyToken.status, 200)
+  assert.deepEqual(seen, ['http://127.0.0.1:8787', ''])
 })
 
 test('宿主 API：verify-passphrase 与 workspaces 工具路由', async () => {

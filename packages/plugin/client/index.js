@@ -46,9 +46,41 @@ window.__ModuleLoader__.load({
       '.dssync-savebar .clean{color:var(--dssync-faint);font-size:12px}',
       '.dssync-sec{display:flex;flex-direction:column;gap:12px;padding:0 0 20px;border-bottom:1px solid var(--dssync-line)}',
       '.dssync-sec:last-child{border-bottom:0;padding-bottom:0}',
-      '.dssync-sechead{display:flex;align-items:baseline;gap:10px}',
+      '.dssync-sechead{display:flex;align-items:center;gap:10px}',
       '.dssync-sechead h3{margin:0;font-size:15px;font-weight:600}',
       '.dssync-sechead span{color:var(--dssync-faint);font-size:12px}',
+      '.dssync-secicon{display:grid;place-items:center;width:28px;height:28px;flex:0 0 auto;border:1px solid var(--dssync-line);border-radius:8px;color:var(--dssync-muted)}',
+      '.dssync-sectext{display:flex;flex-direction:column;gap:1px;min-width:0}',
+      '.dssync-secright{display:flex;align-items:center;gap:8px;margin-left:auto;color:var(--dssync-faint);font-size:12px}',
+      '.dssync-dot{display:inline-block;width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:var(--dssync-faint)}',
+      '.dssync-dot.ok{background:#5fd39a;box-shadow:0 0 0 3px rgba(95,211,154,.12)}',
+      '.dssync-dot.warn{background:#f0c87a;box-shadow:0 0 0 3px rgba(240,200,122,.12)}',
+      '.dssync-dot.bad{background:#ff8f8f;box-shadow:0 0 0 3px rgba(255,143,143,.12)}',
+      '.dssync-conncard{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--dssync-line);border-radius:12px;background:rgba(255,255,255,.02)}',
+      '.dssync-connhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.dssync-connhead b{font-size:13px}',
+      '.dssync-connbody{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 16px}',
+      '.dssync-kv{display:flex;flex-direction:column;gap:2px;min-width:0}',
+      '.dssync-kv span{color:var(--dssync-faint);font-size:11px}',
+      '.dssync-kv b{font-weight:500;font-size:12.5px;word-break:break-all}',
+      '.dssync-quota{height:4px;margin-top:4px;border-radius:2px;background:rgba(127,127,127,.2);overflow:hidden}',
+      '.dssync-quota i{display:block;height:100%;background:#5fd39a}',
+      '.dssync-rowicon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:0 0 auto;color:var(--dssync-faint)}',
+      '.dssync-savebar-state{display:inline-flex;align-items:center;gap:6px}',
+      '.dssync-credrow{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--dssync-line)}',
+      '.dssync-credrow:last-of-type{border-bottom:0}',
+      '.dssync-chip{display:inline-flex;align-items:center;height:18px;padding:0 8px;border-radius:999px;font-size:10.5px;background:rgba(127,127,127,.14);color:var(--dssync-muted)}',
+      '.dssync-chip.ok{background:rgba(95,211,154,.14);color:#9ce8bc}',
+      '.dssync-chip.warn{background:rgba(240,200,122,.14);color:#f0c87a}',
+      '.dssync-tri{display:grid;place-items:center;width:16px;height:16px;flex:0 0 auto;padding:0;border:1px solid var(--dssync-line-strong);border-radius:4px;background:transparent;color:transparent;font-size:11px;line-height:1;cursor:pointer}',
+      '.dssync-tri.all{border-color:rgba(95,211,154,.5);background:rgba(95,211,154,.16);color:#9ce8bc}',
+      '.dssync-tri.some{border-color:rgba(240,200,122,.5);background:rgba(240,200,122,.16);color:#f0c87a}',
+      '.dssync-chev{display:grid;place-items:center;width:20px;height:20px;border:0;background:transparent;color:var(--dssync-muted);font-size:12px;cursor:pointer;transition:transform .15s}',
+      '.dssync-chev.closed{transform:rotate(-90deg)}',
+      '.dssync-sessiongroup-head{cursor:pointer;user-select:none}',
+      '.dssync-actions{display:flex;align-items:center;gap:8px}',
+      '.dssync-tip{position:relative;cursor:help}',
+      '.dssync-tip:hover::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);width:max-content;max-width:260px;padding:6px 8px;border:1px solid var(--dssync-line-strong);border-radius:6px;background:#1b1f2a;color:var(--dssync-text);font-size:11px;line-height:1.45;text-align:left;white-space:normal;z-index:20;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.35)}',
       '.dssync-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}',
       '@media(max-width:640px){.dssync-grid{grid-template-columns:1fr}}',
       '.dssync-field{display:flex;flex-direction:column;gap:5px;min-width:0}',
@@ -141,6 +173,7 @@ window.__ModuleLoader__.load({
       '.dssync-maplock:hover{background:rgba(127,127,127,.12);color:var(--dssync-text)}',
       '.dssync-maplock.locked{border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.1);color:#9ce8bc}',
       '.dssync-maplock[disabled]{cursor:default;opacity:.55}',
+      'span.dssync-maplock{cursor:default}',
       '.dssync-maplock svg{width:15px;height:15px;display:block}',
       '.dssync-maparrow{display:inline-flex;align-items:center;justify-content:center;height:22px;min-width:32px;padding:0 6px;border:1px solid var(--dssync-line);border-radius:6px;background:transparent;color:var(--dssync-muted);font:12px/1 ui-monospace,monospace;cursor:pointer}',
       '.dssync-maparrow:hover{color:var(--dssync-text);border-color:var(--dssync-line-strong)}',
@@ -1109,7 +1142,6 @@ window.__ModuleLoader__.load({
         syncSessionIds: Array.isArray(source.syncSessionIds)
           ? source.syncSessionIds.slice()
           : (Array.isArray(fallback.syncSessionIds) ? fallback.syncSessionIds.slice() : []),
-        autoBindSamePath: source.autoBindSamePath !== undefined ? source.autoBindSamePath === true : fallback.autoBindSamePath === true,
         autoSync: source.autoSync !== undefined ? source.autoSync === true : fallback.autoSync === true,
         intervalMs: source.intervalMs !== undefined ? source.intervalMs : (fallback.intervalMs || 60000),
         includeSubagents: source.includeSubagents !== undefined ? source.includeSubagents !== false : fallback.includeSubagents !== false,
@@ -1121,6 +1153,16 @@ window.__ModuleLoader__.load({
         h('label', { htmlFor: props.id }, props.label),
         props.children,
         props.hint ? h('div', { className: 'hint' }, props.hint) : null)
+    }
+
+    function TriToggle(props) {
+      var state = props.state
+      return h('button', {
+        type: 'button',
+        className: 'dssync-tri' + (state === 'all' ? ' all' : state === 'some' ? ' some' : ''),
+        'aria-label': props.label || '全选',
+        onClick: function (event) { event.stopPropagation(); props.onClick() },
+      }, state === 'all' ? '✓' : state === 'some' ? '–' : '')
     }
 
     function Switch(props) {
@@ -1135,6 +1177,44 @@ window.__ModuleLoader__.load({
 
     function shortMapKey(key) {
       return key === null || key === undefined ? '' : String(key).slice(0, 12) + '…'
+    }
+
+    /** 内联线性图标：16px、1.5px、currentColor。 */
+    function lineIcon(paths) {
+      return h('svg', { viewBox: '0 0 16 16', width: 16, height: 16, fill: 'none', 'aria-hidden': 'true' },
+        paths.map(function (path, index) {
+          return h('path', Object.assign({
+            key: index, stroke: 'currentColor', strokeWidth: 1.5,
+            strokeLinecap: 'round', strokeLinejoin: 'round',
+          }, path))
+        }))
+    }
+
+    var SECTION_ICONS = {
+      plug: [{ d: 'M5.5 2v3' }, { d: 'M10.5 2v3' }, { d: 'M3.5 5h9v2a4.5 4.5 0 0 1-9 0z' }, { d: 'M8 11.5V14' }],
+      key: [{ d: 'M10.3 5.7a2.9 2.9 0 1 1-2.1 5l-4.4 4.3H2v-2l4.3-4.3a2.9 2.9 0 0 1 4-3z' }],
+      upload: [{ d: 'M8 10V3' }, { d: 'M5.5 5.5 8 3l2.5 2.5' }, { d: 'M3 10.5v2A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-2' }],
+      map: [{ d: 'M2 4l4-1.5 4 1.5 4-1.5v9.5L10 13.5 6 12l-4 1.5z' }, { d: 'M6 2.5v9.5' }, { d: 'M10 4v9.5' }],
+      sliders: [{ d: 'M3 5.5h10' }, { d: 'M3 10.5h10' }, { d: 'M6 3.5v4' }, { d: 'M10 8.5v4' }],
+      gauge: [{ d: 'M3 12a5.5 5.5 0 1 1 10 0' }, { d: 'M8 12l2.5-3' }],
+      refresh: [{ d: 'M13 8a5 5 0 1 1-1.5-3.5' }, { d: 'M13 3.5v2.5h-2.5' }],
+      external: [{ d: 'M6.5 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5V9.5' }, { d: 'M9 2h5v5' }, { d: 'M14 2 7.5 8.5' }],
+      link: [{ d: 'M6.5 9.5l3-3' }, { d: 'M7 5.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1' }, { d: 'M9 10.5l-1 1A2.5 2.5 0 0 1 4.5 8l1-1' }],
+      check: [{ d: 'M3.5 8.5l2.5 2.5 6-6' }],
+    }
+
+    function sectionIcon(name) {
+      var paths = SECTION_ICONS[name]
+      return paths === undefined ? null : lineIcon(paths)
+    }
+
+    function SectionHead(props) {
+      return h('div', { className: 'dssync-sechead' },
+        h('span', { className: 'dssync-secicon' }, sectionIcon(props.icon)),
+        h('div', { className: 'dssync-sectext' },
+          h('h3', null, props.title),
+          props.sub ? h('span', null, props.sub) : null),
+        props.right ? h('div', { className: 'dssync-secright' }, props.right) : null)
     }
 
     /** 合并 /workspaces 的远端列表与绑定/未映射兜底，按 key 去重。 */
@@ -1391,7 +1471,12 @@ window.__ModuleLoader__.load({
         h('div', { className: 'title' },
           h('b', null, local.title || local.path),
           locked ? h('span', { className: 'dssync-session-status' }, '已绑定') : null,
-          !locked && kind === 'native' ? h('span', { className: 'dssync-rel native' }, '本机身份') : null,
+          !locked && kind === 'native'
+            ? h('span', {
+              className: 'dssync-rel native dssync-tip',
+              'data-tip': '本机路径与远端 workspaceKey 由同一个路径派生：把远端改绑到另一条本地路径，会让两条路径争夺同一个远端身份，推送会冲突；所以本机身份不允许改绑。',
+            }, '本机身份')
+            : null,
           !locked && paired === true ? h('span', { className: 'dssync-session-status' }, '已配对') : null),
         h('div', { className: 'dssync-mappath', title: local.path }, local.path))
       }
@@ -1472,7 +1557,7 @@ window.__ModuleLoader__.load({
         }
         if (row.kind === 'native') {
           return h('div', { className: 'dssync-mapcenter' },
-            h('button', { className: 'dssync-maplock', type: 'button', disabled: true, title: 'key 与本机路径一致，无需绑定', 'aria-label': '本机身份' }, lockIcon(true)))
+            h('span', { className: 'dssync-maplock locked', title: '本机身份不允许改绑：key 由本机路径派生，改绑会让两条路径争夺同一个远端身份', 'aria-label': '本机身份不可改绑' }, lineIcon(SECTION_ICONS.check)))
         }
         return h('div', { className: 'dssync-mapcenter' },
           h('button', {
@@ -1512,14 +1597,18 @@ window.__ModuleLoader__.load({
                   : '首次推送根会话后自动创建远端 workspaceKey'))
         }
         var paired = row.local !== null
-        var stateText = row.locked ? '已绑定' : paired ? '已配对，未锁定' : '待映射'
-        return h('div', { className: 'dssync-mapremote' + (row.locked ? ' bound' : '') },
+        var native = row.kind === 'native'
+        var stateText = row.locked ? '已绑定' : native ? '本机身份，不可改绑' : paired ? '已配对，未锁定' : '待映射'
+        var stateColor = row.locked || native ? '#9ce8bc' : paired ? '#b9ccff' : undefined
+        return h('div', { className: 'dssync-mapremote' + (row.locked || native ? ' bound' : '') },
           h('div', { className: 'title' },
             h('b', null, row.remote.label || shortMapKey(row.remote.workspaceKey)),
             h('span', { className: 'dssync-note' }, (row.remote.sessions || 0) + ' 个会话'),
-            h('span', { className: 'dssync-note', style: { marginLeft: 'auto', color: row.locked ? '#9ce8bc' : paired ? '#b9ccff' : undefined } }, stateText)),
+            h('span', { className: 'dssync-note', style: { marginLeft: 'auto', color: stateColor } }, stateText)),
           h('div', { className: 'dssync-mapnote', title: row.remote.path },
-            row.remote.path === undefined ? '无来源路径' : '来源：' + row.remote.path))
+            native
+              ? 'workspaceKey 由本机路径派生；改绑会让两条路径争夺同一个远端身份，所以不允许。'
+              : row.remote.path === undefined ? '无来源路径' : '来源：' + row.remote.path))
       }
 
       var allRows = []
@@ -1694,6 +1783,16 @@ window.__ModuleLoader__.load({
       var setDirty = dirtyState[1]
       var lastRevision = useRef(revision)
       var loadedWorkspaces = useRef(false)
+      var probeState = useState({ loading: false, data: null, error: null })
+      var credState = useState({ tokenOpen: false, passOpen: false, verifying: false, result: null })
+      var cred = credState[0]
+      var setCred = credState[1]
+      var fileInput = useRef(null)
+      var collapseState = useState({})
+      var collapsedGroups = collapseState[0]
+      var setCollapsedGroups = collapseState[1]
+      var probeInfo = probeState[0]
+      var setProbeInfo = probeState[1]
 
       useEffect(function () { model.refreshAll() }, [model])
       useEffect(function () {
@@ -1702,6 +1801,12 @@ window.__ModuleLoader__.load({
           if (state.workspaces === null) model.refreshWorkspaces()
         }
       }, [model, state.workspaces])
+      useEffect(function () {
+        if (!state.setup || state.setup.configured !== true) return undefined
+        if (String(fields.serverUrl || '').trim() === '') return undefined
+        void refreshProbe()
+        return undefined
+      }, [state.setup && state.setup.configured, fields.serverUrl])
       useEffect(function () {
         if (revision !== lastRevision.current) {
           lastRevision.current = revision
@@ -1745,7 +1850,6 @@ window.__ModuleLoader__.load({
           ...serverLocked ? [] : [{ op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() }],
 
           { op: 'set', path: ['syncSessionIds'], value: fields.syncSessionIds.slice() },
-          { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
           { op: 'set', path: ['intervalMs'], value: Math.max(5000, Number(fields.intervalMs) || 60000) },
           { op: 'set', path: ['includeSubagents'], value: fields.includeSubagents === true },
@@ -1784,6 +1888,130 @@ window.__ModuleLoader__.load({
         }
       }
 
+      function updateCred(patch) {
+        setCred(function (previous) { return Object.assign({}, previous, patch) })
+      }
+
+      async function verifyPass() {
+        if (!cred.passOpen) { updateCred({ passOpen: true, result: null }); return }
+        var url = String(fields.serverUrl || '').trim()
+        var value = String(passphrase || '').trim()
+        if (url === '') { setMessage({ bad: true, text: '先填写服务端地址' }); return }
+        if (value === '') { setMessage({ bad: true, text: '先输入要验证的口令' }); return }
+        updateCred({ verifying: true, result: null })
+        try {
+          var check = await model.verifyPassphrase(url, String(token).trim(), value)
+          var good = check !== null && check !== undefined && check.verified === true
+          updateCred({
+            verifying: false,
+            result: { good: good, text: good ? '口令与云端数据匹配' : ((check && check.message) || '口令与云端数据不匹配') },
+          })
+        } catch (error) {
+          updateCred({ verifying: false, result: { good: false, text: errorText(error) } })
+        }
+      }
+
+      function setSessionsSelected(list, on) {
+        var ids = list.map(function (session) { return session.sessionId })
+        setDirty(true)
+        setFields(function (previous) {
+          var next = previous.syncSessionIds.slice()
+          ids.forEach(function (id) {
+            var at = next.indexOf(id)
+            if (on === true && at < 0) next.push(id)
+            if (on === false && at >= 0) next.splice(at, 1)
+          })
+          return Object.assign({}, previous, { syncSessionIds: next })
+        })
+      }
+
+      function toggleGroup(path, count) {
+        setCollapsedGroups(function (previous) {
+          var next = Object.assign({}, previous)
+          var current = next[path] !== undefined ? next[path] === true : count > 8
+          next[path] = !current
+          return next
+        })
+      }
+
+      function setAllCollapsed(value) {
+        var next = {}
+        sessionGroups.forEach(function (group) { next[group.path] = value })
+        setCollapsedGroups(next)
+      }
+
+      function exportConfig() {
+        var payload = {
+          format: 'dsh-session-cloudsync/config',
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          config: {
+            serverUrl: String(fields.serverUrl || '').trim(),
+            syncSessionIds: fields.syncSessionIds.slice(),
+            autoSync: fields.autoSync === true,
+            intervalMs: Math.max(5000, Number(fields.intervalMs) || 60000),
+            includeSubagents: fields.includeSubagents === true,
+          },
+        }
+        var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+        var url = URL.createObjectURL(blob)
+        var anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = 'dsh-session-cloudsync-config.json'
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+        setTimeout(function () { URL.revokeObjectURL(url) }, 1000)
+        setMessage({ bad: false, text: '已导出配置（不含 token、口令与工作区绑定）' })
+      }
+
+      async function importConfig(file) {
+        try {
+          var parsed = JSON.parse(await file.text())
+          if (!parsed || typeof parsed !== 'object') throw new Error('文件不是配置对象')
+          if (parsed.format !== 'dsh-session-cloudsync/config' || parsed.version !== 1) {
+            throw new Error('不是本插件的配置文件（format/version 不匹配）')
+          }
+          var config = parsed.config
+          if (!config || typeof config !== 'object') throw new Error('配置缺少 config 字段')
+          var next = Object.assign({}, fields)
+          var notes = []
+          if (typeof config.serverUrl === 'string' && config.serverUrl.trim() !== '') {
+            if (serverLocked) notes.push('服务端地址由环境变量锁定，未导入')
+            else next.serverUrl = config.serverUrl.trim()
+          }
+          next.syncSessionIds = Array.isArray(config.syncSessionIds)
+            ? config.syncSessionIds.filter(function (id) { return typeof id === 'string' })
+            : next.syncSessionIds
+          if (typeof config.autoSync === 'boolean') next.autoSync = config.autoSync
+          var interval = Number(config.intervalMs)
+          if (Number.isFinite(interval) && interval > 0) next.intervalMs = Math.min(86400000, Math.max(5000, interval))
+          if (typeof config.includeSubagents === 'boolean') next.includeSubagents = config.includeSubagents
+          setFields(next)
+          setDirty(true)
+          setMessage({ bad: false, text: '配置已载入，请确认后点「保存配置」' + (notes.length > 0 ? '；' + notes.join('；') : '') })
+        } catch (error) {
+          setMessage({ bad: true, text: '导入失败：' + errorText(error) })
+        }
+      }
+
+      /** 用当前地址 + 已保存的 token 探测一次服务端，刷新状态卡。 */
+      async function refreshProbe() {
+        var serverUrl = String(fields.serverUrl || '').trim()
+        if (serverUrl === '') return
+        setProbeInfo({ loading: true, data: null, error: null })
+        try {
+          var result = await model.probe(serverUrl, '')
+          if (result && result.ok === true) {
+            setProbeInfo({ loading: false, data: result.probe, error: null })
+          } else {
+            setProbeInfo({ loading: false, data: null, error: (result && result.message) || '探测失败' })
+          }
+        } catch (error) {
+          setProbeInfo({ loading: false, data: null, error: errorText(error) })
+        }
+      }
+
       async function test() {
         var serverUrl = String(fields.serverUrl || '').trim()
         if (serverUrl === '') {
@@ -1793,12 +2021,14 @@ window.__ModuleLoader__.load({
         setBusy('test')
         setMessage(null)
         try {
-          // 只测当前输入的服务端地址：不落盘、不带 token，也不必等配置热更新。
-          var result = await probeServer(model, serverUrl)
-          if (result && result.ok) {
+          // 只测当前输入的服务端地址：不落盘，也不等配置热更新。
+          var result = await model.probe(serverUrl, '')
+          if (result && result.ok === true) {
+            setProbeInfo({ loading: false, data: result.probe, error: null })
             setMessage({ bad: false, text: '服务端可达' })
             model.toast('服务端可达')
           } else {
+            setProbeInfo({ loading: false, data: null, error: (result && result.message) || '连接失败' })
             setMessage({ bad: true, text: (result && result.message) || '连接失败' })
           }
         } catch (error) {
@@ -1850,14 +2080,31 @@ window.__ModuleLoader__.load({
       var tokenConfigured = setupInfo ? setupInfo.hasToken : false
       var passConfigured = setupInfo ? setupInfo.hasPassphrase : false
       var disabled = busy !== '' || formState.status !== 'ready' || !formState.writable
+      var probeData = probeInfo.data
+      var probeError = probeInfo.error
+      var dotClass = probeInfo.loading ? 'warn' : probeData !== null ? 'ok' : probeError !== null ? 'bad' : ''
+      var connStatusText = probeInfo.loading ? '检测中…' : probeData !== null ? '已连接' : probeError !== null ? '不可用' : '未检测'
+      var adminUrl = String(fields.serverUrl || '').trim().replace(/\/+$/u, '') + '/admin'
+      var connStatus = h('span', { className: 'dssync-savebar-state' },
+        h('i', { className: 'dssync-dot ' + dotClass }), h('span', null, connStatusText))
       var serverLocked = setupInfo !== null && setupInfo.serverUrlSource === 'env'
       var deviceLocked = setupInfo !== null && setupInfo.deviceNameSource === 'env'
       var tokenLocked = setupInfo !== null && setupInfo.tokenSource === 'env'
       var passLocked = setupInfo !== null && setupInfo.passphraseSource === 'env'
       var savebar = h('div', { className: 'dssync-savebar' },
-        h('span', { className: dirty ? 'dirty' : 'clean' },
-          busy === 'save' ? '正在保存…' : dirty ? '有未保存修改' : '非敏感配置已保存'),
+        h('span', { className: 'dssync-savebar-state' },
+          h('i', { className: 'dssync-dot ' + (dirty ? 'warn' : 'ok') }),
+          h('span', { className: dirty ? 'dirty' : 'clean' },
+            busy === 'save' ? '正在保存…' : dirty ? '有未保存修改' : '非敏感配置已保存')),
         h('span', { className: 'spacer' }),
+        h('button', {
+          className: 'dssync-pill', type: 'button', disabled: disabled,
+          onClick: function () { if (fileInput.current) fileInput.current.click() },
+        }, '导入配置'),
+        h('button', {
+          className: 'dssync-pill', type: 'button', disabled: disabled,
+          onClick: exportConfig,
+        }, '导出配置'),
         h('button', {
           className: 'dssync-pill', type: 'button',
           onClick: function () { forceOnboarding(); location.reload() },
@@ -1869,59 +2116,97 @@ window.__ModuleLoader__.load({
         }, busy === 'save' ? '保存中…' : '保存配置'))
 
       return h('div', { className: 'dssync dssync-page' },
+        h('input', {
+          ref: fileInput, type: 'file', accept: '.json,application/json', style: { display: 'none' },
+          onChange: function (event) {
+            var file = event.target.files && event.target.files[0]
+            if (file) void importConfig(file)
+            event.target.value = ''
+          },
+        }),
         savebar,
         h('section', { className: 'dssync-sec' },
-          h('div', { className: 'dssync-sechead' },
-            h('h3', null, '连接'),
-            h('span', null, '自部署服务端')),
-          h('div', { className: 'dssync-grid' },
-            h(Field, { id: 'dssync-server', label: '服务端地址', hint: serverLocked ? '由环境变量设置，设置页不可修改。' : '填写后测试服务端与 token。' },
-              h('input', {
-                id: 'dssync-server', value: fields.serverUrl, spellCheck: false,
-                disabled: serverLocked,
-                placeholder: 'http://127.0.0.1:8787',
-                onChange: function (event) { set('serverUrl', event.target.value) },
-              })),
-            h(Field, { id: 'dssync-device', label: '设备名称', hint: '在服务端设置；这里只读展示，改名去管理台。' },
-              h('div', { className: 'dssync-note' },
-                (setupInfo && setupInfo.deviceName) || '未命名',
-                ' · ',
-                h('a', {
-                  href: String(fields.serverUrl || '').trim().replace(/\/+$/u, '') + '/admin',
-                  target: '_blank', rel: 'noreferrer',
-                  style: { color: '#b9ccff', textDecoration: 'underline' },
-                }, '去管理台改名')))),
+          h(SectionHead, { icon: 'plug', title: '连接', sub: '自部署服务端', right: connStatus }),
+          h('div', { className: 'dssync-conncard' },
+            h('div', { className: 'dssync-connhead' },
+              h('i', { className: 'dssync-dot ' + dotClass }),
+              h('b', null, connStatusText),
+              probeData && probeData.server
+                ? h('span', { className: 'dssync-note' }, 'v' + probeData.server.version + ' · 协议 v' + probeData.server.protocolVersion)
+                : null,
+              h('span', { className: 'spacer' }),
+              h('button', { className: 'dssync-pill', type: 'button', disabled: probeInfo.loading, onClick: refreshProbe }, probeInfo.loading ? '检测中…' : '重新检测'),
+              h('a', { className: 'dssync-pill', href: adminUrl, target: '_blank', rel: 'noreferrer' }, '管理台')),
+            h('div', { className: 'dssync-connbody' },
+              h('div', { className: 'dssync-kv' }, h('span', null, '地址'), h('b', null, fields.serverUrl || '未填写')),
+              h('div', { className: 'dssync-kv' }, h('span', null, '设备'), h('b', null, (setupInfo && setupInfo.deviceName) || '未命名')),
+              probeData && probeData.counts
+                ? h('div', { className: 'dssync-kv' }, h('span', null, '远端'), h('b', null, probeData.counts.workspaces + ' 个工作区 · ' + probeData.counts.sessions + ' 个会话'))
+                : null,
+              probeData && probeData.server
+                ? h('div', { className: 'dssync-kv' }, h('span', null, '配额'),
+                  h('b', null, fmtBytes(probeData.server.usedBytes) + ' / ' + fmtBytes(probeData.server.quotaBytes)),
+                  h('div', { className: 'dssync-quota' },
+                    h('i', { style: { width: Math.min(100, Math.round(probeData.server.usedBytes / Math.max(1, probeData.server.quotaBytes) * 100)) + '%' } })))
+                : null),
+            probeError !== null ? h('div', { className: 'dssync-note bad' }, probeError) : null),
+          h(Field, { id: 'dssync-server', label: '服务端地址', hint: serverLocked ? '由环境变量设置，设置页不可修改。' : '修改后点“测试连接”或保存配置。' },
+            h('input', {
+              id: 'dssync-server', value: fields.serverUrl, spellCheck: false,
+              disabled: serverLocked,
+              placeholder: 'http://127.0.0.1:8787',
+              onChange: function (event) { set('serverUrl', event.target.value) },
+            })),
           h('div', { className: 'dssync-btnrow' },
             h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || busy === 'test', onClick: test }, busy === 'test' ? '测试中…' : '测试连接'),
             h('span', { className: 'spacer' }),
-            setupInfo && setupInfo.configured ? h('span', { className: 'dssync-note' }, '已连接') : h('span', { className: 'dssync-note warn' }, setupInfo && setupInfo.reason ? setupInfo.reason : '尚未配置'))),
+            setupInfo && setupInfo.configured ? h('span', { className: 'dssync-note' }, '已配置') : h('span', { className: 'dssync-note warn' }, setupInfo && setupInfo.reason ? setupInfo.reason : '尚未配置'))),
 
         h('section', { className: 'dssync-sec' },
-          h('div', { className: 'dssync-sechead' },
-            h('h3', null, '凭据'),
-            h('span', null, '保存到 DSH 凭据库，不写进普通配置')),
-          h('div', { className: 'dssync-grid' },
-            h(Field, { id: 'dssync-token', label: '设备 token', hint: tokenLocked ? '由环境变量设置，设置页不可修改。' : tokenConfigured ? '已配置；留空保持不变。' : '由服务端管理台或 CLI 签发。' },
+          h(SectionHead, { icon: 'key', title: '凭据', sub: '保存到 DSH 凭据库，不写进普通配置' }),
+          h('div', { className: 'dssync-credrow' },
+            h('div', { className: 'dssync-rowtext' },
+              h('b', null, '设备 token'),
+              h('span', null, tokenLocked ? '由环境变量设置' : tokenConfigured ? '已保存在凭据库' : '由服务端管理台或 CLI 签发')),
+            h('span', { className: 'dssync-chip ' + (tokenConfigured ? 'ok' : 'warn') }, tokenConfigured ? '已配置' : '未配置'),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || tokenLocked, onClick: function () { updateCred({ tokenOpen: !cred.tokenOpen }) } }, cred.tokenOpen ? '收起' : '更换'),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: probeInfo.loading || !tokenConfigured, onClick: refreshProbe }, probeInfo.loading ? '验证中…' : '验证')),
+          cred.tokenOpen
+            ? h(Field, { id: 'dssync-token', label: '新的设备 token', hint: '保存后生效；留空保持不变。' },
               h('input', {
                 id: 'dssync-token', type: 'password', value: token, autoComplete: 'off',
-                disabled: tokenLocked,
-                placeholder: tokenConfigured ? '已配置；留空保持不变' : '粘贴 token',
+                disabled: tokenLocked, placeholder: '粘贴 token',
                 onChange: function (event) { setDirty(true); setToken(event.target.value) },
-              })),
-            h(Field, { id: 'dssync-pass', label: '同步口令', hint: passLocked ? '由环境变量设置，设置页不可修改。' : passConfigured ? '已配置；留空保持不变。所有设备必须使用同一口令。' : '用于派生端到端加密密钥；所有设备必须一致。' },
+              }))
+            : null,
+          h('div', { className: 'dssync-credrow' },
+            h('div', { className: 'dssync-rowtext' },
+              h('b', null, '同步口令'),
+              h('span', null, passLocked ? '由环境变量设置' : passConfigured ? '已保存在凭据库' : '用于派生端到端加密密钥')),
+            h('span', { className: 'dssync-chip ' + (passConfigured ? 'ok' : 'warn') }, passConfigured ? '已配置' : '未配置'),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || passLocked, onClick: function () { updateCred({ passOpen: !cred.passOpen, result: null }) } }, cred.passOpen ? '收起' : '更换'),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || cred.verifying, onClick: verifyPass }, cred.verifying ? '验证中…' : '验证口令')),
+          cred.passOpen
+            ? h(Field, { id: 'dssync-pass', label: '同步口令', hint: '要与云端其它设备一致；保存后生效。' },
               h('input', {
                 id: 'dssync-pass', type: 'password', value: passphrase, autoComplete: 'new-password',
-                disabled: passLocked,
-                placeholder: passConfigured ? '已配置；留空保持不变' : '设置同步口令',
+                disabled: passLocked, placeholder: passConfigured ? '已配置；留空保持不变' : '设置同步口令',
                 onChange: function (event) { setDirty(true); setPassphrase(event.target.value) },
-              }))),
+              }))
+            : null,
+          cred.result
+            ? h('div', { className: 'dssync-note' + (cred.result.good ? '' : ' bad') }, cred.result.text)
+            : null,
           h('div', { className: 'dssync-note' }, '同步口令必须与其它设备一致；加解密参数还取决于服务端地址，建议各设备填写同一个规范地址（如 http://127.0.0.1:8787），不要混用 localhost/127.0.0.1 或省略 //。口令或地址不同都会导致加解密参数不符、无法解密。'),
           h('div', { className: 'dssync-note' }, '口令丢失后，云端内容无法解密。凭据引用：' + CREDENTIAL_REFS.token + ' / ' + CREDENTIAL_REFS.passphrase)),
-
         h('section', { className: 'dssync-sec' },
-          h('div', { className: 'dssync-sechead' },
-            h('h3', null, '上传范围'),
-            h('span', null, '仅本地根会话；拉取由工作区绑定决定')),
+          h(SectionHead, {
+            icon: 'upload', title: '上传范围', sub: '仅本地根会话；拉取由工作区绑定决定',
+            right: h('div', { className: 'dssync-actions' },
+              h('span', null, includedCount + ' / ' + sessions.length + ' 个根会话'),
+              h('button', { className: 'dssync-mini', type: 'button', onClick: function () { setAllCollapsed(true) } }, '全部折叠'),
+              h('button', { className: 'dssync-mini', type: 'button', onClick: function () { setAllCollapsed(false) } }, '全部展开')),
+          }),
           h('div', { className: 'dssync-btnrow' },
             h('button', {
               className: 'dssync-pill', type: 'button', disabled: disabled || sessions.length === 0,
@@ -1929,20 +2214,38 @@ window.__ModuleLoader__.load({
                 set('syncSessionIds', includedCount === sessions.length ? [] : sessions.map(function (session) { return session.sessionId }))
               },
             }, includedCount === sessions.length && sessions.length > 0 ? '清空会话' : '全选会话'),
-            h('span', { className: 'dssync-note' }, '同步 ' + includedCount + ' / ' + sessions.length + ' 个根会话'),
             h('span', { className: 'spacer' }),
             workspaces === null ? h('span', { className: 'dssync-note' }, '读取会话…') : null),
           sessions.length === 0 && workspaces !== null
-            ? h('div', { className: 'dssync-note warn' }, '还没有可同步的根会话。')
+            ? h('div', { className: 'dssync-mapempty' },
+              h('span', { className: 'dssync-rowicon' }, sectionIcon('upload')),
+              h('b', null, '还没有可同步的根会话'),
+              h('div', { className: 'dssync-note' }, '在 DSH 里新建会话后，这里会出现可勾选的根会话。'))
             : h('div', { className: 'dssync-sessionlist' }, sessionGroups.map(function (workspace) {
               var workspaceSessions = sessions.filter(function (session) { return session.workspacePath === workspace.path })
               var workspaceSelected = workspaceSessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
+              var isCollapsed = collapsedGroups[workspace.path] !== undefined
+                ? collapsedGroups[workspace.path] === true
+                : workspaceSessions.length > 8
               return h('div', { className: 'dssync-sessiongroup', key: workspace.path },
-                h('div', { className: 'dssync-sessiongroup-head' },
+                h('div', {
+                  className: 'dssync-sessiongroup-head',
+                  onClick: function () { toggleGroup(workspace.path, workspaceSessions.length) },
+                },
+                  h(TriToggle, {
+                    state: workspaceSelected === 0 ? 'none' : workspaceSelected === workspaceSessions.length ? 'all' : 'some',
+                    label: '选择 ' + (workspace.title || workspace.path),
+                    onClick: function () { setSessionsSelected(workspaceSessions, workspaceSelected !== workspaceSessions.length) },
+                  }),
                   h('b', null, workspace.title || workspace.path),
                   h('span', null, workspace.path),
-                  h('span', null, workspaceSelected + ' / ' + workspaceSessions.length)),
-                workspaceSessions.map(function (session) {
+                  h('span', null, workspaceSelected + ' / ' + workspaceSessions.length),
+                  h('button', {
+                    className: 'dssync-chev' + (isCollapsed ? ' closed' : ''), type: 'button',
+                    'aria-label': isCollapsed ? '展开' : '折叠',
+                    onClick: function (event) { event.stopPropagation(); toggleGroup(workspace.path, workspaceSessions.length) },
+                  }, '▾')),
+                isCollapsed ? null : workspaceSessions.map(function (session) {
                   var checked = selectedIds.indexOf(session.sessionId) >= 0
                   return h('label', { className: 'dssync-session' + (checked ? '' : ' off'), key: session.sessionId },
                     h('input', { type: 'checkbox', checked: checked, onChange: function () { toggleSession(session.sessionId) } }),
@@ -1956,44 +2259,30 @@ window.__ModuleLoader__.load({
                 }))
             })),
           h('div', { className: 'dssync-note' }, '默认不选中任何会话；勾选只决定本机上传，不决定拉取。绑定工作区后会自动拉取该工作区的远端会话，取消勾选不会删除远端历史。')),
-
         h('section', { className: 'dssync-sec' },
-          h('div', { className: 'dssync-sechead' },
-            h('h3', null, '工作区映射'),
-            h('span', null, '一次性绑定，不能改绑'),
-            h('button', {
-              className: 'dssync-pill', type: 'button', style: { marginLeft: 'auto' },
-              disabled: workspaces === null,
-              onClick: function () { model.refreshWorkspaces() },
-            }, '刷新')),
+          h(SectionHead, { icon: 'map', title: '工作区映射', sub: '一次性绑定，不能改绑', right: h('button', {
+            className: 'dssync-pill', type: 'button',
+            disabled: workspaces === null,
+            onClick: function () { model.refreshWorkspaces() },
+          }, '刷新') }),
           h('div', { className: 'dssync-note' },
             '左侧本机工作区，右侧远端 workspaceKey；只有绑定或本机身份一致的会话才会落到本机。'),
           h(WorkspaceMappingPanel, {
             model: model,
             workspaces: workspaces,
             onRetry: function () { model.refreshWorkspaces() },
-          }),
-          h('div', { className: 'dssync-row' },
-            h('div', { className: 'dssync-rowtext' },
-              h('b', null, '同路径自动绑定'),
-              h('span', null, '默认关闭；开启后同名工作区匹配即建立一次性绑定')),
-            h(Switch, {
-              checked: fields.autoBindSamePath === true,
-              disabled: disabled,
-              label: '同路径自动绑定',
-              onChange: function (value) { set('autoBindSamePath', value) },
-            }))),
+          })),
 
         h('section', { className: 'dssync-sec' },
-          h('div', { className: 'dssync-sechead' },
-            h('h3', null, '同步行为'),
-            h('span', null, '自动同步与子代理闭包')),
+          h(SectionHead, { icon: 'sliders', title: '同步行为', sub: '自动同步与子代理闭包', right: h('span', null, '自动同步 ' + (fields.autoSync ? '开' : '关') + ' · ' + Math.round((Number(fields.intervalMs) || 60000) / 1000) + 's') }),
           h('div', { className: 'dssync-row' },
+            h('span', { className: 'dssync-rowicon' }, sectionIcon('refresh')),
             h('div', { className: 'dssync-rowtext' },
               h('b', null, '自动同步'),
               h('span', null, '按间隔在后台推送并拉取')),
             h(Switch, { checked: fields.autoSync, disabled: disabled, label: '自动同步', onChange: function (value) { set('autoSync', value) } })),
           h('div', { className: 'dssync-row' },
+            h('span', { className: 'dssync-rowicon' }, sectionIcon('gauge')),
             h('div', { className: 'dssync-rowtext' },
               h('b', null, '同步间隔'),
               h('span', null, '自动同步开启时生效')),
@@ -2014,6 +2303,7 @@ window.__ModuleLoader__.load({
               }, seconds < 60 ? seconds + 's' : (seconds / 60) + 'm')
             }))),
           h('div', { className: 'dssync-row' },
+            h('span', { className: 'dssync-rowicon' }, sectionIcon('link')),
             h('div', { className: 'dssync-rowtext' },
               h('b', null, '同步子代理会话'),
               h('span', null, '随根会话一起同步全部后代；关闭后只同步根会话')),
@@ -2021,6 +2311,7 @@ window.__ModuleLoader__.load({
 
         h(PerfPanel, { model: model }),
 
+        h('div', { className: 'dssync-note' }, '导入/导出只包含非敏感配置（服务端地址、上传范围、同步行为），不含 token、同步口令与工作区绑定；换机后仍需重新填写凭据。'),
         h('div', { className: 'dssync-btnrow' },
           h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || busy === 'sync', onClick: syncNow }, busy === 'sync' ? '同步中…' : '立即同步'),
           h('span', { className: 'spacer' }),
