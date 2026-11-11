@@ -419,6 +419,8 @@ export function apply(ctx: Context, config: Config): void {
     bindings = bindingsDir === undefined ? emptyBindings() : await readBindings(bindingsDir)
   }
   let workspaceLabels: Record<string, string> = {}
+  /** workspaceKey → 远端记录里的来源工作区路径（HMAC 已校验）。 */
+  let workspacePaths: Record<string, string> = {}
   let labelsIdentity: string | undefined
   let labelsFetchedAt = 0
   let remoteInventory: {
@@ -449,6 +451,7 @@ export function apply(ctx: Context, config: Config): void {
         ...engineConfig.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: engineConfig.requestTimeoutMs },
       })
       workspaceLabels = result.labels
+      workspacePaths = result.paths
       labelsIdentity = identity
       labelsFetchedAt = Date.now()
     } catch (error: unknown) {
@@ -1643,6 +1646,7 @@ export function apply(ctx: Context, config: Config): void {
           sessions: value.sessions,
           ...value.label === undefined ? {} : { label: value.label },
           ...value.sessionIds === undefined ? {} : { sessionIds: value.sessionIds },
+          ...workspacePaths[workspaceKey] === undefined ? {} : { path: workspacePaths[workspaceKey] },
         }))
         .sort((left, right) => (left.label ?? left.workspaceKey).localeCompare(right.label ?? right.workspaceKey)),
     }

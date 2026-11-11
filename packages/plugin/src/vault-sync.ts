@@ -69,7 +69,10 @@ interface VaultState {
   readonly seq: number
   readonly prevHash: string | null
   readonly deviceDigest: string | null
+  /** workspaceKey → label（保留旧字段用于去重）。 */
   readonly workspaces: Record<string, string>
+  /** workspaceKey → 已写过的来源路径；用于判断是否需要补写 path。 */
+  readonly workspacePaths: Record<string, string>
 }
 
 interface DeviceMe {
@@ -137,11 +140,22 @@ export async function syncVault(
       pending.push({ kind: 'device/profile', entity: writer, data: { ...payload, lastSeenAt: now } })
     }
     for (const workspace of workspaces) {
-      if (state.workspaces[workspace.key] !== undefined) continue
+      const known = state.workspaces[workspace.key] !== undefined
+      // path 只有在能反推回同一个 workspaceKey 时才可信（源设备的规范化工作区根）。
+      const canWritePath = workspace.path.trim() !== ''
+        && workspaceKeyOf(vaultKey, workspace.path) === workspace.key
+      const pathChanged = canWritePath && state.workspacePaths[workspace.key] !== workspace.path
+      if (known && !pathChanged) continue
       pending.push({
         kind: 'workspace/profile',
         entity: workspace.key,
-        data: { key: workspace.key, label: workspace.label, createdAt: now, lastSeenAt: now },
+        data: {
+          key: workspace.key,
+          label: workspace.label,
+          createdAt: now,
+          lastSeenAt: now,
+          ...canWritePath ? { path: workspace.path } : {},
+        },
       })
     }
 
@@ -200,8 +214,11 @@ export async function syncVault(
         prevHash = record.recordHash
         appended += 1
         const nextWorkspaces = { ...nextState.workspaces }
+        const nextWorkspacePaths = { ...nextState.workspacePaths }
         if (entry.kind === 'workspace/profile') {
-          nextWorkspaces[entry.entity] = String((entry.data as { label?: unknown }).label ?? '')
+          const data = entry.data as { label?: unknown; path?: unknown }
+          nextWorkspaces[entry.entity] = String(data.label ?? '')
+          if (typeof data.path === 'string' && data.path !== '') nextWorkspacePaths[entry.entity] = data.path
         }
         nextState = {
           version: 1,
@@ -210,6 +227,7 @@ export async function syncVault(
           prevHash,
           deviceDigest: entry.kind === 'device/profile' ? digest : nextState.deviceDigest,
           workspaces: nextWorkspaces,
+          workspacePaths: nextWorkspacePaths,
         }
         await writeState(statePath, nextState)
       }
@@ -254,7 +272,7 @@ async function reconcileHead(
     from = last.seq + 1
   }
   if (last === undefined) {
-    return { version: 1, writer, seq: 0, prevHash: null, deviceDigest: null, workspaces: {} }
+    return { version: 1, writer, seq: 0, prevHash: null, deviceDigest: null, workspaces: {}, workspacePaths: {} }
   }
   if (previous !== undefined && previous.writer === writer && previous.seq === last.seq && previous.prevHash === last.recordHash) {
     return previous
@@ -266,6 +284,7 @@ async function reconcileHead(
     prevHash: last.recordHash,
     deviceDigest: previous?.writer === writer ? previous.deviceDigest : null,
     workspaces: previous?.writer === writer ? previous.workspaces : {},
+    workspacePaths: previous?.writer === writer ? previous.workspacePaths : {},
   }
 }
 
@@ -297,6 +316,13 @@ async function readState(path: string): Promise<VaultState | undefined> {
       || (parsed['prevHash'] !== null && typeof parsed['prevHash'] !== 'string')
       || (parsed['deviceDigest'] !== null && typeof parsed['deviceDigest'] !== 'string')
       || parsed['workspaces'] === null || typeof parsed['workspaces'] !== 'object') return undefined
+    const workspacePaths: Record<string, string> = {}
+    const rawPaths = parsed['workspacePaths']
+    if (rawPaths !== null && typeof rawPaths === 'object' && !Array.isArray(rawPaths)) {
+      for (const [key, value] of Object.entries(rawPaths as Record<string, unknown>)) {
+        if (typeof value === 'string' && value !== '') workspacePaths[key] = value
+      }
+    }
     return {
       version: 1,
       writer: parsed['writer'],
@@ -304,6 +330,7 @@ async function readState(path: string): Promise<VaultState | undefined> {
       prevHash: parsed['prevHash'] as string | null,
       deviceDigest: parsed['deviceDigest'] as string | null,
       workspaces: parsed['workspaces'] as Record<string, string>,
+      workspacePaths,
     }
   } catch {
     return undefined
@@ -469,9 +496,11 @@ export function vaultKeyForConfig(config: Pick<VaultSyncConfig, 'serverUrl' | 'p
   return vaultKeyOf(masterKeyOf(config, base))
 }
 
-/** 远端 workspace/profile 的 label 缓存。 */
+/** 远端 workspace/profile 的 label/path 缓存。 */
 export interface WorkspaceProfileLabels {
   readonly labels: Record<string, string>
+  /** workspaceKey → 来源设备的工作区根路径（写入时用 HMAC 反推校验过）。 */
+  readonly paths: Record<string, string>
   readonly revision: number
 }
 
@@ -489,7 +518,7 @@ export async function readWorkspaceProfileLabels(
   const base = config.serverUrl.trim().replace(/\/+$/u, '')
   if (base === '') throw new Error('serverUrl 非法')
   const vaultKey = vaultKeyOf(masterKeyOf(config, base))
-  const labels: Record<string, { label: string; at: number }> = {}
+  const labels: Record<string, { label: string; path?: string; at: number }> = {}
   let since = 0
   for (let page = 0; page < 50; page += 1) {
     const cursor = await requestJson(base, `/v2/vault/cursor?since=${since}&limit=500`, config.token, fetchImpl, { method: 'GET' })
@@ -520,11 +549,19 @@ export async function readWorkspaceProfileLabels(
         if (bytes === undefined) continue
         const payload = openVaultRecord({ ref: record, bytes }, vaultKey)
         if (payload.kind !== 'workspace/profile') continue
-        const data = payload.data as { readonly label?: unknown } | undefined
+        const data = payload.data as { readonly label?: unknown; readonly path?: unknown } | undefined
         if (typeof data?.label !== 'string' || data.label.trim() === '') continue
         const at = Number.isSafeInteger(payload.at) ? payload.at : record.createdAt
+        // 读端再校验一次：path 必须能反推出同一个 workspaceKey，否则不采信。
+        const path = typeof data.path === 'string'
+          && data.path.trim() !== ''
+          && workspaceKeyOf(vaultKey, data.path) === payload.entity
+          ? data.path
+          : undefined
         const previous = labels[payload.entity]
-        if (previous === undefined || at >= previous.at) labels[payload.entity] = { label: data.label, at }
+        if (previous === undefined || at >= previous.at) {
+          labels[payload.entity] = { label: data.label, ...path === undefined ? {} : { path }, at }
+        }
       } catch {
         // 单个坏记录不影响其他 workspace；下次刷新会重试。
       }
@@ -535,6 +572,9 @@ export async function readWorkspaceProfileLabels(
   }
   return {
     labels: Object.fromEntries(Object.entries(labels).map(([key, value]) => [key, value.label])),
+    paths: Object.fromEntries(Object.entries(labels)
+      .filter(([, value]) => value.path !== undefined)
+      .map(([key, value]) => [key, value.path as string])),
     revision: since,
   }
 }

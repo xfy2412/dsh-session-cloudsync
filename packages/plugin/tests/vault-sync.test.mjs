@@ -183,3 +183,48 @@ test('Vault writer 租约冲突时整轮失败且不写新记录', async () => {
     temp.dispose()
   }
 })
+
+test('workspace/profile 带来源路径，读取端返回 paths', async () => {
+  const temp = createTempHome('plugin-vault-path')
+  try {
+    const server = fakeServer()
+    const workspaces = [
+      { path: 'D:/work/a', title: 'alpha' },
+      { path: 'D:/work/b', title: 'beta' },
+    ]
+    const cfg = config(temp, workspaces)
+    await syncVault(cfg, undefined, server.fetchImpl)
+    const result = await readWorkspaceProfileLabels(cfg, server.fetchImpl)
+    const paths = Object.values(result.paths).sort()
+    assert.deepEqual(paths, ['D:/work/a', 'D:/work/b'])
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('老状态没有 workspacePaths 时补写一次 path，之后不再重复', async () => {
+  const temp = createTempHome('plugin-vault-path-upgrade')
+  try {
+    const server = fakeServer()
+    const workspaces = [{ path: 'D:/work/a', title: 'alpha' }]
+    const cfg = config(temp, workspaces)
+    await syncVault(cfg, undefined, server.fetchImpl)
+    const before = server.records.length
+
+    // 模拟旧版本客户端留下的状态：去掉 workspacePaths，保留 workspaces。
+    const stateFile = cfg.stateDir + '/state.json'
+    const fs = await import('node:fs/promises')
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8'))
+    delete state.workspacePaths
+    await fs.writeFile(stateFile, JSON.stringify(state), 'utf8')
+
+    const upgraded = await syncVault(cfg, undefined, server.fetchImpl)
+    assert.equal(upgraded.appended, 1)
+    assert.equal(server.records.length, before + 1)
+
+    const again = await syncVault(cfg, undefined, server.fetchImpl)
+    assert.equal(again.appended, 0)
+  } finally {
+    temp.dispose()
+  }
+})
