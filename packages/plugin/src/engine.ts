@@ -577,7 +577,7 @@ function defaultSalt(base: string): Buffer {
  * @param base - 规范化后的服务端地址。
  * @returns 16 字节盐。
  */
-function resolveSalt(config: EngineConfig, base: string): Buffer {
+function resolveSalt(config: Pick<EngineConfig, 'salt'>, base: string): Buffer {
   if (config.salt === undefined || config.salt === '') return defaultSalt(base)
   const salt = Buffer.from(config.salt, 'base64')
   if (salt.length !== 16) throw new Error('salt 必须是 base64 的 16 字节值')
@@ -1588,6 +1588,194 @@ export async function readRemoteSessionMeta<Session>(
     ...remote.deletedAt === undefined ? {} : { deletedAt: remote.deletedAt },
   }
 }
+
+/** `/health` 的相关字段。 */
+export interface ServerProbeHealth {
+  readonly version: string
+  readonly protocols: readonly number[]
+  readonly capabilities: readonly string[]
+}
+
+/** `/v2/me` 的相关字段。 */
+export interface ServerProbeMe {
+  readonly role: 'device' | 'admin'
+  readonly device?: {
+    readonly deviceId: string
+    readonly label: string
+    readonly createdAt: number
+    readonly lastSeenAt?: number
+  }
+}
+
+/** 连接探测结果：不读配置、不落盘。 */
+export interface ServerProbe {
+  readonly health: ServerProbeHealth
+  readonly me: ServerProbeMe
+  readonly server?: {
+    readonly version: string
+    readonly protocolVersion: number
+    readonly quotaBytes: number
+    readonly usedBytes: number
+  }
+  readonly counts?: { readonly workspaces: number; readonly sessions: number }
+}
+
+export interface ServerProbeResult {
+  readonly ok: boolean
+  readonly kind?: SyncErrorKind
+  readonly message?: string
+  readonly probe?: ServerProbe
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+/**
+ * 用给定的地址与 token 探测服务端：`/health` 判可达与版本，`/v2/me` 判 token 与设备信息。
+ * 不读取已保存的配置，适合首启向导与设置页的“测试”。
+ * @param input - 服务端地址与设备 token。
+ * @param fetchImpl - fetch 实现。
+ * @param requestTimeoutMs - 请求超时。
+ * @returns 探测结果；失败不抛异常。
+ */
+export async function probeServer(
+  input: { readonly serverUrl: string; readonly token: string },
+  fetchImpl: typeof fetch = fetch,
+  requestTimeoutMs?: number,
+): Promise<ServerProbeResult> {
+  const base = normalizeBase(input.serverUrl)
+  if (base === '') return { ok: false, kind: 'config', message: '服务端地址不合法' }
+  if (input.token.trim() === '') return { ok: false, kind: 'config', message: '设备 token 不能为空' }
+  const timed = withRequestTimeout(fetchImpl, requestTimeoutMs)
+  try {
+    const health = await requestJson(timed, base, '/health', input.token)
+    if (health.status !== 200) {
+      return { ok: false, kind: 'server', message: `/health 返回 ${health.status}` }
+    }
+    // /health 不是 {ok,value} 包络：server 直接在顶层。
+    const healthValue = recordOf(health.body)
+    const server = recordOf(healthValue?.server)
+    if (server === undefined || typeof server['version'] !== 'string') {
+      return { ok: false, kind: 'format', message: '/health 响应缺少 server.version' }
+    }
+    const protocols = Array.isArray(server['protocols']) ? server['protocols'] as number[] : []
+    const capabilities = Array.isArray(server['capabilities']) ? server['capabilities'] as string[] : []
+    const me = await requestJson(timed, base, '/v2/me', input.token)
+    if (me.status === 401) {
+      return { ok: false, kind: 'auth', message: '设备 token 无效或已被吊销' }
+    }
+    if (me.status !== 200) {
+      return { ok: false, kind: 'server', message: `/v2/me 返回 ${me.status}` }
+    }
+    const meValue = recordOf(recordOf(me.body)?.value)
+    if (meValue === undefined) {
+      return { ok: false, kind: 'format', message: '/v2/me 响应缺少 value' }
+    }
+    const role = meValue['role'] === 'admin' ? 'admin' as const : 'device' as const
+    const device = recordOf(meValue['device'])
+    const serverInfo = recordOf(meValue['server'])
+    const counts = recordOf(meValue['counts'])
+    return {
+      ok: true,
+      probe: {
+        health: {
+          version: server['version'] as string,
+          protocols,
+          capabilities,
+        },
+        me: {
+          role,
+          ...role !== 'device' || device === undefined ? {} : {
+            device: {
+              deviceId: String(device['deviceId'] ?? ''),
+              label: String(device['label'] ?? ''),
+              createdAt: Number(device['createdAt'] ?? 0),
+              ...Number.isSafeInteger(device['lastSeenAt']) ? { lastSeenAt: device['lastSeenAt'] as number } : {},
+            },
+          },
+        },
+        ...serverInfo === undefined ? {} : {
+          server: {
+            version: String(serverInfo['version'] ?? ''),
+            protocolVersion: Number(serverInfo['protocolVersion'] ?? 0),
+            quotaBytes: Number(serverInfo['quotaBytes'] ?? 0),
+            usedBytes: Number(serverInfo['usedBytes'] ?? 0),
+          },
+        },
+        ...counts === undefined ? {} : {
+          counts: {
+            workspaces: Number(counts['workspaces'] ?? 0),
+            sessions: Number(counts['sessions'] ?? 0),
+          },
+        },
+      },
+    }
+  } catch (error: unknown) {
+    const classified = classifySyncError(error)
+    return { ok: false, kind: classified.kind, message: classified.message }
+  }
+}
+
+/** 口令验证结果。 */
+export interface PassphraseCheck {
+  readonly ok: boolean
+  /** 是否有远端数据并且成功解开了它。 */
+  readonly verified: boolean
+  readonly message?: string
+}
+
+/**
+ * 用给定口令解密一个远端会话头，判断口令是否与云端数据匹配。
+ * 远端没有会话时返回 `verified: false`（无法验证，不等于口令错）。
+ * @param input - 地址、token、口令与可选 salt。
+ * @param fetchImpl - fetch 实现。
+ * @param requestTimeoutMs - 请求超时。
+ * @returns 验证结果；网络错误不抛异常。
+ */
+export async function verifyPassphrase(
+  input: {
+    readonly serverUrl: string
+    readonly token: string
+    readonly passphrase: string
+    readonly salt?: string
+  },
+  fetchImpl: typeof fetch = fetch,
+  requestTimeoutMs?: number,
+): Promise<PassphraseCheck> {
+  const base = normalizeBase(input.serverUrl)
+  if (base === '') return { ok: false, verified: false, message: '服务端地址不合法' }
+  if (input.token.trim() === '') return { ok: false, verified: false, message: '设备 token 不能为空' }
+  if (input.passphrase === '') return { ok: false, verified: false, message: '同步口令不能为空' }
+  const timed = withRequestTimeout(fetchImpl, requestTimeoutMs)
+  try {
+    const list = await requestJson(timed, base, '/v2/sessions?limit=1', input.token)
+    if (list.status === 401) return { ok: false, verified: false, message: '设备 token 无效' }
+    if (list.status !== 200) return { ok: false, verified: false, message: `/v2/sessions 返回 ${list.status}` }
+    const sessions = recordOf(recordOf(list.body)?.value)?.['sessions']
+    const first = Array.isArray(sessions) ? recordOf(sessions[0]) : undefined
+    const sessionId = typeof first?.['sessionId'] === 'string' ? first['sessionId'] as string : ''
+    if (sessionId === '') return { ok: true, verified: false, message: '远端还没有会话，无法验证口令' }
+    const master = await deriveMasterKeyCached(input.passphrase, resolveSalt(input.salt === undefined ? {} : { salt: input.salt }, base))
+    const remote = await readManifest(timed, base, input.token, sessionId)
+    if (remote === undefined) return { ok: false, verified: false, message: '远端会话没有 manifest' }
+    const headerRef = remote.frames[0]
+    if (headerRef === undefined) return { ok: false, verified: false, message: 'manifest 缺少会话头' }
+    const sealed = await downloadBlob(timed, base, input.token, headerRef.blobSha256)
+    try {
+      openHeader(sealed, headerRef, sessionId, sessionKeyOf(master, sessionId))
+    } catch {
+      return { ok: false, verified: false, message: '口令与云端数据不匹配' }
+    }
+    return { ok: true, verified: true }
+  } catch (error: unknown) {
+    const classified = classifySyncError(error)
+    return { ok: false, verified: false, message: classified.message }
+  }
+}
+
 
 /**
  * 执行一个单向 pull 任务。

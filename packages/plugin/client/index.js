@@ -174,7 +174,18 @@ window.__ModuleLoader__.load({
       '.dssync-agreement pre{overflow:auto;padding:8px;border-radius:6px;background:rgba(0,0,0,.2);font-size:11.5px}',
       '.dssync-agreement a{color:#b9ccff;text-decoration:underline}',
       '.dssync-agree{display:flex;align-items:flex-start;gap:8px;color:var(--dssync-muted);font-size:12.5px;line-height:1.5;cursor:pointer}',
-      '.dssync-agree input{margin:2px 0 0;flex:0 0 auto}',
+      '.dssync-agree input{margin:2px 0 0;flex:0 0 auto}',      '.dssync-choice{display:grid;grid-template-columns:1fr 1fr;gap:12px}',
+      '.dssync-choice-card{display:flex;flex-direction:column;gap:6px;padding:16px;border:1px solid var(--dssync-line-strong);border-radius:12px;background:transparent;color:var(--dssync-text);text-align:left;cursor:pointer}',
+      '.dssync-choice-card:hover{background:rgba(127,127,127,.08)}',
+      '.dssync-choice-card b{font-size:13.5px}',
+      '.dssync-choice-card span{color:var(--dssync-muted);font-size:12px;line-height:1.5}',
+      '.dssync-summary{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--dssync-line);border-radius:10px;background:rgba(0,0,0,.14)}',
+      '.dssync-summary>div{display:flex;gap:12px;align-items:baseline}',
+      '.dssync-summary span{color:var(--dssync-faint);font-size:11px;min-width:64px}',
+      '.dssync-summary b{font-size:12.5px;color:var(--dssync-text);word-break:break-all}',
+      '@media(max-width:560px){.dssync-choice{grid-template-columns:1fr}}',
+
+
       '.dssync-close{position:absolute;right:0;top:0;width:30px;height:30px;border:0;border-radius:8px;background:transparent;color:var(--dssync-muted);cursor:pointer;font-size:18px;line-height:1}',
       '.dssync-close:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}',
       '.dssync-steps{display:flex;align-items:center;gap:8px;margin:0 0 22px;list-style:none;padding:0}',
@@ -701,6 +712,45 @@ window.__ModuleLoader__.load({
         return fetchJson('/agreement')
       }
 
+      /** 用给定地址与 token 探测服务端（不落盘）。 */
+      async function probe(serverUrl, token) {
+        return fetchJson('/probe', {
+          method: 'POST',
+          body: JSON.stringify({ serverUrl: serverUrl, token: token }),
+        })
+      }
+
+      /** 用给定口令验证能否解开云端数据。 */
+      async function verifyPassphrase(serverUrl, token, passphrase) {
+        return fetchJson('/verify-passphrase', {
+          method: 'POST',
+          body: JSON.stringify({ serverUrl: serverUrl, token: token, passphrase: passphrase }),
+        })
+      }
+
+      /** 判断目标路径能直接绑定、需要建目录还是只能另选。 */
+      async function resolveWorkspacePath(path) {
+        return fetchJson('/workspaces/resolve', {
+          method: 'POST',
+          body: JSON.stringify({ path: path }),
+        })
+      }
+
+      /** 必要时建目录并注册为 DSH 工作区。 */
+      async function createWorkspace(path, title) {
+        var result = await fetchJson('/workspaces/create', {
+          method: 'POST',
+          body: JSON.stringify({ path: path, title: title }),
+        })
+        await refreshWorkspaces()
+        return result
+      }
+
+      /** 打开宿主目录选择器。 */
+      async function pickDirectory() {
+        return fetchJson('/directory/pick', { method: 'POST', body: '{}' })
+      }
+
       async function correctCwd(sessionId, action) {
         var result = await fetchJson('/cwd', {
           method: 'POST',
@@ -785,6 +835,11 @@ window.__ModuleLoader__.load({
         refreshWorkspaces: refreshWorkspaces,
         syncNow: syncNow,
         testConnection: testConnection,
+        probe: probe,
+        verifyPassphrase: verifyPassphrase,
+        resolveWorkspacePath: resolveWorkspacePath,
+        createWorkspace: createWorkspace,
+        pickDirectory: pickDirectory,
         agreement: agreement,
         correctCwd: correctCwd,
         resolveBlocked: resolveBlocked,
@@ -1875,25 +1930,70 @@ window.__ModuleLoader__.load({
             h('button', { className: 'dssync-pill primary', type: 'button', onClick: props.onAccept }, '我已阅读并同意'))))
     }
 
+
+    /* ---------- 首启向导（重做：场景 → 连接 → 确认 → 口令 → 场景专属 → 须知） ---------- */
+
+
+    /** 人类可读的字节数。 */
+    function fmtBytes(bytes) {
+      var value = Number(bytes) || 0
+      if (value < 1024) return value + ' B'
+      if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB'
+      if (value < 1024 * 1024 * 1024) return (value / 1024 / 1024).toFixed(1) + ' MB'
+      return (value / 1024 / 1024 / 1024).toFixed(2) + ' GB'
+    }
+
+
+    var ONBOARD_PROGRESS_KEY = 'dsh-session-cloudsync.onboarding.progress'
+
+    function readOnboardProgress() {
+      try {
+        var raw = sessionStorage.getItem(ONBOARD_PROGRESS_KEY)
+        return raw ? JSON.parse(raw) : null
+      } catch (ignored) { return null }
+    }
+
+    function saveOnboardProgress(value) {
+      try { sessionStorage.setItem(ONBOARD_PROGRESS_KEY, JSON.stringify(value)) } catch (ignored) { /* 隐私模式 */ }
+    }
+
+    function clearOnboardProgress() {
+      try { sessionStorage.removeItem(ONBOARD_PROGRESS_KEY) } catch (ignored) { /* 隐私模式 */ }
+    }
+
     function Onboarding(props) {
       var model = props.model
       var state = useModel(model)
       var setup = state.setup
-      var stepState = useState(0)
+      var restored = useRef(readOnboardProgress())
+      var start = restored.current || {}
+      var startStep = Number.isSafeInteger(start.step) && start.step >= 0 && start.step <= 1 ? start.step : 0
+      var stepState = useState(startStep)
       var step = stepState[0]
       var setStep = stepState[1]
-      var dirState = useState('next')
-      var dir = dirState[0]
-      var setDir = dirState[1]
-      var fieldsState = useState(function () { return fieldsFrom(null, setup) })
-      var fields = fieldsState[0]
-      var setFields = fieldsState[1]
+      var personaState = useState(start.persona === 'upload' || start.persona === 'adopt' ? start.persona : null)
+      var persona = personaState[0]
+      var setPersona = personaState[1]
+      var serverUrlState = useState(typeof start.serverUrl === 'string' ? start.serverUrl : '')
+      var serverUrl = serverUrlState[0]
+      var setServerUrl = serverUrlState[1]
       var tokenState = useState('')
       var token = tokenState[0]
       var setToken = tokenState[1]
       var passState = useState('')
       var passphrase = passState[0]
       var setPassphrase = passState[1]
+      var passConfirmState = useState('')
+      var passConfirm = passConfirmState[0]
+      var setPassConfirm = passConfirmState[1]
+      var probeState = useState(null)
+      var probe = probeState[0]
+      var setProbe = probeState[1]
+      var selectedState = useState(function () {
+        return Array.isArray(setup && setup.syncSessionIds) ? setup.syncSessionIds.slice() : []
+      })
+      var selectedIds = selectedState[0]
+      var setSelectedIds = selectedState[1]
       var hiddenState = useState(dismissed)
       var hidden = hiddenState[0]
       var setHidden = hiddenState[1]
@@ -1943,19 +2043,9 @@ window.__ModuleLoader__.load({
         if (setup && setup.configured) setDismissed()
       }, [setup && setup.configured])
       useEffect(function () {
-        if (step !== 2 || state.workspaces !== null) return
-        void refreshMapping()
-      }, [step, state.workspaces, model])
-      useEffect(function () {
-        // 进入映射步骤时再拉一次：首启早期调用可能发生在服务端地址/凭据
-        // 尚未真正热更新完成之前，那一次的空结果不能留到映射页。
-        if (step !== 3 || mappingRefreshed.current) return
-        mappingRefreshed.current = true
-        void refreshMapping()
-      }, [step, model])
-      useEffect(function () {
-        if (setup && step === 0) setFields(fieldsFrom(null, setup))
-      }, [setup && setup.serverUrl])
+        if (!active) return
+        saveOnboardProgress({ step: Math.min(step, 1), persona: persona, serverUrl: serverUrl })
+      }, [active, step, persona, serverUrl])
 
       if (setup === null) return null
       if (!active) {
@@ -1968,75 +2058,20 @@ window.__ModuleLoader__.load({
       }
       if (hidden) return null
 
-      function set(key, value) {
-        setFields(function (previous) {
-          var next = Object.assign({}, previous)
-          next[key] = value
-          return next
-        })
+      function choosePersona(value) {
+        setPersona(value)
+        setStep(1)
+        setMessage(null)
       }
 
       function toggleSession(sessionId) {
-        setFields(function (previous) {
-          var list = previous.syncSessionIds.slice()
+        setSelectedIds(function (previous) {
+          var list = previous.slice()
           var index = list.indexOf(sessionId)
           if (index >= 0) list.splice(index, 1)
           else list.push(sessionId)
-          return Object.assign({}, previous, { syncSessionIds: list })
+          return list
         })
-      }
-
-      /**
-       * 首启保存配置后，DSH 配置热更新可能稍晚于下一次 /workspaces 请求。
-       * 第一次为空/失败时短暂等待再拉一次，避免映射页把早期空结果固定下来。
-       */
-      async function refreshMapping() {
-        var loaded = await model.refreshWorkspaces()
-        var hasMappingData = loaded !== null && (
-          (Array.isArray(loaded.workspaces) && loaded.workspaces.length > 0)
-          || (Array.isArray(loaded.remoteWorkspaces) && loaded.remoteWorkspaces.length > 0)
-          || (Array.isArray(loaded.unmapped) && loaded.unmapped.length > 0))
-        if (hasMappingData) return loaded
-        await new Promise(function (resolve) { setTimeout(resolve, 300) })
-        return await model.refreshWorkspaces()
-      }
-
-      async function saveFields() {
-        assertServerUrl(fields.serverUrl)
-        var ops = [
-          { op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() },
-          { op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() },
-          { op: 'set', path: ['syncSessionIds'], value: fields.syncSessionIds.slice() },
-          { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
-          { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
-          { op: 'set', path: ['intervalMs'], value: Math.max(5000, Number(fields.intervalMs) || 60000) },
-          { op: 'set', path: ['includeSubagents'], value: fields.includeSubagents === true },
-        ]
-        var accepted = await props.writeSettings(ops)
-        if (!accepted.ok) throw new Error(accepted.message)
-      }
-
-      async function test() {
-        var serverUrl = String(fields.serverUrl || '').trim()
-        if (serverUrl === '') {
-          setMessage({ bad: true, text: '先填写服务端地址' })
-          return
-        }
-        setBusy('test')
-        setMessage(null)
-        try {
-          // 首启第 1 步还不该有 token：直接用当前输入测可达性，不落盘也不看配置。
-          var result = await probeServer(model, serverUrl)
-          if (result && result.ok) {
-            setMessage({ bad: false, text: '服务端可达' })
-          } else {
-            setMessage({ bad: true, text: (result && result.message) || '连接失败' })
-          }
-        } catch (error) {
-          setMessage({ bad: true, text: errorText(error) })
-        } finally {
-          setBusy('')
-        }
       }
 
       function acceptAgreement() {
@@ -2046,18 +2081,133 @@ window.__ModuleLoader__.load({
         setAgreed(true)
       }
 
-      async function next() {
-        setDir('next')
+      function close() {
+        setDismissed()
+        setHidden(true)
+        clearOnboardProgress()
+      }
+
+      async function connect() {
+        var url = String(serverUrl || '').trim()
+        if (url === '') {
+          setMessage({ bad: true, text: '先填写服务端地址' })
+          return
+        }
+        try { assertServerUrl(url) } catch (error) { setMessage({ bad: true, text: errorText(error) }); return }
+        if (String(token).trim() === '') {
+          setMessage({ bad: true, text: '先填写设备 token' })
+          return
+        }
+        setBusy('probe')
         setMessage(null)
-        if (step === 0) {
-          if (String(fields.serverUrl).trim() === '') {
-            setMessage({ bad: true, text: '先填写服务端地址' })
+        try {
+          var result = await model.probe(url, String(token).trim())
+          if (!result || result.ok !== true) {
+            setMessage({ bad: true, text: (result && result.message) || '连接失败' })
+            return
+          }
+          if (!result.probe || !result.probe.me || result.probe.me.role !== 'device') {
+            setMessage({ bad: true, text: '这是管理 token，不是设备 token；请在管理台签发一个设备 token。' })
+            return
+          }
+          setProbe(result.probe)
+          setStep(2)
+        } catch (error) {
+          setMessage({ bad: true, text: errorText(error) })
+        } finally {
+          setBusy('')
+        }
+      }
+
+      async function confirmDevice() {
+        if (probe === null) return
+        setBusy('save')
+        setMessage(null)
+        try {
+          var label = probe.me && probe.me.device ? String(probe.me.device.label || '') : ''
+          var ops = [
+            { op: 'set', path: ['serverUrl'], value: String(serverUrl).trim() },
+            ...label === '' ? [] : [{ op: 'set', path: ['deviceName'], value: label }],
+          ]
+          var acceptedOps = await props.writeSettings(ops)
+          if (!acceptedOps.ok) throw new Error(acceptedOps.message)
+          var saved = await props.setCredential(CREDENTIAL_REFS.token, String(token).trim())
+          if (!saved.ok) throw new Error(saved.message)
+          await model.refreshSetup()
+          setStep(3)
+        } catch (error) {
+          setMessage({ bad: true, text: errorText(error) })
+        } finally {
+          setBusy('')
+        }
+      }
+
+      async function confirmPassphrase() {
+        if (String(passphrase).trim() === '') {
+          setMessage({ bad: true, text: '同步口令不能为空' })
+          return
+        }
+        if (persona === 'upload' && passphrase !== passConfirm) {
+          setMessage({ bad: true, text: '两次输入的口令不一致' })
+          return
+        }
+        setBusy('pass')
+        setMessage(null)
+        try {
+          if (persona === 'adopt') {
+            var check = await model.verifyPassphrase(String(serverUrl).trim(), String(token).trim(), passphrase)
+            if (!check || check.ok !== true) {
+              setMessage({ bad: true, text: (check && check.message) || '口令验证失败' })
+              return
+            }
+            if (check.verified !== true) {
+              setMessage({ bad: true, text: check.message || '云端还没有可验证的数据，请确认口令后继续' })
+              return
+            }
+          }
+          var saved = await props.setCredential(CREDENTIAL_REFS.passphrase, passphrase)
+          if (!saved.ok) throw new Error(saved.message)
+          await model.refreshSetup()
+          setPassphrase('')
+          setPassConfirm('')
+          setStep(4)
+        } catch (error) {
+          setMessage({ bad: true, text: errorText(error) })
+        } finally {
+          setBusy('')
+        }
+      }
+
+      async function saveSelection() {
+        var result = await props.writeSettings([
+          { op: 'set', path: ['syncSessionIds'], value: selectedIds.slice() },
+        ])
+        if (!result.ok) throw new Error(result.message)
+      }
+
+      async function next() {
+        setMessage(null)
+        if (step === 1) {
+          await connect()
+          return
+        }
+        if (step === 2) {
+          await confirmDevice()
+          return
+        }
+        if (step === 3) {
+          await confirmPassphrase()
+          return
+        }
+        if (step === 4) {
+          if (persona !== 'upload') {
+            setStep(5)
             return
           }
           setBusy('save')
           try {
-            await saveFields()
-            setStep(1)
+            await saveSelection()
+            setStep(5)
           } catch (error) {
             setMessage({ bad: true, text: errorText(error) })
           } finally {
@@ -2065,48 +2215,7 @@ window.__ModuleLoader__.load({
           }
           return
         }
-        if (step === 1) {
-          setBusy('save')
-          try {
-            if (String(token).trim() !== '') {
-              var t = await props.setCredential(CREDENTIAL_REFS.token, String(token).trim())
-              if (!t.ok) throw new Error(t.message)
-              setToken('')
-            }
-            if (String(passphrase).trim() !== '') {
-              var p = await props.setCredential(CREDENTIAL_REFS.passphrase, String(passphrase).trim())
-              if (!p.ok) throw new Error(p.message)
-              setPassphrase('')
-            }
-            await model.refreshSetup()
-            setStep(2)
-          } catch (error) {
-            setMessage({ bad: true, text: errorText(error) })
-          } finally {
-            setBusy('')
-          }
-          return
-        }
-        if (step === 2) {
-          setBusy('save')
-          try {
-            await saveFields()
-            await model.refreshSetup()
-            var loaded = await refreshMapping()
-            if (loaded === null) throw new Error('读取工作区失败，请重试')
-            setStep(3)
-          } catch (error) {
-            setMessage({ bad: true, text: errorText(error) })
-          } finally {
-            setBusy('')
-          }
-          return
-        }
-        if (step === 3) {
-          setStep(4)
-          return
-        }
-        if (step === 4) {
+        if (step === 5) {
           if (!agreement || !agreement.hash) {
             setMessage({ bad: true, text: agreementError || '使用须知尚未加载，请稍后重试' })
             return
@@ -2116,7 +2225,7 @@ window.__ModuleLoader__.load({
             return
           }
           acceptAgreement()
-          setStep(5)
+          setStep(6)
           return
         }
         setBusy('finish')
@@ -2126,8 +2235,8 @@ window.__ModuleLoader__.load({
             setMessage({ bad: true, text: (result && (result.message || result.code)) || '同步未执行' })
             return
           }
-          setDismissed()
-          setHidden(true)
+          clearOnboardProgress()
+          close()
           model.toast('同步已启动')
         } catch (error) {
           setMessage({ bad: true, text: errorText(error) })
@@ -2136,89 +2245,125 @@ window.__ModuleLoader__.load({
         }
       }
 
+      function back() {
+        setMessage(null)
+        setStep(step - 1)
+      }
+
       var workspaces = state.workspaces
       var candidates = workspaces ? workspaces.workspaces : []
       var sessions = workspaces && Array.isArray(workspaces.sessions) ? workspaces.sessions : []
-      var selectedIds = fields.syncSessionIds || []
       var includedCount = sessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
-      var steps = ['连接', '凭据', '会话', '映射', '须知', '完成']
+      var labels = persona === 'adopt'
+        ? ['场景', '连接', '确认', '口令', '映射', '须知', '完成']
+        : ['场景', '连接', '确认', '口令', '会话', '须知', '完成']
       var body
       if (step === 0) {
         body = [
-          h(Field, { id: 'ob-server', label: '服务端地址', hint: '自部署服务端地址形如 http://127.0.0.1:8787。' },
-            h('input', { id: 'ob-server', value: fields.serverUrl, placeholder: 'http://127.0.0.1:8787', onChange: function (e) { set('serverUrl', e.target.value) } })),
-          h(Field, { id: 'ob-device', label: '设备名称' },
-            h('input', { id: 'ob-device', value: fields.deviceName, onChange: function (e) { set('deviceName', e.target.value) } })),
-          h('div', { className: 'dssync-btnrow' },
-            h('button', { className: 'dssync-pill', type: 'button', disabled: busy !== '', onClick: test }, busy === 'test' ? '测试中…' : '测试连接'),
-            message ? h('span', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null),
+          h('div', { className: 'dssync-note' }, '先选一个场景；下一步会连服务器核对，选错也能在确认页改。'),
+          h('div', { className: 'dssync-choice' },
+            h('button', { className: 'dssync-choice-card', type: 'button', onClick: function () { choosePersona('upload') } },
+              h('b', null, '第一次使用'),
+              h('span', null, '把本机会话上传到云端；')),
+            h('button', { className: 'dssync-choice-card', type: 'button', onClick: function () { choosePersona('adopt') } },
+              h('b', null, '接入已有云端'),
+              h('span', null, '把云端已有的会话接到这台电脑；'))),
+          message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else if (step === 1) {
         body = [
-          h(Field, { id: 'ob-token', label: '设备 token', hint: setup.hasToken ? '已配置；留空保持不变。' : '由服务端管理台或 CLI 签发。' },
-            h('input', { id: 'ob-token', type: 'password', value: token, placeholder: setup.hasToken ? '已配置；留空保持不变' : '粘贴 token', onChange: function (e) { setToken(e.target.value) } })),
-          h(Field, { id: 'ob-pass', label: '同步口令', hint: setup.hasPassphrase ? '已配置；留空保持不变。所有设备必须使用同一口令。' : '用于派生端到端加密密钥；所有设备必须一致。' },
-            h('input', { id: 'ob-pass', type: 'password', value: passphrase, placeholder: setup.hasPassphrase ? '已配置；留空保持不变' : '设置同步口令', onChange: function (e) { setPassphrase(e.target.value) } })),
-          h('div', { className: 'dssync-note' }, '同步口令必须与其它设备一致；加解密参数还取决于服务端地址，建议各设备填写同一个规范地址（如 http://127.0.0.1:8787），不要混用 localhost/127.0.0.1 或省略 //。口令或地址不同都会导致加解密参数不符、无法解密。'),
-          h('div', { className: 'dssync-note' }, '凭据保存在 DSH 凭据库（引用 ' + CREDENTIAL_REFS.token + ' / ' + CREDENTIAL_REFS.passphrase + '），不会写入普通配置。'),
+          h(Field, { id: 'ob-server', label: '服务端地址', hint: '自部署服务端地址形如 http://127.0.0.1:8787。' },
+            h('input', { id: 'ob-server', value: serverUrl, placeholder: 'http://127.0.0.1:8787', onChange: function (e) { setServerUrl(e.target.value) } })),
+          h(Field, { id: 'ob-token', label: '设备 token', hint: '由服务端管理台或 CLI 签发；只显示一次。' },
+            h('input', { id: 'ob-token', type: 'password', value: token, placeholder: '粘贴 token', autoComplete: 'off', onChange: function (e) { setToken(e.target.value) } })),
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else if (step === 2) {
+        // 0.1.2 及更早的服务端没有 counts：统计未知，不能按“空”处理。
+        var counts = probe && probe.counts ? probe.counts : null
+        var remoteEmpty = counts !== null && counts.sessions === 0 && counts.workspaces === 0
+        var conflict = counts === null ? null : persona === 'upload' && !remoteEmpty
+          ? '云端已经有 ' + counts.workspaces + ' 个工作区 / ' + counts.sessions + ' 个会话，这更像“接入已有云端”。'
+          : persona === 'adopt' && remoteEmpty
+            ? '云端还没有任何会话，这更像“第一次使用”。'
+            : null
+        var serverInfo = probe && probe.server ? probe.server : null
+        var device = probe && probe.me && probe.me.device ? probe.me.device : null
         body = [
-          h('div', { className: 'dssync-btnrow' },
-            h('button', {
-              className: 'dssync-pill', type: 'button',
-              onClick: function () {
-                set('syncSessionIds', includedCount === sessions.length ? [] : sessions.map(function (session) { return session.sessionId }))
-              },
-            }, includedCount === sessions.length && sessions.length > 0 ? '清空会话' : '全选会话'),
-            h('span', { className: 'dssync-note' }, '同步 ' + includedCount + ' / ' + sessions.length + ' 个根会话')),
-          sessions.length === 0
-            ? h('div', { className: 'dssync-note warn' }, '还没有可同步的根会话；可以稍后在设置里处理。')
-            : h('div', { className: 'dssync-sessionlist' }, candidates.map(function (workspace) {
-              var workspaceSessions = sessions.filter(function (session) { return session.workspacePath === workspace.path })
-              if (workspaceSessions.length === 0) return null
-              var workspaceSelected = workspaceSessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
-              return h('div', { className: 'dssync-sessiongroup', key: workspace.path },
-                h('div', { className: 'dssync-sessiongroup-head' },
-                  h('b', null, workspace.title || workspace.path),
-                  h('span', null, workspace.path),
-                  h('span', null, workspaceSelected + ' / ' + workspaceSessions.length)),
-                workspaceSessions.map(function (session) {
-                  var checked = selectedIds.indexOf(session.sessionId) >= 0
-                  return h('label', { className: 'dssync-session' + (checked ? '' : ' off'), key: session.sessionId },
-                    h('input', { type: 'checkbox', checked: checked, onChange: function () { toggleSession(session.sessionId) } }),
-                    h('span', { className: 'dssync-session-main' },
-                      h('b', { title: session.sessionId }, displaySessionTitle(props.titleOf, session.sessionId)),
-                      h('span', null, shortDisplaySessionId(session.sessionId) + ' · ' + new Date(session.createdAt).toLocaleString())),
-                    h('span', { className: 'dssync-session-meta' },
-                      h('span', null, session.subagentSessions + ' 个子代理'),
-                      h('span', { className: 'dssync-session-status' + (checked ? '' : ' off') }, checked ? '同步' : '未选中')))
-                }))
-            })),
-          h('div', { className: 'dssync-note' }, '默认不选中任何会话；勾选只决定本机上传；绑定工作区后会自动拉取该工作区的远端会话。'),
+          h('div', { className: 'dssync-note' }, '确认一下服务器与设备信息；确认后会保存地址和 token。'),
+          h('div', { className: 'dssync-summary' },
+            h('div', null, h('span', null, '服务器'), h('b', null, String(serverUrl).trim())),
+            h('div', null, h('span', null, '版本'), h('b', null, (serverInfo ? serverInfo.version : (probe.health.version || '未知')) + ' · 协议 v' + (serverInfo ? serverInfo.protocolVersion : (probe.health.protocols[0] || '?')))),
+            h('div', null, h('span', null, '设备'), h('b', null, device ? device.label : '未知')),
+            h('div', null, h('span', null, '设备 ID'), h('b', null, device ? String(device.deviceId).slice(0, 12) : '—')),
+            h('div', null, h('span', null, '远端'), h('b', null, counts === null ? '统计不可用（服务端版本较旧）' : counts.workspaces + ' 个工作区 · ' + counts.sessions + ' 个会话')),
+            serverInfo ? h('div', null, h('span', null, '配额'), h('b', null, fmtBytes(serverInfo.usedBytes) + ' / ' + fmtBytes(serverInfo.quotaBytes))) : null),
+          conflict ? h('div', { className: 'dssync-note warn' }, conflict) : null,
+          conflict && persona === 'upload'
+            ? h('button', { className: 'dssync-pill', type: 'button', onClick: function () { setPersona('adopt') } }, '改走“接入已有云端”')
+            : conflict && persona === 'adopt'
+              ? h('button', { className: 'dssync-pill', type: 'button', onClick: function () { setPersona('upload') } }, '改走“第一次使用”')
+              : null,
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else if (step === 3) {
         body = [
-          h('div', { className: 'dssync-note' }, '远端工作区按 workspaceKey 一次性绑定；未映射的会话不会写入本机。'),
-          h(WorkspaceMappingPanel, {
-            model: model,
-            workspaces: workspaces,
-            compact: true,
-            onRetry: function () { model.refreshWorkspaces() },
-          }),
+          h(Field, { id: 'ob-pass', label: '同步口令', hint: persona === 'adopt' ? '必须与云端其他设备一致；下一步会验证。' : '用于派生端到端加密密钥；所有设备必须一致，丢失后云端内容无法解密。' },
+            h('input', { id: 'ob-pass', type: 'password', value: passphrase, placeholder: persona === 'adopt' ? '输入云端使用的口令' : '设置同步口令', autoComplete: 'new-password', onChange: function (e) { setPassphrase(e.target.value) } })),
+          persona === 'upload'
+            ? h(Field, { id: 'ob-pass2', label: '再输一次' },
+              h('input', { id: 'ob-pass2', type: 'password', value: passConfirm, placeholder: '确认口令', autoComplete: 'new-password', onChange: function (e) { setPassConfirm(e.target.value) } }))
+            : null,
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
       } else if (step === 4) {
+        if (persona === 'adopt') {
+          body = [
+            h('div', { className: 'dssync-note' }, '远端工作区按 workspaceKey 一次性绑定；未映射的会话不会写入本机。'),
+            h(WorkspaceMappingPanel, { model: model, workspaces: workspaces, compact: true, onRetry: function () { model.refreshWorkspaces() } }),
+            message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
+          ]
+        } else {
+          body = [
+            h('div', { className: 'dssync-btnrow' },
+              h('button', {
+                className: 'dssync-pill', type: 'button',
+                onClick: function () { setSelectedIds(includedCount === sessions.length ? [] : sessions.map(function (session) { return session.sessionId })) },
+              }, includedCount === sessions.length && sessions.length > 0 ? '清空会话' : '全选会话'),
+              h('span', { className: 'dssync-note' }, '同步 ' + includedCount + ' / ' + sessions.length + ' 个根会话')),
+            sessions.length === 0
+              ? h('div', { className: 'dssync-note warn' }, '还没有可同步的根会话；可以稍后在设置里处理。')
+              : h('div', { className: 'dssync-sessionlist' }, candidates.map(function (workspace) {
+                var workspaceSessions = sessions.filter(function (session) { return session.workspacePath === workspace.path })
+                if (workspaceSessions.length === 0) return null
+                var workspaceSelected = workspaceSessions.filter(function (session) { return selectedIds.indexOf(session.sessionId) >= 0 }).length
+                return h('div', { className: 'dssync-sessiongroup', key: workspace.path },
+                  h('div', { className: 'dssync-sessiongroup-head' },
+                    h('b', null, workspace.title || workspace.path),
+                    h('span', null, workspace.path),
+                    h('span', null, workspaceSelected + ' / ' + workspaceSessions.length)),
+                  workspaceSessions.map(function (session) {
+                    var checked = selectedIds.indexOf(session.sessionId) >= 0
+                    return h('label', { className: 'dssync-session' + (checked ? '' : ' off'), key: session.sessionId },
+                      h('input', { type: 'checkbox', checked: checked, onChange: function () { toggleSession(session.sessionId) } }),
+                      h('span', { className: 'dssync-session-main' },
+                        h('b', { title: session.sessionId }, displaySessionTitle(props.titleOf, session.sessionId)),
+                        h('span', null, shortDisplaySessionId(session.sessionId) + ' · ' + new Date(session.createdAt).toLocaleString())),
+                      h('span', { className: 'dssync-session-meta' },
+                        h('span', null, session.subagentSessions + ' 个子代理'),
+                        h('span', { className: 'dssync-session-status' + (checked ? '' : ' off') }, checked ? '同步' : '未选中')))
+                  }))
+              })),
+            h('div', { className: 'dssync-note' }, '默认不选中任何会话；勾选只决定本机上传；绑定工作区后会自动拉取该工作区的远端会话。'),
+            message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
+          ]
+        }
+      } else if (step === 5) {
         body = [
           h('div', { className: 'dssync-note' }, '开始同步前请阅读以下使用协议；它说明插件会修改什么、服务端能看到什么，以及跨设备恢复的风险。'),
           h(AgreementPanel, { agreement: agreement, error: agreementError }),
           h('label', { className: 'dssync-agree' },
-            h('input', {
-              type: 'checkbox', checked: agreed, disabled: !agreement,
-              onChange: function (event) { setAgreed(event.target.checked) },
-            }),
+            h('input', { type: 'checkbox', checked: agreed, disabled: !agreement, onChange: function (event) { setAgreed(event.target.checked) } }),
             h('span', null, '我已阅读并同意使用协议，理解同步不是备份、跨设备恢复和分叉风险。')),
           message ? h('div', { className: 'dssync-note' + (message.bad ? ' bad' : '') }, message.text) : null,
         ]
@@ -2234,21 +2379,20 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dssync-wizard-head' },
             h('div', { className: 'dssync-wizard-icon' }, shieldIcon()),
             h('div', null, h('h2', null, '连接会话同步'), h('p', null, '把会话端到端加密备份到你自己的服务端。')),
-            h('button', {
-              className: 'dssync-close', type: 'button', 'aria-label': '稍后配置',
-              onClick: function () { setDismissed(); setHidden(true) },
-            }, '×')),
-          h('ol', { className: 'dssync-steps' }, steps.map(function (label, index) {
+            h('button', { className: 'dssync-close', type: 'button', 'aria-label': '稍后配置', onClick: close }, '×')),
+          h('ol', { className: 'dssync-steps' }, labels.map(function (label, index) {
             return h('li', { className: 'dssync-step' + (index === step ? ' on' : '') + (index < step ? ' done' : ''), key: label },
               h('i', null, index < step ? '✓' : String(index + 1)), label)
           })),
-          h('div', { className: 'dssync-wizard-body dssync-step-' + dir, key: 'step-' + step }, body),
+          h('div', { className: 'dssync-wizard-body', key: 'step-' + step }, body),
           h('div', { className: 'dssync-wizard-foot' },
-            step > 0 ? h('button', { className: 'dssync-pill', type: 'button', onClick: function () { setDir('back'); setStep(step - 1); setMessage(null) } }, '上一步') : null,
-            h('button', { className: 'dssync-pill', type: 'button', onClick: function () { setDismissed(); setHidden(true) } }, '稍后'),
+            step > 0 && step < 6 ? h('button', { className: 'dssync-pill', type: 'button', disabled: busy !== '', onClick: back }, '上一步') : null,
+            h('button', { className: 'dssync-pill', type: 'button', onClick: close }, '稍后'),
             h('span', { className: 'spacer' }),
-            h('button', { className: 'dssync-pill primary', type: 'button', disabled: busy !== '', onClick: next },
-              busy === 'finish' ? '同步中…' : step === 4 ? '开始同步' : '下一步')),
+            h('button', {
+              className: 'dssync-pill primary', type: 'button', disabled: busy !== '' || step === 0,
+              onClick: next,
+            }, busy === 'finish' ? '同步中…' : step === 0 ? '先选场景' : step === 5 ? '开始同步' : '下一步')),
         ),
         h(Toast, { model: model }))
     }

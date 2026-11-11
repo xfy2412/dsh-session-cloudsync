@@ -12,7 +12,8 @@ import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { randomBytes } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, parse } from 'node:path'
 import { SyncController, type SyncRunResult, type TaskRunner } from './controller.ts'
 import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { planSync, type LocalPlanSnapshot, type RemoteSessionSummary, type SyncPlanEntry, type SyncReceipt } from './sync-plan.ts'
@@ -22,18 +23,22 @@ import {
   pullSessionTask,
   pushSessionTask,
   readRemoteSessionMeta,
+  probeServer,
+  verifyPassphrase as verifyRemotePassphrase,
   testConnection,
   type CreateHeaderLike,
   type CreateOptions,
   type EngineConfig,
+  type PassphraseCheck,
   type PullState,
   type RemoteSessionMeta,
+  type ServerProbeResult,
   type WriteHandleLike,
   type SyncLogger,
   type SyncProgress,
 } from './engine.ts'
 import { performance } from 'node:perf_hooks'
-import { createHostApi, type HostFetchRoute, type SyncControl } from './host-api.ts'
+import { createHostApi, type CreatedWorkspace, type DirectoryPickResult, type HostFetchRoute, type SyncControl, type WorkspacePathState } from './host-api.ts'
 import { createEventStreamResponse } from './event-stream.ts'
 import { PerfCollector } from './perf.ts'
 import { DevLogSink, withDevLog } from './dev-log.ts'
@@ -1585,6 +1590,8 @@ export function apply(ctx: Context, config: Config): void {
     for (const key of Object.keys(workspaceLabels)) {
       if (bindings.bindings[key] !== undefined) continue
       if (localWorkspacePathForKey(key) !== undefined) continue
+      // 没有会话的 workspace/profile 是陈旧记录（测试或已删会话），不能当远端工作区。
+      if (!inventory.has(key)) continue
       if (!unmapped.has(key)) unmapped.set(key, inventory.get(key)?.length ?? 0)
     }
     for (const key of inventory.keys()) {
@@ -1607,6 +1614,8 @@ export function apply(ctx: Context, config: Config): void {
     for (const [key, label] of Object.entries(workspaceLabels)) {
       const current = remote.get(key)
       const sessionIds = inventory.get(key)
+      // 只给“有会话”或“已绑定”的工作区补 label；陈旧记录不生成幽灵行。
+      if (sessionIds === undefined && bindings.bindings[key] === undefined) continue
       remote.set(key, {
         ...current?.label === undefined ? {} : { label: current.label },
         label,
@@ -1780,6 +1789,95 @@ export function apply(ctx: Context, config: Config): void {
       : { status: 'error', message: '设置不可写（缺少 dsh-settings）' }
   }
 
+  /** 目录选择器服务的最小接口（DSH 宿主提供）。 */
+  interface DirectoryPickerLike {
+    capability(): { readonly kind?: string }
+    pick?(signal: AbortSignal): Promise<string | null>
+  }
+
+  const canWrite = (path: string): boolean => {
+    try {
+      accessSync(path, fsConstants.W_OK)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const isDirectoryPath = (path: string): boolean => {
+    try {
+      return statSync(path).isDirectory()
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 判断一个目标路径能直接绑定、需要先建目录，还是只能另选。
+   * 源路径可能来自另一台设备（不同系统/盘符），所以先判 sameOs 与根是否存在。
+   * @param input - 用户输入或远端建议的绝对路径。
+   * @returns 三态与各段可写性。
+   */
+  const inspectWorkspacePath = async (input: string): Promise<WorkspacePathState> => {
+    const path = input.trim()
+    const sameOs = process.platform === 'win32'
+      ? /^[A-Za-z]:[\\/]/u.test(path) || path.startsWith('\\\\')
+      : path.startsWith('/')
+    const root = sameOs && isAbsolute(path) ? parse(path).root : ''
+    const rootExists = root !== '' && existsSync(root)
+    const exists = sameOs && existsSync(path)
+    const directory = exists && isDirectoryPath(path)
+    const writable = directory && canWrite(path)
+    const parent = directory ? '' : dirname(path)
+    const parentExists = sameOs && parent !== '' && parent !== path && existsSync(parent) && isDirectoryPath(parent)
+    const parentWritable = parentExists && canWrite(parent)
+    const mode = directory && writable ? 'bind' as const : parentExists && parentWritable ? 'create' as const : 'pick' as const
+    return {
+      path, mode, exists, isDirectory: directory, writable, parentExists, parentWritable, rootExists, sameOs,
+    }
+  }
+
+  /**
+   * 必要时先建目录，再把路径注册成 DSH 工作区。
+   * @param input - 绝对路径。
+   * @param title - 工作区标题；缺省取目录名。
+   * @returns 工作区与是否是新建。
+   */
+  const createWorkspace = async (input: string, title?: string): Promise<CreatedWorkspace> => {
+    const path = input.trim()
+    if (path === '' || !isAbsolute(path)) throw new Error('路径必须是绝对路径')
+    if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
+    const state = await inspectWorkspacePath(path)
+    if (state.mode === 'pick') throw new Error('这个位置不存在、父目录不可写或不是当前系统的路径')
+    const existing = await workspaceRegistry.resolveByPath(path)
+    if (existing !== undefined) return { path: existing.path, title: existing.title, created: false }
+    mkdirSync(path, { recursive: true })
+    const created = await workspaceRegistry.create(path, (title ?? '').trim() || basename(path))
+    labelsIdentity = undefined
+    return { path: created.path, title: created.title, created: true }
+  }
+
+  /**
+   * 打开宿主目录选择器：native 返回路径，browse/不可用返回能力形态。
+   * @returns 选择结果。
+   */
+  const pickDirectory = async (): Promise<DirectoryPickResult> => {
+    const picker = ctx.get('directoryPicker') as unknown as DirectoryPickerLike | undefined
+    if (picker === undefined || typeof picker.capability !== 'function') return { kind: 'unavailable' }
+    const capability = picker.capability()
+    if (capability.kind === 'native' && typeof picker.pick === 'function') {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 120_000)
+      try {
+        return { kind: 'native', path: await picker.pick(controller.signal) }
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    if (capability.kind === 'browse') return { kind: 'browse' }
+    return { kind: 'unavailable' }
+  }
+
   const control: SyncControl = {
     status: () => controller.snapshot(),
     sessionStatus,
@@ -1808,6 +1906,22 @@ export function apply(ctx: Context, config: Config): void {
     setup,
     workspaces,
     test: async (serverUrl: string) => testConnection(serverUrl, fetch, engineConfig.requestTimeoutMs),
+    probe: (serverUrl: string, token: string): Promise<ServerProbeResult> =>
+      probeServer({ serverUrl, token }, fetch, engineConfig.requestTimeoutMs),
+    verifyPassphrase: (serverUrl: string, token: string, passphrase: string): Promise<PassphraseCheck> =>
+      verifyRemotePassphrase(
+        {
+          serverUrl,
+          token,
+          passphrase,
+          ...engineConfig.salt === undefined || engineConfig.salt === '' ? {} : { salt: engineConfig.salt },
+        },
+        fetch,
+        engineConfig.requestTimeoutMs,
+      ),
+    resolveWorkspacePath: inspectWorkspacePath,
+    createWorkspace,
+    pickDirectory,
     syncNow: () => scheduler?.manual() ?? runSync(true, 'manual'),
     cwdDecision: async (sessionId: string, action: 'fix' | 'skip') => {
       if (action === 'skip') {

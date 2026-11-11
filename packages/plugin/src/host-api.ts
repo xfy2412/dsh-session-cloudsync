@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { classifySyncError } from './engine.ts'
-import type { CwdCorrectionResult, SyncTestResult } from './engine.ts'
+import type { CwdCorrectionResult, PassphraseCheck, ServerProbeResult, SyncTestResult } from './engine.ts'
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { PerfSnapshot } from './perf.ts'
@@ -52,6 +52,42 @@ export interface SyncControl {
   prepareReplace(sessionId: string): Promise<ReplacePlan>
   /** 建立一次性 workspaceKey → localPath 绑定。 */
   bindWorkspace(workspaceKey: string, localPath: string): Promise<SyncWorkspaceList>
+  /** 用给定地址与 token 探测服务端；不落盘。 */
+  probe(serverUrl: string, token: string): Promise<ServerProbeResult>
+  /** 用给定口令验证能否解开云端数据。 */
+  verifyPassphrase(serverUrl: string, token: string, passphrase: string): Promise<PassphraseCheck>
+  /** 检查路径能否直接绑定/需要创建/只能另选。 */
+  resolveWorkspacePath(path: string): Promise<WorkspacePathState>
+  /** 必要时建目录，然后注册为 DSH 工作区。 */
+  createWorkspace(path: string, title?: string): Promise<CreatedWorkspace>
+  /** 打开目录选择器；native 返回路径，browse/不可用返回 kind。 */
+  pickDirectory(): Promise<DirectoryPickResult>
+}
+
+/** 目标路径的可用形态：直接绑定 / 需要先建目录 / 只能另选。 */
+export interface WorkspacePathState {
+  readonly path: string
+  readonly mode: 'bind' | 'create' | 'pick'
+  readonly exists: boolean
+  readonly isDirectory: boolean
+  readonly writable: boolean
+  readonly parentExists: boolean
+  readonly parentWritable: boolean
+  readonly rootExists: boolean
+  readonly sameOs: boolean
+}
+
+/** 目录选择器的能力形态。 */
+export type DirectoryPickResult =
+  | { readonly kind: 'native'; readonly path: string | null }
+  | { readonly kind: 'browse' }
+  | { readonly kind: 'unavailable' }
+
+/** 新建工作区结果。 */
+export interface CreatedWorkspace {
+  readonly path: string
+  readonly title: string
+  readonly created: boolean
 }
 
 /**
@@ -247,6 +283,99 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             ok: false,
             error: { code: classified.kind, message: classified.message },
           }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/probe',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as { readonly serverUrl?: unknown; readonly token?: unknown }
+          const serverUrl = typeof body.serverUrl === 'string' ? body.serverUrl.trim() : ''
+          const token = typeof body.token === 'string' ? body.token.trim() : ''
+          if (serverUrl === '' || token === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 serverUrl 与 token' } }, 400)
+          }
+          return json({ ok: true, value: await control.probe(serverUrl, token) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 400)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/verify-passphrase',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as {
+            readonly serverUrl?: unknown
+            readonly token?: unknown
+            readonly passphrase?: unknown
+          }
+          const serverUrl = typeof body.serverUrl === 'string' ? body.serverUrl.trim() : ''
+          const token = typeof body.token === 'string' ? body.token.trim() : ''
+          const passphrase = typeof body.passphrase === 'string' ? body.passphrase : ''
+          if (serverUrl === '' || token === '' || passphrase === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 serverUrl、token 与 passphrase' } }, 400)
+          }
+          return json({ ok: true, value: await control.verifyPassphrase(serverUrl, token, passphrase) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 400)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/workspaces/resolve',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as { readonly path?: unknown }
+          const path = typeof body.path === 'string' ? body.path.trim() : ''
+          if (path === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 path' } }, 400)
+          }
+          return json({ ok: true, value: await control.resolveWorkspacePath(path) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 400)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/workspaces/create',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as { readonly path?: unknown; readonly title?: unknown }
+          const path = typeof body.path === 'string' ? body.path.trim() : ''
+          const title = typeof body.title === 'string' ? body.title.trim() : undefined
+          if (path === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 path' } }, 400)
+          }
+          return json({ ok: true, value: await control.createWorkspace(path, title) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 400)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/directory/pick',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async () => {
+        try {
+          return json({ ok: true, value: await control.pickDirectory() })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 400)
         }
       },
     },

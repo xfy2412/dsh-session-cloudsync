@@ -8,9 +8,11 @@ import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
 import {
   classifySyncError,
   correctCwd,
+  probeServer,
   pullOnce,
   pullSessionTask,
   syncOnce as syncOnceRaw,
+  verifyPassphrase,
   SyncHttpError,
   testConnection,
 } from '../src/engine.ts'
@@ -1353,6 +1355,75 @@ test('推送前补 end-seed：尾不是 marker 时补一条，之后不重复', 
       const second = await syncOnce({ persistence: store, sessions, config, isTailOpen, openWrite })
       assert.equal(second.sessions[0].status, 'up-to-date')
       assert.equal(store.sessions.get(sessionId).events.length, 6)
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('探测与口令验证：真实服务端上判 token、设备与口令', async () => {
+  const temp = createTempHome('plugin-probe')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'probe-test')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      await holdLease(base, device)
+      const sessionId = 'session-probe-test'
+      const header = {
+        id: sessionId,
+        version: 4,
+        createdAt: 900,
+        isSeeded: false,
+        delegationDepth: 0,
+        agentPreset: 'standard',
+        cwd: localCwd,
+      }
+      const store = fakeStore(header, events(0, 2))
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'correct horse battery staple',
+        batchEvents: 50,
+      }
+      const pushed = await syncOnce({
+        persistence: store,
+        sessions,
+        config,
+        isTailOpen: () => false,
+        openWrite: (id) => store.open(id),
+      })
+      assert.equal(pushed.sessions[0].status, 'pushed')
+
+      const probe = await probeServer({ serverUrl: base, token: device.token })
+      assert.equal(probe.ok, true)
+      assert.equal(probe.probe.me.role, 'device')
+      assert.equal(probe.probe.me.device.label, 'probe-test')
+      assert.equal(probe.probe.counts.sessions, 1)
+      assert.equal(probe.probe.server.version, '0.1.3')
+
+      const unauthorized = await probeServer({ serverUrl: base, token: 'nope' })
+      assert.equal(unauthorized.ok, false)
+      assert.equal(unauthorized.kind, 'auth')
+
+      const good = await verifyPassphrase({
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'correct horse battery staple',
+      })
+      assert.equal(good.ok, true)
+      assert.equal(good.verified, true)
+
+      const bad = await verifyPassphrase({
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'wrong pass',
+      })
+      assert.equal(bad.ok, false)
+      assert.match(bad.message, /不匹配/u)
     } finally {
       await close()
       db.close()

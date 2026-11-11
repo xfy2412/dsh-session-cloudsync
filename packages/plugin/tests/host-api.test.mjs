@@ -84,6 +84,22 @@ function control(overrides = {}) {
       backupRoot: '/tmp/backups',
       steps: ['step'],
     })),
+    probe: overrides.probe ?? (async () => ({
+      ok: true,
+      probe: {
+        health: { version: '0.1.3', protocols: [3], capabilities: ['me-device-info'] },
+        me: { role: 'device', device: { deviceId: 'dev-1', label: 'laptop', createdAt: 1 } },
+      },
+    })),
+    verifyPassphrase: overrides.verifyPassphrase ?? (async () => ({ ok: true, verified: true })),
+    resolveWorkspacePath: overrides.resolveWorkspacePath ?? (async (path) => ({
+      path, mode: 'bind', exists: true, isDirectory: true, writable: true,
+      parentExists: true, parentWritable: true, rootExists: true, sameOs: true,
+    })),
+    createWorkspace: overrides.createWorkspace ?? (async (path, title) => ({
+      path, title: title ?? 'x', created: true,
+    })),
+    pickDirectory: overrides.pickDirectory ?? (async () => ({ kind: 'unavailable' })),
     bindWorkspace: overrides.bindWorkspace ?? (async () => ({
       workspaces: [],
       sessions: [],
@@ -107,7 +123,7 @@ async function bodyOf(response) {
   return JSON.parse(await response.text())
 }
 
-test('宿主 API：注册 status/perf/config/agreement/events/setup/workspaces/test/sync/cwd/blocked/replace/bind 十三条精确路由', () => {
+test('宿主 API：注册全部精确路由', () => {
   const routes = createHostApi(control())
   assert.deepEqual(routes.map((entry) => [entry.path, [...entry.methods], entry.requestBody]), [
     ['/api/session-cloudsync/status', ['GET'], 'buffered'],
@@ -119,6 +135,11 @@ test('宿主 API：注册 status/perf/config/agreement/events/setup/workspaces/t
     ['/api/session-cloudsync/setup', ['GET'], 'buffered'],
     ['/api/session-cloudsync/workspaces', ['GET'], 'buffered'],
     ['/api/session-cloudsync/test', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/probe', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/verify-passphrase', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/workspaces/resolve', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/workspaces/create', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/directory/pick', ['POST'], 'buffered'],
     ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
     ['/api/session-cloudsync/session-scope', ['POST'], 'buffered'],
     ['/api/session-cloudsync/cwd', ['POST'], 'buffered'],
@@ -373,4 +394,84 @@ test('宿主 API：sync 抛错时返回 500 与分类', async () => {
   assert.equal(body.ok, false)
   assert.equal(body.error.code, 'server')
   assert.equal(body.error.message, '服务端 503')
+})
+
+test('宿主 API：probe 用请求体里的地址与 token 调用控制面', async () => {
+  let seen
+  const routes = createHostApi(control({
+    probe: async (serverUrl, token) => {
+      seen = [serverUrl, token]
+      return { ok: true, probe: { health: { version: '0.1.3', protocols: [3], capabilities: [] }, me: { role: 'device', device: { deviceId: 'd1', label: 'laptop', createdAt: 1 } } } }
+    },
+  }))
+  const response = await route(routes, '/api/session-cloudsync/probe').fetch(
+    new Request('http://host/api/session-cloudsync/probe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serverUrl: 'http://127.0.0.1:8787', token: 'tok' }),
+    }),
+  )
+  assert.equal(response.status, 200)
+  assert.deepEqual(seen, ['http://127.0.0.1:8787', 'tok'])
+  assert.equal((await bodyOf(response)).value.probe.me.device.label, 'laptop')
+})
+
+test('宿主 API：probe 缺字段时返回 400', async () => {
+  const routes = createHostApi(control())
+  const response = await route(routes, '/api/session-cloudsync/probe').fetch(
+    new Request('http://host/api/session-cloudsync/probe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serverUrl: 'http://127.0.0.1:8787' }),
+    }),
+  )
+  assert.equal(response.status, 400)
+})
+
+test('宿主 API：verify-passphrase 与 workspaces 工具路由', async () => {
+  let passSeen
+  const routes = createHostApi(control({
+    verifyPassphrase: async (serverUrl, token, passphrase) => {
+      passSeen = [serverUrl, token, passphrase]
+      return { ok: true, verified: true }
+    },
+    resolveWorkspacePath: async (path) => ({
+      path, mode: 'create', exists: false, isDirectory: false, writable: false,
+      parentExists: true, parentWritable: true, rootExists: true, sameOs: true,
+    }),
+    createWorkspace: async (path, title) => ({ path, title: title ?? "x", created: true }),
+    pickDirectory: async () => ({ kind: 'native', path: 'D:/work' }),
+  }))
+  const verified = await route(routes, '/api/session-cloudsync/verify-passphrase').fetch(
+    new Request('http://host/api/session-cloudsync/verify-passphrase', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ serverUrl: 'http://127.0.0.1:8787', token: 'tok', passphrase: 'p' }),
+    }),
+  )
+  assert.equal(verified.status, 200)
+  assert.deepEqual(passSeen, ['http://127.0.0.1:8787', 'tok', 'p'])
+
+  const resolved = await route(routes, '/api/session-cloudsync/workspaces/resolve').fetch(
+    new Request('http://host/api/session-cloudsync/workspaces/resolve', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: 'D:/work/x' }),
+    }),
+  )
+  assert.equal((await bodyOf(resolved)).value.mode, 'create')
+
+  const created = await route(routes, '/api/session-cloudsync/workspaces/create').fetch(
+    new Request('http://host/api/session-cloudsync/workspaces/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: 'D:/work/x', title: 'x' }),
+    }),
+  )
+  assert.equal((await bodyOf(created)).value.title, 'x')
+
+  const picked = await route(routes, '/api/session-cloudsync/directory/pick').fetch(
+    new Request('http://host/api/session-cloudsync/directory/pick', { method: 'POST' }),
+  )
+  assert.equal((await bodyOf(picked)).value.kind, 'native')
 })

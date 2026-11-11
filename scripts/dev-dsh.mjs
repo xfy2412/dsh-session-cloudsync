@@ -9,15 +9,17 @@
  *   3. 清掉从当前会话继承的 DSH_* 环境变量，避免新实例以为自己在嵌套运行。
  *
  * 用法：
- *   node scripts/dev-dsh.mjs [--port 3090] [--credentials <path>]
+ *   node scripts/dev-dsh.mjs [--port 3090] [--clean] [--credentials <path>]
  *     [--home <tmp-home>] [--documents <tmp-documents>] [--patch <path>]
+ *
+ * `--clean` 会在启动前删除上次的临时 home 与 documents（只限 .tmp/ 内）。
  *
  * `--credentials` 用于把已有 home 的 `.credentials.yaml` 拷进新 home（保留登录态）。
  * `--home` / `--documents` 供 dev/console 同时起 A/B 两套实例；overlay 写在
  * home 的父目录，避免两边互相覆盖。
  */
-import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -35,12 +37,15 @@ function parseArgs(argv) {
   let credentials
   let home
   let documents
+  let clean = false
   const patches = []
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--port') {
       port = Number(argv[index + 1])
       index += 1
+    } else if (argument === '--clean') {
+      clean = true
     } else if (argument === '--credentials') {
       credentials = argv[index + 1]
       index += 1
@@ -58,6 +63,7 @@ function parseArgs(argv) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`端口非法：${String(port)}`)
   return {
     port,
+    clean,
     patches,
     ...credentials === undefined ? {} : { credentials },
     ...home === undefined ? {} : { home },
@@ -77,7 +83,7 @@ function assertInsideTmp(path) {
   }
 }
 
-const { port, credentials, patches, home: homeOption, documents: documentsOption } = parseArgs(process.argv.slice(2))
+const { port, clean, credentials, patches, home: homeOption, documents: documentsOption } = parseArgs(process.argv.slice(2))
 const home = resolve(homeOption ?? join(base, 'home'))
 const documents = resolve(documentsOption ?? join(base, 'documents'))
 const overlay = join(dirname(home), 'overlay.yml')
@@ -85,6 +91,12 @@ const overlay = join(dirname(home), 'overlay.yml')
 assertInsideTmp(base)
 assertInsideTmp(home)
 assertInsideTmp(documents)
+if (clean) {
+  rmSync(home, { recursive: true, force: true })
+  rmSync(documents, { recursive: true, force: true })
+  rmSync(overlay, { force: true })
+  console.log(`已清理上次数据：${home}`)
+}
 mkdirSync(home, { recursive: true })
 mkdirSync(documents, { recursive: true })
 
@@ -109,6 +121,36 @@ writeFileSync(
 const env = { ...process.env, DSH_HOME: home }
 for (const key of ['DSH_SESSION_ID', 'DSH_SHELL', 'DSH_PROFILE', 'DSH_PROFILE_DIR', 'DSH_WEB_URL']) delete env[key]
 
+/** 给 cmd.exe 拼参数时最少的引号处理。 */
+function quoteArg(value) {
+  return /[\s"]/u.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value
+}
+
+/**
+ * 用子进程跑 dsh，跨平台处理 cmd.exe 的 .cmd 入口。
+ * @param args - dsh 参数。
+ */
+function runDshSync(args) {
+  return process.platform === 'win32'
+    ? spawnSync(
+        process.env.ComSpec ?? 'cmd.exe',
+        ['/d', '/c', ['dsh', ...args.map(quoteArg)].join(' ')],
+        { stdio: 'inherit', env, cwd: repoRoot },
+      )
+    : spawnSync('dsh', args, { stdio: 'inherit', env, cwd: repoRoot })
+}
+
+// 总是把仓库里的插件装进这个临时 home 的 web profile，dev 起来就是本地代码。
+const pluginDir = join(repoRoot, 'packages', 'plugin')
+const pluginSpec = `file:${pluginDir.replace(/\\/g, '/')}`
+const build = spawnSync(process.execPath, [join(pluginDir, 'scripts', 'build.mjs')], {
+  stdio: 'inherit', cwd: repoRoot, env,
+})
+if (build.status !== 0) throw new Error('插件构建失败')
+const installed = runDshSync(['plugin', '--profile', 'web', 'add', pluginSpec])
+if (installed.status !== 0) throw new Error('插件安装失败')
+console.log(`已安装本地插件：${pluginSpec}`)
+
 const extraPatches = patches.map((path) => {
   assertInsideTmp(path)
   if (!existsSync(path)) throw new Error(`附加 patch 不存在：${path}`)
@@ -125,11 +167,6 @@ const args = [
 console.log(`DSH_HOME=${home}`)
 console.log(`默认工作区：${join(documents, 'deepseek-harness', 'default-workspace')}`)
 console.log(`启动：dsh ${args.join(' ')}`)
-
-/** 给 cmd.exe 拼参数时最少的引号处理。 */
-function quoteArg(value) {
-  return /[\s"]/u.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value
-}
 
 const child = process.platform === 'win32'
   ? spawn(
