@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工作区映射 · 原型</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #11141b;
+    --line: rgba(255, 255, 255, .10);
+    --line-strong: rgba(255, 255, 255, .18);
+    --fg: #e8eaf0;
+    --muted: #9aa1b1;
+    --faint: #6a7180;
+    --accent: #5686fe;
+    --ok: #7ee2a8;
+    --warn: #f0c87a;
+    --danger: #ffb1b1;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13.5px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 24px 80px; }
+
+  h1 { margin: 0 0 6px; font-size: 19px; font-weight: 600; }
+  .lede { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+  .hint { margin: 0 0 22px; color: var(--faint); font-size: 12px; }
+  .hint kbd {
+    padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 4px;
+    font: inherit; font-size: 11px; background: rgba(255, 255, 255, .04);
+  }
+
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .toolbar .spacer { flex: 1 1 auto; }
+  .toolbar button {
+    height: 28px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 8px;
+    background: transparent; color: var(--fg); font-size: 12px; cursor: pointer;
+  }
+  .toolbar button:hover { background: rgba(255, 255, 255, .06); }
+
+  .colhead {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) 110px minmax(240px, 1fr);
+    gap: 12px;
+    padding: 0 4px 8px;
+    color: var(--faint);
+    font-size: 11px;
+    letter-spacing: .04em;
+  }
+  .colhead span:nth-child(2) { text-align: center; }
+
+  .board { display: flex; flex-direction: column; gap: 10px; }
+
+  .row {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) 110px minmax(240px, 1fr);
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  .slot {
+    border: 1px dashed transparent;
+    border-radius: 11px;
+    min-height: 84px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .slot.left { border-color: var(--line); }
+  .slot.left.empty { align-items: center; color: var(--faint); font-size: 12px; cursor: default; }
+  .slot.left.drop { border-color: var(--accent); background: rgba(86, 134, 254, .07); }
+  .slot.left.locked .card { cursor: default; }
+
+  /* 本机工作区卡片 */
+  .card {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 11px;
+    background: var(--panel);
+    cursor: grab;
+  }
+  .card:active { cursor: grabbing; }
+  .card.dragging { opacity: .4; }
+  .card.new { border-style: dashed; border-color: rgba(86, 134, 254, .55); }
+  .card .title { display: flex; align-items: baseline; gap: 8px; }
+  .card .title b { font-size: 12.5px; }
+  .card .badge {
+    padding: 0 7px; border-radius: 999px; font-size: 10.5px; line-height: 18px;
+    background: rgba(255, 255, 255, .06); color: var(--muted);
+  }
+  .card .badge.ok { background: rgba(34, 197, 94, .14); color: var(--ok); }
+  .card .badge.new { background: rgba(86, 134, 254, .14); color: #b9ccff; }
+  .card .path {
+    font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted); word-break: break-all;
+  }
+  .card input {
+    width: 100%; height: 28px; padding: 0 8px;
+    border: 1px solid var(--line-strong); border-radius: 7px;
+    background: rgba(0, 0, 0, .2); color: var(--fg);
+    font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  /* 中间锁与箭头 */
+  .center {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  }
+
+  .lock {
+    width: 34px; height: 34px; border-radius: 10px;
+    border: 1px solid var(--line-strong); background: transparent;
+    display: grid; place-items: center; cursor: pointer; color: var(--faint);
+  }
+  .lock:hover { background: rgba(255, 255, 255, .06); color: var(--fg); }
+  .lock.locked { border-color: rgba(34, 197, 94, .45); color: var(--ok); background: rgba(34, 197, 94, .1); }
+  .lock svg { width: 16px; height: 16px; display: block; }
+
+  .arrow {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 22px; min-width: 34px; padding: 0 6px;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: transparent; color: var(--muted);
+    font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer;
+  }
+  .arrow:hover { color: var(--fg); border-color: var(--line-strong); background: rgba(255, 255, 255, .05); }
+  .arrow.accent { color: #b9ccff; border-color: rgba(86, 134, 254, .35); }
+  .arrow.on { color: var(--warn); border-color: rgba(240, 184, 74, .45); background: rgba(240, 184, 74, .1); }
+
+  /* 远端行 */
+  .remote {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: rgba(255, 255, 255, .02);
+  }
+  .remote .title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .remote .title b { font-size: 12.5px; }
+  .remote .meta { color: var(--faint); font-size: 11px; }
+  .remote .suggest {
+    font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--faint); word-break: break-all;
+  }
+  .remote .state { margin-left: auto; font-size: 10.5px; }
+  .remote .state.bound { color: var(--ok); }
+  .remote .state.ready { color: #b9ccff; }
+
+  .emptyrow .remote { border-style: dashed; color: var(--faint); }
+  .emptyrow .remote b { color: var(--muted); }
+
+  .footer-note { margin-top: 22px; color: var(--faint); font-size: 12px; }
+  .footer-note b { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>工作区映射 · 交互原型</h1>
+  <p class="lede">左边是本机工作区卡片，右边是远端工作区；拖卡片改变配对，锁图标表示“已绑定（不可改绑）”。</p>
+  <p class="hint">
+    <kbd>拖动</kbd> 左侧卡片到其它行 = 改配对 ·
+    <kbd>锁</kbd> 点击 = 绑定/解绑（原型里可来回切） ·
+    <kbd>←</kbd> 远端路径可用时出现，点击用远端路径新建本地工作区卡片 ·
+    <kbd>→</kbd> 仅本机行出现，点击标记“不绑定，推送时新建远端”。
+  </p>
+
+  <div class="toolbar">
+    <button type="button" id="reset">重置演示数据</button>
+    <span class="spacer"></span>
+    <span class="hint" style="margin: 0" id="summary"></span>
+  </div>
+
+  <div class="colhead">
+    <span>本机工作区</span>
+    <span>绑定</span>
+    <span>远端工作区</span>
+  </div>
+
+  <div class="board" id="board"></div>
+
+  <p class="footer-note">
+    <b>判定规则（沿用之前讨论）</b>：远端路径能反推回同一个 workspaceKey 时可信；本机路径存在且可写 → 直接绑定；
+    不存在但父目录/盘符可写 → 显示“创建并绑定”；否则显示“另选路径”。原型只模拟这三态。
+  </p>
+</div>
+
+<script>
+  (function () {
+    var DATA = {
+      local: [
+        { id: 'l1', path: 'D:\\work\\project', title: 'project' },
+        { id: 'l2', path: 'D:\\work\\api', title: 'api' },
+        { id: 'l3', path: 'E:\\scratch\\sandbox', title: 'sandbox' },
+      ],
+      remote: [
+        { id: 'r1', label: 'project', path: 'D:\\work\\project', sessions: 12 },
+        { id: 'r2', label: 'tools', path: 'D:\\work\\tools', sessions: 3 },
+        { id: 'r3', label: 'docs', path: '', sessions: 5 },
+      ],
+    }
+
+    var state = null
+    var dragId = null
+
+    function clone(value) { return JSON.parse(JSON.stringify(value)) }
+
+    function normalize(path) {
+      return String(path || '').replace(/\//g, '\\').replace(/\\+$/u, '').toLowerCase()
+    }
+
+    function usable(path) {
+      return /^[A-Za-z]:\\/u.test(String(path || '').trim())
+    }
+
+    function existingPath(path) {
+      var target = normalize(path)
+      return DATA.local.some(function (local) { return normalize(local.path) === target })
+    }
+
+    function basename(path) {
+      var parts = String(path || '').split(/[\\/]/u).filter(Boolean)
+      return parts.length === 0 ? 'workspace' : parts[parts.length - 1]
+    }
+
+    /** 重建初始状态：按路径自动配对，但不自动锁。 */
+    function reset() {
+      var local = clone(DATA.local)
+      var rows = DATA.remote.map(function (remote) {
+        var match = local.find(function (item) { return normalize(item.path) === normalize(remote.path) }) || null
+        if (match !== null) local = local.filter(function (item) { return item.id !== match.id })
+        return { remoteId: remote.id, localId: match === null ? null : match.id, locked: false, unbound: false }
+      })
+      // 剩下的仅本机工作区各占一行（远端侧为空）。
+      local.forEach(function (item) {
+        rows.push({ remoteId: null, localId: item.id, locked: false, unbound: false })
+      })
+      state = { local: clone(DATA.local), rows: rows, seq: 0 }
+    }
+
+    function localOf(id) { return state.local.find(function (item) { return item.id === id }) || null }
+    function remoteOf(id) { return DATA.remote.find(function (item) { return item.id === id }) || null }
+
+    function lockIcon(locked) {
+      return locked
+        ? '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="currentColor" stroke-width="1.5"/></svg>'
+        : '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.6-1.3" stroke="currentColor" stroke-width="1.5"/></svg>'
+    }
+
+    function renderLocal(row) {
+      var slot = document.createElement('div')
+      slot.className = 'slot left'
+      slot.dataset.row = String(state.rows.indexOf(row))
+      slot.addEventListener('dragover', function (event) {
+        if (dragId === null) return
+        event.preventDefault()
+        slot.classList.add('drop')
+      })
+      slot.addEventListener('dragleave', function () { slot.classList.remove('drop') })
+      slot.addEventListener('drop', function (event) {
+        event.preventDefault()
+        slot.classList.remove('drop')
+        dropOn(row)
+      })
+
+      if (row.localId === null) {
+        slot.classList.add('empty')
+        slot.textContent = '拖一个本机工作区卡片到这里'
+        return slot
+      }
+
+      var local = localOf(row.localId)
+      var card = document.createElement('div')
+      card.className = 'card' + (local.new ? ' new' : '') + (row.locked ? ' locked' : '')
+      card.draggable = !row.locked
+      card.addEventListener('dragstart', function (event) {
+        if (row.locked) { event.preventDefault(); return }
+        dragId = local.id
+        card.classList.add('dragging')
+        event.dataTransfer.effectAllowed = 'move'
+        try { event.dataTransfer.setData('text/plain', local.id) } catch (ignored) { /* 旧浏览器 */ }
+      })
+      card.addEventListener('dragend', function () {
+        dragId = null
+        card.classList.remove('dragging')
+      })
+
+      var title = document.createElement('div')
+      title.className = 'title'
+      var name = document.createElement('b')
+      name.textContent = local.title || basename(local.path)
+      title.appendChild(name)
+      if (local.new) {
+        var badge = document.createElement('span')
+        badge.className = 'badge new'
+        badge.textContent = '新建工作区'
+        title.appendChild(badge)
+      }
+      if (row.locked) {
+        var lockedBadge = document.createElement('span')
+        lockedBadge.className = 'badge ok'
+        lockedBadge.textContent = '已绑定'
+        title.appendChild(lockedBadge)
+      }
+      card.appendChild(title)
+
+      if (local.new) {
+        var input = document.createElement('input')
+        input.value = local.path
+        input.spellcheck = false
+        input.addEventListener('input', function () { local.path = input.value })
+        card.appendChild(input)
+      } else {
+        var path = document.createElement('div')
+        path.className = 'path'
+        path.textContent = local.path
+        card.appendChild(path)
+      }
+      slot.appendChild(card)
+      return slot
+    }
+
+    /** 把正在拖的卡片放到某一行（目标已有卡片则交换）。 */
+    function dropOn(row) {
+      if (dragId === null) return
+      var sourceRow = state.rows.find(function (item) { return item.localId === dragId }) || null
+      if (sourceRow === null || sourceRow === row) { dragId = null; render(); return }
+      if (sourceRow.locked || row.locked) { dragId = null; render(); return }
+      var target = row.localId
+      row.localId = dragId
+      row.locked = false
+      sourceRow.localId = target
+      sourceRow.locked = false
+      dragId = null
+      render()
+    }
+
+    function renderCenter(row) {
+      var center = document.createElement('div')
+      center.className = 'center'
+
+      if (row.remoteId !== null) {
+        var lock = document.createElement('button')
+        lock.type = 'button'
+        lock.className = 'lock' + (row.locked ? ' locked' : '')
+        lock.innerHTML = lockIcon(row.locked)
+        lock.setAttribute('aria-label', row.locked ? '解除绑定' : '绑定')
+        lock.title = row.locked ? '已绑定（不可改绑）' : '点击绑定这条映射'
+        lock.addEventListener('click', function () {
+          row.locked = !row.locked
+          render()
+        })
+        center.appendChild(lock)
+
+        var remote = remoteOf(row.remoteId)
+        // ← 远端路径可用、且这一行还没有本机卡片时，允许用它新建本地工作区卡片。
+        if (row.localId === null && usable(remote.path) && !row.locked) {
+          var create = document.createElement('button')
+          create.type = 'button'
+          create.className = 'arrow accent'
+          create.textContent = '←'
+          create.title = '用远端路径新建本机工作区卡片'
+          create.addEventListener('click', function () {
+            state.seq += 1
+            var id = 'new-' + state.seq
+            state.local.push({ id: id, path: remote.path, title: basename(remote.path), new: true })
+            row.localId = id
+            row.locked = false
+            render()
+          })
+          center.appendChild(create)
+        }
+      } else if (row.localId !== null) {
+        var local = localOf(row.localId)
+        // → 仅本机行：标记“不绑定”，推送时自动新建远端工作区。
+        if (!local.new) {
+          var unbound = document.createElement('button')
+          unbound.type = 'button'
+          unbound.className = 'arrow' + (row.unbound ? ' on' : '')
+          unbound.textContent = '→'
+          unbound.title = row.unbound ? '不绑定：推送时自动新建远端工作区' : '标记为不绑定（推送时新建远端）'
+          unbound.addEventListener('click', function () {
+            row.unbound = !row.unbound
+            render()
+          })
+          center.appendChild(unbound)
+        }
+      }
+      return center
+    }
+
+    function renderRemote(row) {
+      var cell = document.createElement('div')
+      cell.className = 'slot'
+      if (row.remoteId === null) {
+        var empty = document.createElement('div')
+        empty.className = 'remote'
+        var label = document.createElement('div')
+        label.className = 'title'
+        var text = document.createElement('b')
+        text.textContent = '暂无远端工作区'
+        label.appendChild(text)
+        empty.appendChild(label)
+        var note = document.createElement('div')
+        note.className = 'meta'
+        note.textContent = row.unbound
+          ? '不绑定：该工作区推送时会在远端新建'
+          : '首次推送根会话后自动创建远端 workspaceKey'
+        empty.appendChild(note)
+        cell.appendChild(empty)
+        return cell
+      }
+
+      var remote = remoteOf(row.remoteId)
+      var box = document.createElement('div')
+      box.className = 'remote'
+      var head = document.createElement('div')
+      head.className = 'title'
+      var name = document.createElement('b')
+      name.textContent = remote.label
+      head.appendChild(name)
+      var meta = document.createElement('span')
+      meta.className = 'meta'
+      meta.textContent = remote.sessions + ' 个会话'
+      head.appendChild(meta)
+      var stateBadge = document.createElement('span')
+      stateBadge.className = 'state ' + (row.locked ? 'bound' : row.localId === null ? '' : 'ready')
+      stateBadge.textContent = row.locked ? '已绑定' : row.localId === null ? '待映射' : '已配对，未锁定'
+      head.appendChild(stateBadge)
+      box.appendChild(head)
+
+      var keyLine = document.createElement('div')
+      keyLine.className = 'suggest'
+      keyLine.textContent = '路径：' + (remote.path || '（无来源路径）')
+      box.appendChild(keyLine)
+      if (row.localId === null && row.remoteId !== null) {
+        var hint = document.createElement('div')
+        hint.className = 'meta'
+        hint.textContent = usable(remote.path)
+          ? (existingPath(remote.path) ? '点击左侧 ← 使用该路径新建本机卡片' : '本机无此路径；← 会以该路径新建工作区')
+          : '没有可用的来源路径；请拖入或新建本机卡片'
+        box.appendChild(hint)
+      }
+      cell.appendChild(box)
+      return cell
+    }
+
+    function render() {
+      var board = document.getElementById('board')
+      board.innerHTML = ''
+      state.rows.forEach(function (row) {
+        var el = document.createElement('div')
+        el.className = 'row' + (row.remoteId === null ? ' emptyrow' : '')
+        el.appendChild(renderLocal(row))
+        el.appendChild(renderCenter(row))
+        el.appendChild(renderRemote(row))
+        board.appendChild(el)
+      })
+      var bound = state.rows.filter(function (row) { return row.locked }).length
+      var pending = state.rows.filter(function (row) { return row.remoteId !== null && row.localId === null }).length
+      document.getElementById('summary').textContent = '已绑定 ' + bound + ' · 待映射 ' + pending
+    }
+
+    document.getElementById('reset').addEventListener('click', function () { reset(); render() })
+
+    reset()
+    render()
+  })()
+</script>
+</body>
+</html>

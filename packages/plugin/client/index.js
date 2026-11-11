@@ -32,6 +32,7 @@ window.__ModuleLoader__.load({
     ]
     var ONBOARD_DISMISSED = 'dsh-session-cloudsync.onboarding.dismissed'
     var AGREEMENT_ACCEPTED_KEY = 'dsh-session-cloudsync.agreement.accepted'
+    var ONBOARD_FORCE_KEY = 'dsh-session-cloudsync.onboarding.force'
     var AGREEMENT_DOC_BASE = 'https://github.com/xfy2412/dsh-session-cloudsync/blob/main/docs/guides/'
     var OPEN_GUARD_MARK = '__dshSessionCloudsyncOpenGuard'
 
@@ -124,7 +125,37 @@ window.__ModuleLoader__.load({
       '.dssync-maplocal b,.dssync-mapremote b{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dssync-text);font-size:12px;font-weight:550}',
       '.dssync-mappath,.dssync-mapkeytext{margin-top:2px;color:var(--dssync-faint);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}',
       '.dssync-mapremote-meta{margin-top:3px;color:var(--dssync-faint);font-size:10px}',
-      '.dssync-mapnote{margin-top:4px;color:var(--dssync-faint);font-size:10px;line-height:1.45}',
+      '.dssync-mapnote{margin-top:4px;color:var(--dssync-faint);font-size:10px;line-height:1.45}',      '.dssync-mapboard{display:flex;flex-direction:column;gap:10px}',
+      '.dssync-maprow{display:grid;grid-template-columns:minmax(200px,1fr) 92px minmax(200px,1fr);gap:12px;align-items:stretch}',
+      '.dssync-mapslot{display:flex;flex-direction:column;justify-content:center;min-height:78px;border:1px dashed transparent;border-radius:11px}',
+      '.dssync-mapslot.empty{border-color:var(--dssync-line);align-items:center;color:var(--dssync-faint);font-size:11.5px}',
+      '.dssync-mapslot.drop{border-color:var(--dssync-accent);background:var(--dssync-accent-soft)}',
+      '.dssync-mapcard{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid var(--dssync-line-strong);border-radius:11px;background:rgba(255,255,255,.02)}',
+      '.dssync-mapcard[draggable="true"]{cursor:grab}',
+      '.dssync-mapcard[draggable="true"]:active{cursor:grabbing}',
+      '.dssync-mapcard.locked{border-color:rgba(34,197,94,.35)}',
+      '.dssync-mapcard .title{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}',
+      '.dssync-mapcard .title b{font-size:12.5px}',
+      '.dssync-mapcard .dssync-mappath{font-size:11px}',      '.dssync-mapcenter{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}',
+      '.dssync-maplock{width:32px;height:32px;border-radius:9px;border:1px solid var(--dssync-line-strong);background:transparent;display:grid;place-items:center;cursor:pointer;color:var(--dssync-faint)}',
+      '.dssync-maplock:hover{background:rgba(127,127,127,.12);color:var(--dssync-text)}',
+      '.dssync-maplock.locked{border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.1);color:#9ce8bc}',
+      '.dssync-maplock[disabled]{cursor:default;opacity:.55}',
+      '.dssync-maplock svg{width:15px;height:15px;display:block}',
+      '.dssync-maparrow{display:inline-flex;align-items:center;justify-content:center;height:22px;min-width:32px;padding:0 6px;border:1px solid var(--dssync-line);border-radius:6px;background:transparent;color:var(--dssync-muted);font:12px/1 ui-monospace,monospace;cursor:pointer}',
+      '.dssync-maparrow:hover{color:var(--dssync-text);border-color:var(--dssync-line-strong)}',
+      '.dssync-maparrow.accent{color:#b9ccff;border-color:rgba(86,134,254,.35)}',
+      '.dssync-maparrow.on{color:#f0c87a;border-color:rgba(240,184,74,.45);background:rgba(240,184,74,.1)}',
+      '.dssync-mapremote{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid var(--dssync-line);border-radius:11px;background:rgba(255,255,255,.02)}',
+      '.dssync-mapremote .title{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}',
+      '.dssync-mapremote .title b{font-size:12.5px}',
+      '.dssync-mapremote .state{margin-left:auto;font-size:10.5px;color:var(--dssync-faint)}',
+      '.dssync-mapremote .state.bound{color:#9ce8bc}',
+      '.dssync-mapremote .state.ready{color:#b9ccff}',
+      '.dssync-mapremote.empty{border-style:dashed}',
+      '.dssync-maprow-drop{outline:none}',
+
+
       '.dssync-rel{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:999px;font-size:10px;white-space:nowrap;border:1px solid var(--dssync-line)}',
       '.dssync-rel.bound{color:#9ce8bc;background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.22)}',
       '.dssync-rel.native{color:#b9ccff;background:var(--dssync-accent-soft);border-color:rgba(86,134,254,.24)}',
@@ -1110,21 +1141,23 @@ window.__ModuleLoader__.load({
     function remoteWorkspaceList(workspaces) {
       var source = workspaces && Array.isArray(workspaces.remoteWorkspaces) ? workspaces.remoteWorkspaces : []
       var seen = new Map()
-      function add(workspaceKey, label, sessions) {
+      function add(workspaceKey, label, sessions, path) {
         if (workspaceKey === null || workspaceKey === undefined) return
         var current = seen.get(workspaceKey)
         var resolvedLabel = label === undefined || label === '' ? (current && current.label) : label
+        var resolvedPath = typeof path === 'string' && path !== '' ? path : (current && current.path)
         seen.set(workspaceKey, {
           workspaceKey: workspaceKey,
           sessions: Math.max(current ? current.sessions : 0, sessions || 0),
           ...resolvedLabel === undefined ? {} : { label: resolvedLabel },
+          ...resolvedPath === undefined ? {} : { path: resolvedPath },
         })
       }
-      source.forEach(function (entry) { add(entry.workspaceKey, entry.label, entry.sessions || 0) })
+      source.forEach(function (entry) { add(entry.workspaceKey, entry.label, entry.sessions || 0, entry.path) })
       var bindings = workspaces && Array.isArray(workspaces.bindings) ? workspaces.bindings : []
       bindings.forEach(function (binding) { add(binding.workspaceKey, binding.label, 0) })
       var unmapped = workspaces && Array.isArray(workspaces.unmapped) ? workspaces.unmapped : []
-      unmapped.forEach(function (entry) { add(entry.workspaceKey, entry.label, entry.sessions || 0) })
+      unmapped.forEach(function (entry) { add(entry.workspaceKey, entry.label, entry.sessions || 0, entry.path) })
       return Array.from(seen.values()).sort(function (left, right) {
         return String(left.label || left.workspaceKey).localeCompare(String(right.label || right.workspaceKey))
       })
@@ -1176,12 +1209,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function workspaceRelation(kind) {
-      if (kind === 'bound') return h('span', { className: 'dssync-rel bound' }, '已绑定')
-      if (kind === 'native') return h('span', { className: 'dssync-rel native' }, '本机身份')
-      if (kind === 'pending') return h('span', { className: 'dssync-rel pending' }, '待映射')
-      return h('span', { className: 'dssync-rel local' }, '仅本机')
-    }
 
     function WorkspaceMappingPanel(props) {
       var model = props.model
@@ -1196,59 +1223,20 @@ window.__ModuleLoader__.load({
       var confirmState = useState(null)
       var confirming = confirmState[0]
       var setConfirming = confirmState[1]
+      var dragState = useState(null)
+      var dragPath = dragState[0]
+      var setDragPath = dragState[1]
+      var dropState = useState(null)
+      var dropKey = dropState[0]
+      var setDropKey = dropState[1]
+      var unboundState = useState({})
+      var unbound = unboundState[0]
+      var setUnboundMap = unboundState[1]
       var mapping = mappingState(workspaces)
 
-      function choose(key, path) {
-        setChoices(function (previous) {
-          var next = Object.assign({}, previous)
-          next[key] = path
-          return next
-        })
-      }
 
-      function bind(key) {
-        var path = choices[key] || ''
-        if (key === null || key === undefined || path === '') return
-        setBusy(function (previous) {
-          var next = Object.assign({}, previous)
-          next[key] = true
-          return next
-        })
-        model.bindWorkspace(key, path).then(function (result) {
-          if (!result || result.ok !== true) {
-            model.toast((result && result.error && result.error.message) || '绑定失败', true)
-            return
-          }
-          setConfirming(null)
-          model.toast('已建立工作区映射；不能改绑')
-        }).catch(function (error) { model.toast(errorText(error), true) })
-          .finally(function () {
-            setBusy(function (previous) {
-              var next = Object.assign({}, previous)
-              delete next[key]
-              return next
-            })
-          })
-      }
 
-      function localBlock(local) {
-        return h('div', { className: 'dssync-maplocal' },
-          h('b', null, local.title || local.path),
-          h('div', { className: 'dssync-mappath', title: local.path }, local.path),
-          h('div', { className: 'dssync-mapkeytext', title: local.workspaceKey || '尚未解析本机 workspaceKey' },
-            local.workspaceKey === undefined ? '本机 key 尚未解析' : shortMapKey(local.workspaceKey)))
-      }
 
-      function remoteBlock(remote, note) {
-        return h('div', { className: 'dssync-mapremote' },
-          h('b', null, remote.label || shortMapKey(remote.workspaceKey) || '未知工作区'),
-          h('div', { className: 'dssync-mapkeytext', title: remote.workspaceKey || '远端没有 workspaceKey' },
-            shortMapKey(remote.workspaceKey) || '没有 workspaceKey'),
-          remote.sessions > 0
-            ? h('div', { className: 'dssync-mapremote-meta' }, remote.sessions + ' 个未映射会话')
-            : null,
-          note === undefined ? null : h('div', { className: 'dssync-mapnote' }, note))
-      }
 
       if (workspaces === null) {
         return h('div', { className: 'dssync-mapempty' },
@@ -1259,111 +1247,340 @@ window.__ModuleLoader__.load({
           }, '重新读取') : null)
       }
 
+      function normMapPath(path) {
+        return String(path || '').replace(/\//g, '\\').replace(/\\+$/u, '').toLowerCase()
+      }
+
+      var normPath = normMapPath
+      var boundRows = mapping.rows.filter(function (row) { return row.kind !== 'local' })
+      var localOnlyRows = mapping.rows
+        .filter(function (row) { return row.kind === 'local' })
+        .map(function (row) { return row.local })
+      var pairs = {}
+      var usedPaths = {}
+      boundRows.forEach(function (row) {
+        pairs[row.remote.workspaceKey] = row.local
+        usedPaths[row.local.path] = true
+      })
+      mapping.pending.forEach(function (remote) {
+        if (choices[remote.workspaceKey] === '') return
+        var chosen = null
+        if (choices[remote.workspaceKey] !== undefined) {
+          chosen = localOnlyRows.find(function (local) { return local.path === choices[remote.workspaceKey] }) || null
+        }
+        if (chosen !== null && usedPaths[chosen.path] !== true) {
+          pairs[remote.workspaceKey] = chosen
+          usedPaths[chosen.path] = true
+        }
+      })
+      mapping.pending.forEach(function (remote) {
+        if (pairs[remote.workspaceKey] !== undefined || choices[remote.workspaceKey] === '' || !remote.path) return
+        var match = localOnlyRows.find(function (local) {
+          return usedPaths[local.path] !== true && normMapPath(local.path) === normMapPath(remote.path)
+        }) || null
+        if (match !== null) {
+          pairs[remote.workspaceKey] = match
+          usedPaths[match.path] = true
+        }
+      })
+      var pairedRemoteByPath = {}
+      Object.keys(pairs).forEach(function (key) { pairedRemoteByPath[pairs[key].path] = key })
+
+      function assignPair(remoteKey, path) {
+        if (remoteKey === null || remoteKey === undefined || path === '') return
+        setChoices(function (previous) {
+          var next = Object.assign({}, previous)
+          Object.keys(next).forEach(function (other) {
+            if (next[other] === path && other !== remoteKey) delete next[other]
+          })
+          next[remoteKey] = path
+          return next
+        })
+      }
+
+      async function createFromRemote(remote) {
+        var path = String(remote.path || '').trim()
+        if (path === '') {
+          model.toast('该远端工作区没有可用的来源路径，请拖入或新建本机卡片', true)
+          return
+        }
+        setBusy(function (previous) {
+          var next = Object.assign({}, previous)
+          next[remote.workspaceKey] = true
+          return next
+        })
+        try {
+          var state = await model.resolveWorkspacePath(path)
+          if (state.mode === 'pick') {
+            model.toast(state.sameOs ? '这个位置不可用（无权限或父目录不存在）' : '路径格式与当前系统不一致', true)
+            return
+          }
+          setConfirming({
+            key: remote.workspaceKey,
+            path: path,
+            mode: state.mode,
+            create: true,
+            label: remote.label || shortMapKey(remote.workspaceKey),
+          })
+        } catch (error) {
+          model.toast(errorText(error), true)
+        } finally {
+          setBusy(function (previous) {
+            var next = Object.assign({}, previous)
+            delete next[remote.workspaceKey]
+            return next
+          })
+        }
+      }
+
+      async function applyBinding(confirm) {
+        var key = confirm.key
+        setBusy(function (previous) {
+          var next = Object.assign({}, previous)
+          next[key] = true
+          return next
+        })
+        try {
+          if (confirm.create === true) await model.createWorkspace(confirm.path, confirm.label)
+          var result = await model.bindWorkspace(key, confirm.path)
+          if (!result || result.ok !== true) {
+            model.toast((result && result.error && result.error.message) || '绑定失败', true)
+            return
+          }
+          setConfirming(null)
+          setChoices(function (previous) {
+            var next = Object.assign({}, previous)
+            delete next[key]
+            return next
+          })
+          model.toast('已建立工作区映射；不能改绑')
+        } catch (error) {
+          model.toast(errorText(error), true)
+        } finally {
+          setBusy(function (previous) {
+            var next = Object.assign({}, previous)
+            delete next[key]
+            return next
+          })
+        }
+      }
+
+      function lockIcon(locked) {
+        return locked
+          ? h('svg', { viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
+            h('rect', { x: 3, y: 7, width: 10, height: 7, rx: 2, stroke: 'currentColor', strokeWidth: 1.5 }),
+            h('path', { d: 'M5.5 7V5a2.5 2.5 0 0 1 5 0v2', stroke: 'currentColor', strokeWidth: 1.5 }))
+          : h('svg', { viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
+            h('rect', { x: 3, y: 7, width: 10, height: 7, rx: 2, stroke: 'currentColor', strokeWidth: 1.5 }),
+            h('path', { d: 'M5.5 7V5a2.5 2.5 0 0 1 4.6-1.3', stroke: 'currentColor', strokeWidth: 1.5 }))
+      }
+
+
+      function localCard(local, locked, draggable, kind, paired) {
+        return h('div', {
+          className: 'dssync-mapcard' + (locked ? ' locked' : ''),
+          draggable: draggable === true && !locked,
+          onDragStart: function (event) {
+            if (locked || !draggable) { event.preventDefault(); return }
+            setDragPath(local.path)
+            event.dataTransfer.effectAllowed = 'move'
+            try { event.dataTransfer.setData('text/plain', local.path) } catch (ignored) { /* 旧浏览器 */ }
+          },
+          onDragEnd: function () { setDragPath(null); setDropKey(null) },
+        },
+        h('div', { className: 'title' },
+          h('b', null, local.title || local.path),
+          locked ? h('span', { className: 'dssync-session-status' }, '已绑定') : null,
+          !locked && kind === 'native' ? h('span', { className: 'dssync-rel native' }, '本机身份') : null,
+          !locked && paired === true ? h('span', { className: 'dssync-session-status' }, '已配对') : null),
+        h('div', { className: 'dssync-mappath', title: local.path }, local.path))
+      }
+
+
+      function unassignByPath(path) {
+        setChoices(function (previous) {
+          var next = Object.assign({}, previous)
+          Object.keys(next).forEach(function (key) {
+            if (next[key] === path) next[key] = ''
+          })
+          return next
+        })
+      }
+
+
+      function slotForRow(row) {
+        if (row.remote !== null && row.kind === 'pending' && row.local === null) {
+          var dropActive = dropKey === row.remote.workspaceKey
+          return h('div', {
+            className: 'dssync-mapslot empty' + (dropActive ? ' drop' : ''),
+            onDragOver: function (event) {
+              if (dragPath === null) return
+              event.preventDefault()
+              if (dropKey !== row.remote.workspaceKey) setDropKey(row.remote.workspaceKey)
+            },
+            onDragLeave: function () { if (dropActive) setDropKey(null) },
+            onDrop: function (event) {
+              if (dragPath === null) return
+              event.preventDefault()
+              assignPair(row.remote.workspaceKey, dragPath)
+              setDragPath(null)
+              setDropKey(null)
+            },
+          }, '拖一个本机工作区卡片到这里')
+        }
+        if (row.remote !== null) {
+          return h('div', { className: 'dssync-mapslot' },
+            localCard(row.local, row.kind === 'bound', row.kind === 'pending', row.kind, row.kind === 'pending'))
+        }
+        // 本地行：卡片拖走后保留原行，作为“拖回取消配对”的落点。
+        var pairedKey = pairedRemoteByPath[row.local.path]
+        if (pairedKey === undefined) {
+          return h('div', { className: 'dssync-mapslot' },
+            localCard(row.local, false, true, 'local', false))
+        }
+        var pairedRemote = mapping.remote.find(function (entry) { return entry.workspaceKey === pairedKey }) || null
+        return h('div', {
+          className: 'dssync-mapslot empty',
+          onDragOver: function (event) {
+            if (dragPath === null) return
+            event.preventDefault()
+          },
+          onDrop: function (event) {
+            if (dragPath === null) return
+            event.preventDefault()
+            if (dragPath === row.local.path) unassignByPath(row.local.path)
+            setDragPath(null)
+            setDropKey(null)
+          },
+        }, '「' + (row.local.title || row.local.path) + '」已配对到「' + (pairedRemote === null ? shortMapKey(pairedKey) : (pairedRemote.label || shortMapKey(pairedKey))) + '」· 拖回取消')
+      }
+
+      function centerForRow(row) {
+        if (row.remote === null) {
+          var localUnbound = unbound[row.local.path] === true
+          return h('div', { className: 'dssync-mapcenter' },
+            h('button', {
+              className: 'dssync-maparrow' + (localUnbound ? ' on' : ''),
+              type: 'button', title: localUnbound ? '不绑定：推送时新建远端工作区' : '标记为不绑定（推送时新建远端）',
+              onClick: function () { toggleUnbound(row.local.path) },
+            }, '→'))
+        }
+        var key = row.remote.workspaceKey
+        if (row.kind === 'bound') {
+          return h('div', { className: 'dssync-mapcenter' },
+            h('button', { className: 'dssync-maplock locked', type: 'button', disabled: true, title: '已绑定，不可改绑', 'aria-label': '已绑定' }, lockIcon(true)))
+        }
+        if (row.kind === 'native') {
+          return h('div', { className: 'dssync-mapcenter' },
+            h('button', { className: 'dssync-maplock', type: 'button', disabled: true, title: 'key 与本机路径一致，无需绑定', 'aria-label': '本机身份' }, lockIcon(true)))
+        }
+        return h('div', { className: 'dssync-mapcenter' },
+          h('button', {
+            className: 'dssync-maplock' + (row.local !== null ? '' : ' locked'),
+            type: 'button',
+            disabled: row.local === null || busy[key] === true,
+            title: row.local === null ? '先把本地卡片拖到这里，或点击 ← 新建' : '点击绑定这条映射',
+            'aria-label': row.local === null ? '待映射' : '绑定',
+            onClick: function () {
+              if (row.local === null) return
+              setConfirming({ key: key, path: row.local.path, mode: 'bind', create: false, label: row.remote.label || shortMapKey(key) })
+            },
+          }, lockIcon(row.local !== null)),
+          row.local === null && row.remote.path
+            ? h('button', {
+              className: 'dssync-maparrow accent', type: 'button',
+              disabled: busy[key] === true,
+              title: '用远端路径新建本机工作区（不存在则创建目录）',
+              onClick: function () { createFromRemote(row.remote) },
+            }, '←')
+            : null)
+      }
+
+      function remoteForRow(row) {
+        if (row.remote === null) {
+          var pairedKey = pairedRemoteByPath[row.local.path]
+          var pairedRemote = pairedKey === undefined
+            ? null
+            : (mapping.remote.find(function (entry) { return entry.workspaceKey === pairedKey }) || null)
+          return h('div', { className: 'dssync-mapremote empty' },
+            h('div', { className: 'title' }, h('b', null, pairedRemote === null ? '暂无远端工作区' : '已配对到「' + (pairedRemote.label || shortMapKey(pairedKey)) + '」')),
+            h('div', { className: 'dssync-mapnote' },
+              pairedRemote !== null
+                ? '未锁定；点中间的锁图标才会建立一次性绑定。'
+                : unbound[row.local.path] === true
+                  ? '不绑定：该工作区推送时会在远端新建'
+                  : '首次推送根会话后自动创建远端 workspaceKey'))
+        }
+        var paired = row.local !== null
+        var stateText = row.locked ? '已绑定' : paired ? '已配对，未锁定' : '待映射'
+        return h('div', { className: 'dssync-mapremote' + (row.locked ? ' bound' : '') },
+          h('div', { className: 'title' },
+            h('b', null, row.remote.label || shortMapKey(row.remote.workspaceKey)),
+            h('span', { className: 'dssync-note' }, (row.remote.sessions || 0) + ' 个会话'),
+            h('span', { className: 'dssync-note', style: { marginLeft: 'auto', color: row.locked ? '#9ce8bc' : paired ? '#b9ccff' : undefined } }, stateText)),
+          h('div', { className: 'dssync-mapnote', title: row.remote.path },
+            row.remote.path === undefined ? '无来源路径' : '来源：' + row.remote.path))
+      }
+
+      var allRows = []
+      boundRows.forEach(function (row) { allRows.push({ kind: row.kind, local: row.local, remote: row.remote, locked: row.kind === 'bound' }) })
+      mapping.pending.forEach(function (remote) {
+        allRows.push({ kind: 'pending', local: pairs[remote.workspaceKey] || null, remote: remote, locked: false })
+      })
+      // 行数始终 = 远端工作区 + 未绑定本地工作区；配对中的本地卡片仍保留自己的行。
+      localOnlyRows.forEach(function (local) {
+        allRows.push({ kind: 'local', local: local, remote: null, locked: false })
+      })
       var stats = h('div', { className: 'dssync-mapstats' },
-        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.locals), ' 本机工作区'),
-        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.total), ' 远端工作区'),
+        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.locals.length), ' 本机工作区'),
+        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.remote.length), ' 远端工作区'),
         h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.bound), ' 已绑定'),
         h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.native), ' 本机身份'),
-        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.localOnly), ' 仅本机'),
-        h('span', { className: 'dssync-mapstat' }, h('b', null, mapping.counts.pending), ' 待映射'))
+        h('span', { className: 'dssync-mapstat' }, h('b', null, allRows.filter(function (row) { return row.kind === 'local' }).length), ' 仅本机'),
+        h('span', { className: 'dssync-mapstat' }, h('b', null, allRows.filter(function (row) { return row.kind === 'pending' && row.local === null }).length), ' 待映射'))
 
-      var rows = mapping.rows.map(function (row) {
-        var right
-        if (row.kind === 'bound') {
-          right = remoteBlock(row.remote, '该 key 已绑定到左侧路径；不可改绑。')
-        } else if (row.kind === 'native') {
-          right = remoteBlock(row.remote, 'key 与本机路径一致，已自动对应，无需映射。')
-        } else {
-          right = h('div', { className: 'dssync-mapempty' },
-            h('b', null, '尚未对应远端'),
-            '该工作区第一次推送根会话后，会自动创建远端 workspaceKey。')
-        }
-        return h('tr', { className: 'dssync-map-pair ' + row.kind, key: row.local.path },
-          h('td', null, localBlock(row.local)),
-          h('td', { className: 'relcell' }, workspaceRelation(row.kind)),
-          h('td', null, right))
-      })
-
-      mapping.pending.forEach(function (remote) {
-        var key = remote.workspaceKey
-        var candidates = mapping.candidates
-        var selectedPath = choices[key] || ''
-        var selectedLocal = candidates.find(function (local) { return local.path === selectedPath }) || null
-        var selectedTitle = selectedLocal === null ? selectedPath : (selectedLocal.title || selectedLocal.path)
-        var selectedNative = selectedLocal !== null && selectedLocal.workspaceKey !== undefined
-          && mapping.remote.some(function (entry) { return entry.workspaceKey === selectedLocal.workspaceKey })
-        var picker = candidates.length === 0
-          ? h('div', { className: 'dssync-mapempty' },
-            h('b', null, '没有可用的本机工作区'),
-            '先在 DSH 里注册一个新工作区，再回来绑定。')
-          : confirming === key
-            ? h('div', { className: 'dssync-mappick' },
-              h('div', { className: 'dssync-mapconfirm', role: 'group', 'aria-label': '确认工作区映射' },
-                h('span', { className: 'dssync-note warn' },
-                  '绑定不可撤销：把 ' + (remote.label || shortMapKey(key))
-                  + ' 永久绑定到「' + selectedTitle + '」？'),
-                selectedNative ? h('span', { className: 'dssync-note warn' },
-                  '这个本机工作区已有自己的本机身份 key；确认后会改绑到左侧远端 key。') : null,
-                h('button', {
-                  className: 'dssync-pill', type: 'button', disabled: busy[key] === true,
-                  onClick: function () { setConfirming(null) },
-                }, '取消'),
-                h('button', {
-                  className: 'dssync-pill primary', type: 'button', disabled: busy[key] === true,
-                  onClick: function () { bind(key) },
-                }, busy[key] === true ? '绑定中…' : '确认绑定')))
-            : h('div', { className: 'dssync-mappick' },
-              h('div', { className: 'dssync-mappick-row' },
-                h('select', {
-                  value: selectedPath,
-                  onChange: function (event) { choose(key, event.target.value) },
-                  'aria-label': '为 ' + (remote.label || shortMapKey(key)) + ' 选择本机工作区',
-                },
-                h('option', { value: '' }, '选择本机工作区…'),
-                candidates.map(function (local) {
-                  return h('option', { value: local.path, key: local.path },
-                    (local.title || local.path) + ' — ' + local.path)
-                })),
-                h('button', {
-                  className: 'dssync-pill primary', type: 'button',
-                  disabled: selectedPath === '' || busy[key] === true,
-                  onClick: function () { if (selectedPath !== '') setConfirming(key) },
-                }, '绑定…')),
-              h('div', { className: 'dssync-mapnote' }, selectedNative
-                ? '所选工作区已有本机身份 key；绑定会把它改绑到这个远端 key。'
-                : '绑定不可改绑；未映射会话不会写入本机。'))
-        rows.push(h('tr', { className: 'dssync-map-pair pending', key: 'pending:' + String(key) },
-          h('td', null, picker),
-          h('td', { className: 'relcell' }, workspaceRelation('pending')),
-          h('td', null, remoteBlock(remote, '左侧选择一个本机工作区后确认。'))))
-      })
-
-      if (rows.length === 0) {
-        return h('div', { className: 'dssync-mappanel' }, stats,
+      if (allRows.length === 0) {
+        return h('div', { className: 'dssync-mappanel' },
           h('div', { className: 'dssync-mapempty' },
             h('b', null, '还没有工作区'),
             '本机没有已注册的工作区，远端也没有 workspaceKey。'))
       }
 
+
+      var confirmBanner = confirming === null ? null : h('div', { className: 'dssync-mapconfirm', role: 'group', 'aria-label': '确认工作区映射' },
+        h('span', { className: 'dssync-note warn' },
+          confirming.create === true
+            ? (confirming.mode === 'create'
+              ? '目录不存在；确认后会先创建 ' + confirming.path + '，再注册并永久绑定到「' + confirming.label + '」。'
+              : '确认把「' + confirming.label + '」注册到 ' + confirming.path + ' 并永久绑定？')
+            : '把「' + confirming.label + '」永久绑定到 ' + confirming.path + '？绑定后不可改绑。'),
+        h('button', { className: 'dssync-pill', type: 'button', disabled: busy[confirming.key] === true, onClick: function () { setConfirming(null) } }, '取消'),
+        h('button', { className: 'dssync-pill primary', type: 'button', disabled: busy[confirming.key] === true, onClick: function () { applyBinding(confirming) } },
+          busy[confirming.key] === true ? '处理中…' : '确认绑定'))
+
       return h('div', { className: 'dssync-mappanel' },
         stats,
-        h('div', { className: 'dssync-maptablewrap' },
-          h('table', { className: 'dssync-maptable' },
-            h('colgroup', null,
-              h('col', { className: 'local' }),
-              h('col', { className: 'rel' }),
-              h('col')),
-            h('thead', null, h('tr', null,
-              h('th', null, '本机工作区'),
-              h('th', null, '关系'),
-              h('th', null, '远端 workspaceKey'))),
-            h('tbody', null, rows))),
+        confirmBanner,
+        h('div', { className: 'dssync-mapboard' }, allRows.map(function (row, index) {
+          return h('div', { className: 'dssync-maprow', key: 'row-' + index },
+            slotForRow(row),
+            centerForRow(row),
+            remoteForRow(row))
+        })),
         h('p', { className: 'dssync-mapnote' },
           compact
-            ? '这一步可以跳过；未映射的远端会话不会写入本机，之后可在设置页补绑定。'
-            : '绑定是每设备本地的，一次确认后不能改绑；未映射会话不会 apply，也不影响其他工作区同步。'))
-    }
+            ? '这一步可以跳过；把本地卡片拖到远端行左侧的空位即可配对，或点 ← 用远端路径新建。'
+            : '把本地卡片拖到远端行左侧的空位即可配对；拖回原来的行取消配对；点锁图标才建立一次性绑定；→ 表示不绑定、推送时新建远端。'))
 
+      function toggleUnbound(path) {
+        setUnboundMap(function (previous) {
+          var next = Object.assign({}, previous)
+          if (next[path] === true) delete next[path]
+          else next[path] = true
+          return next
+        })
+      }
+    }
     function PerfPanel(props) {
       var model = props.model
       var appState = useModel(model)
@@ -1526,7 +1743,7 @@ window.__ModuleLoader__.load({
         }
         var ops = [
           ...serverLocked ? [] : [{ op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() }],
-          ...deviceLocked ? [] : [{ op: 'set', path: ['deviceName'], value: String(fields.deviceName || '').trim() }],
+
           { op: 'set', path: ['syncSessionIds'], value: fields.syncSessionIds.slice() },
           { op: 'set', path: ['autoBindSamePath'], value: fields.autoBindSamePath === true },
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
@@ -1642,6 +1859,10 @@ window.__ModuleLoader__.load({
           busy === 'save' ? '正在保存…' : dirty ? '有未保存修改' : '非敏感配置已保存'),
         h('span', { className: 'spacer' }),
         h('button', {
+          className: 'dssync-pill', type: 'button',
+          onClick: function () { forceOnboarding(); location.reload() },
+        }, '重新运行引导'),
+        h('button', {
           className: 'dssync-pill primary', type: 'button',
           disabled: disabled || busy === 'save' || !dirty,
           onClick: save,
@@ -1661,12 +1882,15 @@ window.__ModuleLoader__.load({
                 placeholder: 'http://127.0.0.1:8787',
                 onChange: function (event) { set('serverUrl', event.target.value) },
               })),
-            h(Field, { id: 'dssync-device', label: '设备名称', hint: deviceLocked ? '由环境变量设置，设置页不可修改。' : '用于日志与设备台账。' },
-              h('input', {
-                id: 'dssync-device', value: fields.deviceName,
-                disabled: deviceLocked,
-                onChange: function (event) { set('deviceName', event.target.value) },
-              }))),
+            h(Field, { id: 'dssync-device', label: '设备名称', hint: '在服务端设置；这里只读展示，改名去管理台。' },
+              h('div', { className: 'dssync-note' },
+                (setupInfo && setupInfo.deviceName) || '未命名',
+                ' · ',
+                h('a', {
+                  href: String(fields.serverUrl || '').trim().replace(/\/+$/u, '') + '/admin',
+                  target: '_blank', rel: 'noreferrer',
+                  style: { color: '#b9ccff', textDecoration: 'underline' },
+                }, '去管理台改名')))),
           h('div', { className: 'dssync-btnrow' },
             h('button', { className: 'dssync-pill', type: 'button', disabled: disabled || busy === 'test', onClick: test }, busy === 'test' ? '测试中…' : '测试连接'),
             h('span', { className: 'spacer' }),
@@ -1812,6 +2036,18 @@ window.__ModuleLoader__.load({
 
     function setDismissed() {
       try { sessionStorage.setItem(ONBOARD_DISMISSED, '1') } catch (ignored) { /* 隐私模式 */ }
+    }
+
+    function forceOnboarding() {
+      try { localStorage.setItem(ONBOARD_FORCE_KEY, '1') } catch (ignored) { /* 隐私模式 */ }
+    }
+
+    function onboardingForced() {
+      try { return localStorage.getItem(ONBOARD_FORCE_KEY) === '1' } catch (ignored) { return false }
+    }
+
+    function clearOnboardingForce() {
+      try { localStorage.removeItem(ONBOARD_FORCE_KEY) } catch (ignored) { /* 隐私模式 */ }
     }
 
     function readAcceptedAgreement() {
@@ -1997,6 +2233,8 @@ window.__ModuleLoader__.load({
       var hiddenState = useState(dismissed)
       var hidden = hiddenState[0]
       var setHidden = hiddenState[1]
+      var forcedState = useState(onboardingForced)
+      var forced = forcedState[0]
       var activeState = useState(false)
       var active = activeState[0]
       var setActive = activeState[1]
@@ -2037,7 +2275,7 @@ window.__ModuleLoader__.load({
         if (setup === null) return
         // 一旦以“未配置”姿态打开，后续步骤保存让 setup 变成已配置时也不能
         // 把向导抽掉；只有首次加载就是已配置才不显示。
-        setActive(function (previous) { return previous || !setup.configured })
+        setActive(function (previous) { return previous || forced || !setup.configured })
       }, [setup && setup.configured])
       useEffect(function () {
         if (setup && setup.configured) setDismissed()
@@ -2085,6 +2323,7 @@ window.__ModuleLoader__.load({
         setDismissed()
         setHidden(true)
         clearOnboardProgress()
+        clearOnboardingForce()
       }
 
       async function connect() {
@@ -2236,6 +2475,7 @@ window.__ModuleLoader__.load({
             return
           }
           clearOnboardProgress()
+          clearOnboardingForce()
           close()
           model.toast('同步已启动')
         } catch (error) {
