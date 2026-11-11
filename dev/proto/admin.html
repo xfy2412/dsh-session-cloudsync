@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理台 · 原型</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --bg-soft: #14171d;
+    --panel: #161a21;
+    --panel-2: #1c212a;
+    --line: #262c36;
+    --line-strong: #39424f;
+    --text: #e9edf3;
+    --muted: #9aa5b5;
+    --faint: #6f7b8c;
+    --accent: #5b88ff;
+    --accent-2: #8caaff;
+    --accent-soft: rgba(91, 136, 255, .14);
+    --good: #5ed392;
+    --good-soft: rgba(94, 211, 146, .12);
+    --bad: #ef7777;
+    --bad-soft: rgba(239, 119, 119, .12);
+    --warn: #f0b64a;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(900px 460px at 10% -12%, rgba(91, 136, 255, .10), transparent 62%),
+      radial-gradient(720px 420px at 100% 0%, rgba(94, 211, 146, .05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  [hidden] { display: none !important; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  a { color: var(--accent-2); }
+
+  .page { max-width: 1240px; margin: 0 auto; padding: 22px 24px 72px; }
+
+  /* 顶栏 */
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 4px 18px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 0 auto; }
+  .brand-mark {
+    width: 34px; height: 34px; border-radius: 10px;
+    display: grid; place-items: center;
+    background: linear-gradient(145deg, #24314a, #17202f);
+    border: 1px solid #33415a; color: #fff;
+  }
+  .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+  .brand .crumb { color: var(--faint); font-size: 12px; }
+  .topbar .spacer { flex: 1 1 auto; }
+  .ver {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 24px; padding: 0 9px; border-radius: 999px;
+    white-space: nowrap;
+    border: 1px solid var(--line); background: var(--bg-soft);
+    color: var(--muted); font-size: 11px;
+  }
+  .ver i { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 32px; padding: 6px 12px;
+    border: 1px solid transparent; border-radius: 9px;
+    background: var(--accent); color: #fff;
+    font-size: 12.5px; font-weight: 600; white-space: nowrap;
+    transition: background .16s, border-color .16s, opacity .16s, transform .16s;
+  }
+  .btn:hover { background: #6b95ff; }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: .45; cursor: default; transform: none; }
+  .btn.secondary { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+  .btn.secondary:hover { background: #29303a; }
+  .btn.ghost { background: transparent; border-color: var(--line); color: var(--muted); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--line-strong); background: rgba(255,255,255,.03); }
+  .btn.small { min-height: 26px; padding: 2px 8px; font-size: 11.5px; }
+  .btn.icon { width: 30px; padding: 0; }
+  .spinner { animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 页头 */
+  .hero { display: flex; align-items: flex-end; gap: 16px; margin: 10px 0 18px; }
+  .hero .kicker { color: var(--accent-2); font-size: 10.5px; font-weight: 700; letter-spacing: .14em; }
+  .hero h2 { margin: 4px 0 2px; font-size: 26px; line-height: 1.2; letter-spacing: -.02em; }
+  .hero p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .hero .spacer { flex: 1 1 auto; }
+  .health {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 11px; border-radius: 999px;
+    border: 1px solid rgba(94,211,146,.28); background: var(--good-soft);
+    color: var(--good); font-size: 12px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+  .dot.good { background: var(--good); box-shadow: 0 0 0 3px rgba(94,211,146,.12); }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(240,182,74,.12); }
+  .dot.bad { background: var(--bad); box-shadow: 0 0 0 3px rgba(239,119,119,.12); }
+
+  /* 指标卡 */
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .metric {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 14px 15px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: linear-gradient(180deg, rgba(32,37,46,.55), rgba(22,26,33,.7));
+  }
+  .metric-head { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 11.5px; }
+  .metric-head svg { color: var(--muted); }
+  .metric-head .spacer { flex: 1 1 auto; }
+  .metric b { font-size: 24px; font-weight: 650; line-height: 1; letter-spacing: -.02em; }
+  .metric small { color: var(--faint); font-size: 11px; }
+  .metric .bar { height: 4px; border-radius: 2px; background: rgba(127,127,127,.18); overflow: hidden; }
+  .metric .bar i { display: block; height: 100%; background: var(--accent); }
+  .metric .bar i.warn { background: var(--warn); }
+
+  /* 面板 */
+  .panel {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel);
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px 10px;
+  }
+  .panel-icon {
+    width: 28px; height: 28px; border-radius: 8px;
+    display: grid; place-items: center; flex: 0 0 auto;
+    border: 1px solid var(--line); color: var(--muted); background: var(--bg-soft);
+  }
+  .panel-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .panel-title b { font-size: 14px; font-weight: 600; }
+  .panel-title span { color: var(--faint); font-size: 11.5px; }
+  .panel-head .spacer { flex: 1 1 auto; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 20px; padding: 0 8px; border-radius: 999px;
+    white-space: nowrap;
+    background: rgba(127,127,127,.13); color: var(--muted); font-size: 10.5px;
+  }
+  .badge.good { background: var(--good-soft); color: var(--good); }
+  .badge.bad { background: var(--bad-soft); color: #ffabab; }
+  .badge.accent { background: var(--accent-soft); color: var(--accent-2); }
+
+  /* 工具栏 */
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 0 16px 12px; flex-wrap: wrap; }
+  .search {
+    display: flex; align-items: center; gap: 7px;
+    flex: 1 1 220px; min-width: 160px; max-width: 360px;
+    height: 32px; padding: 0 10px;
+    border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-soft);
+    color: var(--faint);
+  }
+  .search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text); font-size: 12.5px; }
+  .search input::placeholder { color: var(--faint); }
+  select {
+    height: 32px; padding: 0 26px 0 9px; border-radius: 8px;
+    border: 1px solid var(--line-strong); background: var(--bg-soft); color: var(--text);
+    font-size: 12.5px; outline: none;
+  }
+  .toolbar .spacer { flex: 1 1 auto; }
+  .switch { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
+  .switch input { display: none; }
+  .switch i {
+    width: 30px; height: 17px; border-radius: 999px; background: #303845;
+    position: relative; transition: background .15s;
+  }
+  .switch i::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px;
+    border-radius: 50%; background: #9aa5b5; transition: transform .15s, background .15s;
+  }
+  .switch input:checked + i { background: rgba(91,136,255,.6); }
+  .switch input:checked + i::after { transform: translateX(13px); background: #fff; }
+
+  /* 会话表 */
+  .table { width: 100%; border-collapse: collapse; }
+  .table th {
+    padding: 7px 10px; text-align: left; white-space: nowrap;
+    color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    background: rgba(0,0,0,.12);
+  }
+  .table td { padding: 8px 10px; border-bottom: 1px solid rgba(38,44,54,.6); font-size: 12.5px; vertical-align: middle; white-space: nowrap; }
+  .table tbody tr:hover td { background: rgba(255,255,255,.02); }
+  .table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .table .muted { color: var(--faint); }
+  .sid { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .sid code { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+  .copy {
+    display: inline-grid; place-items: center;
+    width: 22px; height: 22px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--faint); flex: 0 0 auto;
+  }
+  .copy:hover { color: var(--text); background: rgba(255,255,255,.06); }
+
+  .group-row td { background: rgba(20,24,31,.72); }
+  .group-row td > div { display: flex; align-items: center; gap: 9px; }
+  .group-row b { font-size: 12.5px; font-weight: 600; }
+  .group-row .mono { color: var(--faint); font-size: 11px; }
+  .chev {
+    display: grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: 5px;
+    background: transparent; color: var(--muted); transition: transform .15s;
+  }
+  .chev.closed { transform: rotate(-90deg); }
+  .group-row .spacer { flex: 1 1 auto; }
+
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 34px 16px; color: var(--faint); }
+  .empty b { color: var(--muted); font-size: 13px; }
+
+  /* 底部两栏 */
+  .bottom-grid { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+  @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) { .metrics { grid-template-columns: 1fr; } .page { padding: 16px 14px 60px; } .hero h2 { font-size: 22px; } .brand h1 { font-size: 14px; } }
+
+  /* 存储 */
+  .storage-body { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .storage-numbers { display: flex; align-items: baseline; gap: 6px; }
+  .storage-numbers b { font-size: 24px; font-weight: 650; letter-spacing: -.02em; }
+  .storage-numbers span { color: var(--faint); font-size: 11.5px; }
+  .bar { height: 6px; border-radius: 3px; background: rgba(127,127,127,.16); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: linear-gradient(90deg, #5b88ff, #7ba4ff); }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .preset {
+    height: 26px; padding: 0 9px; border-radius: 7px;
+    border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11.5px;
+  }
+  .preset:hover { color: var(--text); border-color: var(--line-strong); }
+  .preset.on { border-color: rgba(91,136,255,.5); background: var(--accent-soft); color: var(--accent-2); }
+  .quota-row { display: flex; align-items: center; gap: 8px; }
+  .quota-row input {
+    width: 100%; min-width: 0; height: 32px; padding: 0 9px;
+    border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-soft); color: var(--text);
+    outline: none; font-size: 12.5px;
+  }
+  .quota-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  /* 设备 */
+  .devices { display: flex; flex-direction: column; }
+  .device {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 16px; border-top: 1px solid var(--line);
+  }
+  .device:first-child { border-top: 0; }
+  .device-main { display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto; min-width: 0; }
+  .device-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .device-name b { font-size: 13px; font-weight: 600; }
+  .device-id { display: flex; align-items: center; gap: 4px; color: var(--faint); font-size: 11px; }
+  .device-meta { display: flex; gap: 12px; color: var(--faint); font-size: 11px; flex-wrap: wrap; }
+  .device-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+  .inline-edit { display: flex; align-items: center; gap: 6px; }
+  .inline-edit input {
+    height: 28px; width: 160px; padding: 0 8px; border-radius: 7px;
+    border: 1px solid var(--accent); background: var(--bg-soft); color: var(--text); outline: none; font-size: 12.5px;
+  }
+
+  /* 弹层 */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 40;
+    display: grid; place-items: center; padding: 20px;
+    background: rgba(6, 8, 12, .62); backdrop-filter: blur(3px);
+  }
+  .modal {
+    width: min(460px, 100%);
+    border: 1px solid var(--line-strong); border-radius: 16px;
+    background: linear-gradient(180deg, #1d222b, #171b22);
+    box-shadow: 0 24px 70px rgba(0,0,0,.42);
+    padding: 20px;
+  }
+  .modal h3 { margin: 0 0 6px; font-size: 15px; }
+  .modal p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .modal .field { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+  .modal .field label { color: var(--muted); font-size: 12px; }
+  .modal .field input {
+    height: 34px; padding: 0 10px; border-radius: 8px; outline: none;
+    border: 1px solid var(--line-strong); background: var(--bg-soft); color: var(--text); font-size: 12.5px;
+  }
+  .modal .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .token {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-top: 12px; padding: 10px 12px; border-radius: 9px;
+    border: 1px dashed var(--line-strong); background: rgba(0,0,0,.16);
+    color: var(--muted); font-size: 12px; word-break: break-all;
+  }
+
+  /* toast */
+  .toast-wrap { position: fixed; right: 18px; bottom: 18px; z-index: 50; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    padding: 9px 13px; border-radius: 9px; font-size: 12.5px;
+    border: 1px solid var(--line-strong); background: #1b2029; color: var(--text);
+    box-shadow: 0 10px 26px rgba(0,0,0,.32);
+    animation: toast-in .16s ease-out both;
+  }
+  .toast.bad { border-color: rgba(239,119,119,.4); color: #ffb7b7; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+
+  .footer-note { margin: 26px 4px 0; color: var(--faint); font-size: 11px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .footer-note b { color: var(--muted); font-weight: 500; }
+
+  /* 单行元素统一禁止换行，避免窄列被压成竖排。 */
+  .topbar, .brand, .brand h1, .brand .crumb, .ver, .badge, .btn, .health,
+  .eyebrow, .kicker, .hero h2, .metric-head, .metric b, .metric small,
+  .panel-title b, .panel-head > .badge, .device-name, .device-id, .device-meta,
+  .storage-numbers, .preset, .quota-row, .footer-note span { white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" id="brandMark"></span>
+      <h1>dsh-session-cloudsync</h1>
+      <span class="crumb">管理台</span>
+    </div>
+    <span class="ver"><i></i>v0.1.3 · protocol 3</span>
+    <span class="spacer"></span>
+    <span class="badge" id="updatedBadge">更新于 刚刚</span>
+    <button class="btn secondary" id="refreshBtn" type="button"></button>
+    <button class="btn ghost" type="button" id="logoutBtn">退出</button>
+  </header>
+
+  <section class="hero">
+    <div>
+      <div class="kicker">OVERVIEW</div>
+      <h2>同步概览</h2>
+      <p>自部署节点、设备与会话视图；设备可签发、改名、吊销。</p>
+    </div>
+    <span class="spacer"></span>
+    <span class="health"><i class="dot good"></i>服务正常</span>
+  </section>
+
+  <div class="metrics" id="metrics"></div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <span class="panel-icon" id="sessionsIcon"></span>
+      <div class="panel-title">
+        <b>会话</b>
+        <span>按服务端更新时间倒序；只展示元数据，内容端到端加密。</span>
+      </div>
+      <span class="spacer"></span>
+      <span class="badge" id="sessionBadge">0 个</span>
+    </div>
+    <div class="toolbar">
+      <label class="search">
+        <span id="searchIcon"></span>
+        <input id="sessionSearch" type="search" placeholder="搜索 session id 或工作区…" autocomplete="off">
+      </label>
+      <select id="sessionFilter" aria-label="筛选会话">
+        <option value="all">全部状态</option>
+        <option value="active">正常</option>
+        <option value="deleted">已删除</option>
+      </select>
+      <span class="spacer"></span>
+      <label class="switch"><input id="autoRefresh" type="checkbox" checked><i></i>自动刷新 15s</label>
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th style="width: 38%">会话</th>
+          <th>格式</th>
+          <th class="num">批次</th>
+          <th class="num">末序号</th>
+          <th class="num">大小</th>
+          <th>更新时间</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody id="sessionBody"></tbody>
+    </table>
+  </section>
+
+  <div class="bottom-grid">
+    <section class="panel">
+      <div class="panel-head">
+        <span class="panel-icon" id="storageIcon"></span>
+        <div class="panel-title">
+          <b>存储</b>
+          <span>按唯一密文字节计算。</span>
+        </div>
+        <span class="spacer"></span>
+        <span class="badge" id="quotaBadge">0%</span>
+      </div>
+      <div class="storage-body">
+        <div class="storage-numbers"><b id="usedText">0 B</b><span id="quotaText">/ 10.00 GiB</span></div>
+        <div class="bar"><i id="usedBar" style="width:0%"></i></div>
+        <div class="presets" id="presets">
+          <button class="preset" data-gb="1" type="button">1 GiB</button>
+          <button class="preset" data-gb="5" type="button">5 GiB</button>
+          <button class="preset on" data-gb="10" type="button">10 GiB</button>
+          <button class="preset" data-gb="50" type="button">50 GiB</button>
+        </div>
+        <div class="quota-row">
+          <input id="quotaInput" type="number" min="1" step="1" value="10" aria-label="配额 GiB">
+          <span style="color:var(--faint);font-size:12px">GiB</span>
+          <button class="btn small" id="saveQuota" type="button">保存</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <span class="panel-icon" id="devicesIcon"></span>
+        <div class="panel-title">
+          <b>设备</b>
+          <span>每台设备一个 token；token 只显示一次。</span>
+        </div>
+        <span class="spacer"></span>
+        <span class="badge" id="deviceBadge">0 台</span>
+      </div>
+      <div class="toolbar" style="padding-top:0">
+        <input id="newDeviceLabel" placeholder="新设备标签，例如 laptop" aria-label="新设备标签"
+          style="flex:1 1 180px;min-width:0;height:32px;padding:0 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--bg-soft);color:var(--text);outline:none;font-size:12.5px">
+        <button class="btn small" id="createDevice" type="button">签发</button>
+      </div>
+      <div class="devices" id="deviceList"></div>
+    </section>
+  </div>
+
+  <p class="footer-note">
+    <span><b>说明</b>：这是独立原型，仅使用模拟数据，不会请求真实服务端。</span>
+    <span>刷新会重新生成更新时间；改名、吊销、签发、配额都可以操作。</span>
+  </p>
+</div>
+
+<!-- 吊销确认 -->
+<div class="modal-backdrop" id="revokeModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="revokeTitle">
+    <h3 id="revokeTitle">吊销设备</h3>
+    <p id="revokeText"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" type="button" data-close="revokeModal">取消</button>
+      <button class="btn" type="button" id="confirmRevoke" style="background:#b84848">确认吊销</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新设备 token -->
+<div class="modal-backdrop" id="tokenModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tokenTitle">
+    <h3 id="tokenTitle">设备已创建</h3>
+    <p>关闭后无法再次查看，请现在保存。</p>
+    <div class="token"><code id="tokenText"></code><button class="btn small secondary" id="copyToken" type="button">复制</button></div>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-close="tokenModal">我已保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+  (function () {
+    // ---------- 图标 ----------
+    const ICONS = {
+      logo: ['M2 4h12v3H2zM2 9h12v3H2z'],
+      server: ['M3 3.5h10v3.5H3z', 'M3 9h10v3.5H3z', 'M5 5.2h.01', 'M5 10.7h.01'],
+      devices: ['M2.5 3.5h8v6h-8z', 'M11.5 7h2v5.5h-2z', 'M4.5 12h4'],
+      sessions: ['M2 3.5h12v7H7l-3 2.5v-2.5H2z'],
+      storage: ['M3 3.5h10v3H3z', 'M3 6.5h10v3H3z', 'M3 9.5h10v3H3z'],
+      refresh: ['M13 8a5 5 0 1 1-1.5-3.5', 'M13 3.5V6h-2.5'],
+      search: ['M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z', 'M10.5 10.5L14 14'],
+      copy: ['M6 5V3.5A1.5 1.5 0 0 1 7.5 2h5A1.5 1.5 0 0 1 14 3.5v5A1.5 1.5 0 0 1 12.5 10H11', 'M2 6.5A1.5 1.5 0 0 1 3.5 5h5A1.5 1.5 0 0 1 10 6.5v5A1.5 1.5 0 0 1 8.5 13h-5A1.5 1.5 0 0 1 2 11.5z'],
+      pencil: ['M11 2.5l2.5 2.5-8 8H3v-2.5z'],
+      trash: ['M3 4h10', 'M5.5 4V2.5h5V4', 'M4.5 4l.6 9.5h5.8L11.5 4'],
+      check: ['M3.5 8.5l2.5 2.5 6-6'],
+      chevron: ['M4 6l4 4 4-4'],
+    }
+    function icon(name, size = 16) {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      svg.setAttribute('viewBox', '0 0 16 16')
+      svg.setAttribute('width', String(size))
+      svg.setAttribute('height', String(size))
+      svg.setAttribute('fill', 'none')
+      svg.setAttribute('aria-hidden', 'true')
+      for (const d of ICONS[name] || []) {
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+        path.setAttribute('d', d)
+        path.setAttribute('stroke', 'currentColor')
+        path.setAttribute('stroke-width', '1.5')
+        path.setAttribute('stroke-linecap', 'round')
+        path.setAttribute('stroke-linejoin', 'round')
+        svg.append(path)
+      }
+      return svg
+    }
+
+    // ---------- 模拟数据 ----------
+    const now = Date.now()
+    const GiB = 1024 ** 3
+    const sessions = [
+      { id: 'session-6bf429f5-69a5-4c19-9a72-a1d08cba24ea', workspace: 'git-repo', key: 'QEzrf98mpwHhpCESJk5-S3Tg', format: 4, batches: 21392, seq: 35115, bytes: 27.4 * 1024 * 1024, at: now - 2 * 60 * 1000 },
+      { id: 'session-17e8919e-bd59-45d0-b615-fabd985b5814', workspace: 'git-repo', key: 'QEzrf98mpwHhpCESJk5-S3Tg', format: 4, batches: 24410, seq: 43940, bytes: 31.9 * 1024 * 1024, at: now - 26 * 60 * 1000 },
+      { id: 'session-8a351186-fde2-4505-bf0c-73af4e92f6f0', workspace: 'git-repo', key: 'QEzrf98mpwHhpCESJk5-S3Tg', format: 4, batches: 412, seq: 411, bytes: 2.1 * 1024 * 1024, at: now - 3 * 3600 * 1000 },
+      { id: 'session-c22f6c5b-72b7-4e4b-9a4a-8a32d4d0f9d2', workspace: '设计笔记', key: 'Wq3jY7mQp1sVx2nB8kL5dA', format: 4, batches: 9093, seq: 16112, bytes: 18.2 * 1024 * 1024, at: now - 26 * 3600 * 1000 },
+      { id: 'session-b0e0981d-7936-467f-a28c-30152c37d6f8', workspace: '设计笔记', key: 'Wq3jY7mQp1sVx2nB8kL5dA', format: 4, batches: 6759, seq: 69586, bytes: 48.1 * 1024 * 1024, at: now - 2 * 86400 * 1000 },
+      { id: 'session-0ecf3ecd-08c3-4443-a217-6eb228ccf335', workspace: '旧项目', key: null, format: 3, batches: 244, seq: 243, bytes: 5.6 * 1024 * 1024, at: now - 9 * 86400 * 1000, deletedAt: now - 86400 * 1000 },
+    ]
+    let state = {
+      devices: [
+        { id: '618dca3e922ebc10', label: 'laptop-xfy', createdAt: now - 12 * 86400 * 1000, lastSeenAt: now - 2 * 60 * 1000 },
+        { id: 'a81da457262825a5', label: 'desktop', createdAt: now - 5 * 86400 * 1000, lastSeenAt: now - 20 * 3600 * 1000 },
+        { id: '01c0c208ba9aed7e', label: 'media-pc', createdAt: now - 2 * 86400 * 1000, lastSeenAt: null },
+      ],
+      quota: 10 * GiB,
+      used: 3.4 * GiB,
+      autoRefresh: true,
+      search: '',
+      filter: 'all',
+      collapsed: new Set(),
+      editing: null,
+    }
+    let revokeTarget = null
+    let autoTimer = null
+    let updatedAt = now
+
+    // ---------- 工具 ----------
+    const $ = (id) => document.getElementById(id)
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag)
+      if (className) node.className = className
+      if (text !== undefined) node.textContent = text
+      return node
+    }
+    function formatBytes(bytes) {
+      if (bytes < 1024) return bytes + ' B'
+      if (bytes < 1024 ** 2) return (bytes / 1024).toFixed(1) + ' KiB'
+      if (bytes < GiB) return (bytes / 1024 ** 2).toFixed(1) + ' MiB'
+      return (bytes / GiB).toFixed(2) + ' GiB'
+    }
+    function relative(ts) {
+      if (ts === null || ts === undefined) return '从未'
+      const diff = Date.now() - ts
+      if (diff < 60 * 1000) return '刚刚'
+      if (diff < 3600 * 1000) return Math.floor(diff / 60000) + ' 分钟前'
+      if (diff < 86400 * 1000) return Math.floor(diff / 3600000) + ' 小时前'
+      return Math.floor(diff / 86400000) + ' 天前'
+    }
+    function shortId(id) { return id.length > 28 ? id.slice(0, 26) + '…' : id }
+    function toast(text, bad = false) {
+      const node = el('div', 'toast' + (bad ? ' bad' : ''), text)
+      $('toasts').append(node)
+      setTimeout(() => node.remove(), 2600)
+    }
+    function copy(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => toast('已复制'), () => toast('复制失败', true))
+      } else {
+        const input = el('input')
+        input.value = text
+        document.body.append(input)
+        input.select()
+        try { document.execCommand('copy'); toast('已复制') } catch { toast('复制失败', true) }
+        input.remove()
+      }
+    }
+
+    // ---------- 指标 ----------
+    function renderMetrics() {
+      const deleted = sessions.filter((session) => session.deletedAt !== undefined).length
+      const active = sessions.length - deleted
+      const percent = Math.min(100, Math.round(state.used / state.quota * 1000) / 10)
+      const cards = [
+        { icon: 'devices', label: '设备', value: state.devices.length, hint: '已签发 token' },
+        { icon: 'sessions', label: '会话', value: active, hint: deleted > 0 ? deleted + ' 个墓碑' : '没有墓碑' },
+        { icon: 'storage', label: '已用存储', value: formatBytes(state.used), hint: percent + '% · 配额 ' + formatBytes(state.quota), bar: percent },
+      ]
+      const box = $('metrics')
+      box.replaceChildren(...cards.map((card) => {
+        const node = el('div', 'metric')
+        const head = el('div', 'metric-head')
+        head.append(icon(card.icon), el('span', null, card.label), el('span', 'spacer'))
+        const value = el('b', null, String(card.value))
+        const hint = el('small', null, card.hint)
+        node.append(head, value, hint)
+        if (card.bar !== undefined) {
+          const bar = el('div', 'bar')
+          const fill = el('i', card.bar >= 90 ? 'warn' : '')
+          fill.style.width = card.bar + '%'
+          bar.append(fill)
+          node.append(bar)
+        }
+        return node
+      }))
+      $('updatedBadge').textContent = '更新于 ' + relative(updatedAt)
+    }
+
+    // ---------- 会话 ----------
+    function visibleSessions() {
+      const query = state.search.trim().toLowerCase()
+      return sessions.filter((session) => {
+        if (state.filter === 'active' && session.deletedAt !== undefined) return false
+        if (state.filter === 'deleted' && session.deletedAt === undefined) return false
+        if (query && !session.id.toLowerCase().includes(query) && !session.workspace.toLowerCase().includes(query)) return false
+        return true
+      })
+    }
+    function sessionRow(session) {
+      const row = el('tr')
+      const idCell = el('td')
+      const sid = el('div', 'sid')
+      sid.append(el('code', null, session.id))
+      const copyBtn = el('button', 'copy')
+      copyBtn.type = 'button'
+      copyBtn.title = '复制 session id'
+      copyBtn.append(icon('copy', 13))
+      copyBtn.onclick = () => copy(session.id)
+      sid.append(copyBtn)
+      idCell.append(sid)
+      const format = el('td', 'muted', 'v' + session.format)
+      const batches = el('td', 'num', String(session.batches))
+      const seq = el('td', 'num', String(session.seq))
+      const size = el('td', 'num', formatBytes(session.bytes))
+      const updated = el('td', 'muted', relative(session.at))
+      const status = el('td')
+      status.append(el('span', 'badge' + (session.deletedAt === undefined ? ' good' : ' bad'), session.deletedAt === undefined ? '正常' : '已删除'))
+      row.append(idCell, format, batches, seq, size, updated, status)
+      return row
+    }
+    function renderSessions() {
+      const list = visibleSessions()
+      const groups = new Map()
+      for (const session of list) {
+        const key = session.workspace + '\u0000' + (session.key || '')
+        const group = groups.get(key) || { workspace: session.workspace, key: session.key, items: [] }
+        group.items.push(session)
+        groups.set(key, group)
+      }
+      const body = $('sessionBody')
+      body.replaceChildren()
+      if (list.length === 0) {
+        const row = el('tr')
+        const cell = el('td')
+        cell.colSpan = 7
+        const empty = el('div', 'empty')
+        empty.append(icon('sessions', 22), el('b', null, '没有匹配的会话'), el('span', null, '换一个关键词或筛选条件试试。'))
+        cell.append(empty)
+        row.append(cell)
+        body.append(row)
+      } else {
+        for (const group of groups.values()) {
+          const collapsed = state.collapsed.has(group.workspace + '\u0000' + (group.key || ''))
+          const groupRow = el('tr', 'group-row')
+          const groupCell = el('td')
+          groupCell.colSpan = 7
+          const inner = el('div')
+          const chev = el('button', 'chev' + (collapsed ? ' closed' : ''))
+          chev.type = 'button'
+          chev.title = collapsed ? '展开' : '折叠'
+          chev.append(icon('chevron', 13))
+          chev.onclick = () => {
+            const key = group.workspace + '\u0000' + (group.key || '')
+            if (state.collapsed.has(key)) state.collapsed.delete(key)
+            else state.collapsed.add(key)
+            renderSessions()
+          }
+          const totalBytes = group.items.reduce((sum, session) => sum + session.bytes, 0)
+          inner.append(chev, el('b', null, group.workspace), el('span', 'mono', group.key ? shortId(group.key) : '未归属'), el('span', 'spacer'), el('span', 'badge', group.items.length + ' 个 · ' + formatBytes(totalBytes)))
+          groupCell.append(inner)
+          groupRow.append(groupCell)
+          body.append(groupRow)
+          if (!collapsed) for (const session of group.items) body.append(sessionRow(session))
+        }
+      }
+      $('sessionBadge').textContent = (list.length === sessions.length ? list.length : list.length + ' / ' + sessions.length) + ' 个'
+    }
+
+    // ---------- 设备 ----------
+    function renderDevices() {
+      const list = $('deviceList')
+      list.replaceChildren()
+      $('deviceBadge').textContent = state.devices.length + ' 台'
+      if (state.devices.length === 0) {
+        const empty = el('div', 'empty')
+        empty.append(icon('devices', 22), el('b', null, '还没有设备'), el('span', null, '签发一个 token，把 DSH 插件接到这台服务器。'))
+        list.append(empty)
+        return
+      }
+      for (const device of state.devices) {
+        const row = el('div', 'device')
+        const main = el('div', 'device-main')
+        const name = el('div', 'device-name')
+        name.append(el('i', 'dot ' + (device.lastSeenAt && Date.now() - device.lastSeenAt < 5 * 60 * 1000 ? 'good' : 'warn')))
+        if (state.editing === device.id) {
+          const form = el('div', 'inline-edit')
+          const input = el('input')
+          input.value = device.label
+          input.maxLength = 64
+          const save = el('button', 'btn small', '保存')
+          save.type = 'button'
+          save.onclick = () => {
+            const label = input.value.trim()
+            if (label === '') { toast('设备名不能为空', true); return }
+            device.label = label
+            state.editing = null
+            renderDevices()
+            toast('设备已改名')
+          }
+          const cancel = el('button', 'btn small ghost', '取消')
+          cancel.type = 'button'
+          cancel.onclick = () => { state.editing = null; renderDevices() }
+          form.append(input, save, cancel)
+          name.append(form)
+          input.addEventListener('keydown', (event) => { if (event.key === 'Enter') save.click(); if (event.key === 'Escape') cancel.click() })
+          setTimeout(() => input.focus(), 0)
+        } else {
+          name.append(el('b', null, device.label || 'device'), el('span', 'badge', '设备'))
+        }
+        const idLine = el('div', 'device-id')
+        idLine.append(el('code', null, device.id), (() => {
+          const btn = el('button', 'copy')
+          btn.type = 'button'
+          btn.title = '复制设备 ID'
+          btn.append(icon('copy', 12))
+          btn.onclick = () => copy(device.id)
+          return btn
+        })())
+        const meta = el('div', 'device-meta')
+        meta.append(el('span', null, '创建 ' + relative(device.createdAt)), el('span', null, '最后在线 ' + relative(device.lastSeenAt)))
+        main.append(name, idLine, meta)
+        const actions = el('div', 'device-actions')
+        const rename = el('button', 'btn small secondary')
+        rename.type = 'button'
+        rename.append(icon('pencil', 12), el('span', null, '改名'))
+        rename.onclick = () => { state.editing = device.id; renderDevices() }
+        const revoke = el('button', 'btn small ghost')
+        revoke.type = 'button'
+        revoke.style.color = '#ff9c9c'
+        revoke.append(el('span', null, '吊销'))
+        revoke.onclick = () => {
+          revokeTarget = device.id
+          $('revokeText').textContent = '吊销「' + (device.label || 'device') + '」后，它的 token 立即失效；该设备将无法再推送或拉取。'
+          $('revokeModal').hidden = false
+        }
+        actions.append(rename, revoke)
+        row.append(main, actions)
+        list.append(row)
+      }
+    }
+
+    // ---------- 存储 ----------
+    function renderStorage() {
+      const percent = Math.min(100, Math.round(state.used / state.quota * 1000) / 10)
+      $('usedText').textContent = formatBytes(state.used)
+      $('quotaText').textContent = '/ ' + formatBytes(state.quota)
+      $('usedBar').style.width = percent + '%'
+      $('quotaBadge').textContent = percent + '%'
+      $('quotaInput').value = String(Math.max(1, Math.round(state.quota / GiB)))
+      for (const button of $('presets').querySelectorAll('.preset')) {
+        button.classList.toggle('on', Number(button.dataset.gb) * GiB === state.quota)
+      }
+    }
+
+    // ---------- 渲染 ----------
+    function renderAll() {
+      renderMetrics()
+      renderSessions()
+      renderDevices()
+      renderStorage()
+    }
+
+    // ---------- 事件 ----------
+    $('brandMark').append(icon('logo', 20))
+    $('sessionsIcon').append(icon('sessions', 15))
+    $('storageIcon').append(icon('storage', 15))
+    $('devicesIcon').append(icon('devices', 15))
+    $('searchIcon').append(icon('search', 14))
+    $('refreshBtn').append(icon('refresh', 14), el('span', null, '刷新'))
+    $('refreshBtn').onclick = () => {
+      const svg = $('refreshBtn').querySelector('svg')
+      svg.classList.add('spinner')
+      setTimeout(() => {
+        svg.classList.remove('spinner')
+        updatedAt = Date.now()
+        renderMetrics()
+        toast('已刷新')
+      }, 450)
+    }
+    $('logoutBtn').onclick = () => toast('原型：退出登录')
+    $('sessionSearch').addEventListener('input', (event) => { state.search = event.target.value; renderSessions() })
+    $('sessionFilter').addEventListener('change', (event) => { state.filter = event.target.value; renderSessions() })
+    $('autoRefresh').addEventListener('change', (event) => {
+      state.autoRefresh = event.target.checked
+      scheduleAuto()
+    })
+    function scheduleAuto() {
+      if (autoTimer !== null) { clearInterval(autoTimer); autoTimer = null }
+      if (!state.autoRefresh) return
+      autoTimer = setInterval(() => {
+        updatedAt = Date.now()
+        state.revision += 1
+        renderMetrics()
+      }, 15000)
+    }
+    $('presets').addEventListener('click', (event) => {
+      const button = event.target.closest('.preset')
+      if (!button) return
+      state.quota = Number(button.dataset.gb) * GiB
+      renderStorage()
+    })
+    $('saveQuota').onclick = () => {
+      const gb = Number($('quotaInput').value)
+      if (!Number.isFinite(gb) || gb < 1) { toast('配额至少 1 GiB', true); return }
+      state.quota = Math.round(gb) * GiB
+      renderStorage()
+      renderMetrics()
+      toast('配额已保存')
+    }
+    $('createDevice').onclick = () => {
+      const label = $('newDeviceLabel').value.trim() || 'device'
+      const token = Array.from({ length: 43 }, (_, index) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[(index * 7 + label.length) % 64]).join('')
+      state.devices.unshift({ id: Math.random().toString(16).slice(2, 18), label, createdAt: Date.now(), lastSeenAt: null })
+      $('newDeviceLabel').value = ''
+      $('tokenText').textContent = token
+      $('tokenModal').hidden = false
+      renderAll()
+    }
+    $('copyToken').onclick = () => copy($('tokenText').textContent)
+    document.addEventListener('click', (event) => {
+      const target = event.target.closest('[data-close]')
+      if (target) {
+        const id = target.dataset.close
+        if (id === 'revokeModal') revokeTarget = null
+        $(id).hidden = true
+      }
+      if (event.target.id === 'revokeModal') { revokeTarget = null; $('revokeModal').hidden = true }
+      if (event.target.id === 'tokenModal') $('tokenModal').hidden = true
+    })
+    $('confirmRevoke').onclick = () => {
+      state.devices = state.devices.filter((device) => device.id !== revokeTarget)
+      revokeTarget = null
+      $('revokeModal').hidden = true
+      renderAll()
+      toast('设备已吊销')
+    }
+
+    renderAll()
+    scheduleAuto()
+  })()
+</script>
+</body>
+</html>
