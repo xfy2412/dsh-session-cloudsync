@@ -1,8 +1,8 @@
 # 协议（v2-only）
 
-> 状态（2026-11-10）：服务端 **0.1.2** v2-only；插件 **0.1.4** 走 v2 路径、changes cursor、
-> 幂等 append、批量 blob 与 zstd 写入。
+> 状态（2026-11-11）：服务端 v2-only；插件走 v2 路径、幂等 append、批量 blob 与 zstd 写入。
 > `PROTOCOL_VERSION = 3`，设备 API 只有 `/v2/*`，旧的 `/v1/*` 已全部移除。
+> 变更流 `/v2/changes` 已从服务端移除；历史设计见 [CURSOR-HISTORY](../plans/CURSOR-HISTORY.md)。
 > 旧插件请求任何 `/v1/*` 都会得到 404；这是 0.1.0 的破坏性变更。
 >
 > 管理台（`/admin/*`）和初始化向导（`/setup/*`）不属于设备 API，仍然保留。
@@ -41,7 +41,6 @@ GET /health
     "schemaVersion": 4,
     "capabilities": [
       "session-summary",
-      "changes-cursor",
       "conditional-get",
       "idempotent-append",
       "manifest-digest",
@@ -84,7 +83,6 @@ GET /health
 | POST | `/v2/sync/lease` | 申请/续租全局单写者租约 |
 | DELETE | `/v2/sync/lease` | 释放全局租约 |
 | GET | `/v2/sessions` | 全量会话快照（keyset 分页） |
-| GET | `/v2/changes` | 会话变更 + 墓碑增量流 |
 | GET | `/v2/sessions/:id/summary` | 会话摘要（ETag） |
 | GET | `/v2/sessions/:id/manifest` | 完整 manifest |
 | GET | `/v2/sessions/:id/batches` | 批次引用分页 |
@@ -95,7 +93,7 @@ GET /health
 | GET | `/v2/vault/cursor` | Vault 记录 cursor |
 | GET | `/v2/vault/stream/:writer` | 某 writer 的 Vault 记录索引 |
 
-## 会话快照与变更流
+## 会话快照
 
 ### 全量快照
 
@@ -138,28 +136,10 @@ GET /v2/sessions?cursor=<opaque>&limit=200
 - `compression`：`none` / `zstd` / `mixed`。
 - `storedBytes`：本会话所有封帧的密文字节总和。
 
-### 变更流
+- 已删除会话不进入快照；客户端以快照为准，不再有独立的"变更流"。
 
-```http
-GET /v2/changes?cursor=<opaque>&limit=200
-```
-
-`value` 内容：
-
-```json
-{
-  "sessions": [ /* 同快照摘要，只含未删除会话 */ ],
-  "tombstones": [
-    { "sessionId": "…", "createdAt": 1790000000000, "deletedAt": 1790000000000 }
-  ],
-  "nextCursor": "opaque",
-  "hasMore": false
-}
-```
-
-- 会话和墓碑各自推进游标；墓碑使用 `(deletedAt, sessionId, createdAt)` 处理同毫秒删除。
-- 第一页不传 `cursor`；后续必须原样带回 `nextCursor`。
-- 已删除会话通过 `tombstones` 传达，不再出现在 `sessions`。
+> 变更流 `/v2/changes` 与 revision/墓碑游标已在服务端移除；历史设计与失败原因见
+> [CURSOR-HISTORY](../plans/CURSOR-HISTORY.md)。
 
 ### 摘要与条件请求
 

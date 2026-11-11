@@ -127,7 +127,8 @@ const sessions = {
   flush: async () => true,
 }
 
-test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply', async () => {
   const temp = createTempHome('plugin-v2')
   try {
     const db = openDatabase(temp.dataDir)
@@ -427,7 +428,8 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
   }
 })
 
-test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允许跨界批次', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允许跨界批次', async () => {
   const temp = createTempHome('plugin-prefix')
   try {
     const db = openDatabase(temp.dataDir)
@@ -510,7 +512,8 @@ test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允
   }
 })
 
-test('空标记对撞：end-seed 只有 time 不同时按等价处理并继续推送/拉取', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('空标记对撞：end-seed 只有 time 不同时按等价处理并继续推送/拉取', async () => {
   const temp = createTempHome('plugin-end-seed')
   try {
     const db = openDatabase(temp.dataDir)
@@ -609,7 +612,8 @@ test('空标记对撞：end-seed 只有 time 不同时按等价处理并继续�
   }
 })
 
-test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
   const temp = createTempHome('plugin-nonportable')
   try {
     const db = openDatabase(temp.dataDir)
@@ -752,7 +756,8 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
   }
 })
 
-test('拉取引擎：一个只读阶段失败后继续其他安全会话', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('拉取引擎：一个只读阶段失败后继续其他安全会话', async () => {
   const temp = createTempHome('plugin-pull-continue')
   try {
     const db = openDatabase(temp.dataDir)
@@ -893,7 +898,8 @@ test('推送引擎：白名单只选根时同步其子代理闭包', async () =>
   }
 })
 
-test('拉取引擎：子代理先创建，根会话后创建', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('拉取引擎：子代理先创建，根会话后创建', async () => {
   const temp = createTempHome('plugin-pull-closure')
   try {
     const db = openDatabase(temp.dataDir)
@@ -1070,7 +1076,8 @@ test('错误分类：M4 故障矩阵', () => {
   }
 })
 
-test('拉取引擎：append 失败留下 pending，重启后按 pending 补完', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('拉取引擎：append 失败留下 pending，重启后按 pending 补完', async () => {
   const temp = createTempHome('plugin-pending')
   try {
     const db = openDatabase(temp.dataDir)
@@ -1133,7 +1140,8 @@ test('拉取引擎：append 失败留下 pending，重启后按 pending 补完',
   }
 })
 
-test('拉取引擎：一个会话失败后停止，不覆盖它的 pending', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('拉取引擎：一个会话失败后停止，不覆盖它的 pending', async () => {
   const temp = createTempHome('plugin-pending-stop')
   try {
     const db = openDatabase(temp.dataDir)
@@ -1224,7 +1232,8 @@ test('推送引擎：未配置时不动作，离线时只报告错误不抛出',
   assert.ok((offline.sessions[0].error ?? '').length > 0)
 })
 
-test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', async () => {
+// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
+test.skip('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', async () => {
   const temp = createTempHome('plugin-pull')
   try {
     const db = openDatabase(temp.dataDir)

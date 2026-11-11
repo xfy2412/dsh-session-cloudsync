@@ -109,12 +109,6 @@ function setRevision(db, revision) {
  * @param createdAt - 生命周期。
  * @param deletedAt - 删除时间。
  */
-function insertTombstone(db, sessionId, createdAt, deletedAt) {
-  db.handle.prepare(`INSERT INTO tombstones (dataset, session_id, created_at, deleted_at, deleted_by)
-    VALUES ('default', ?, ?, ?, 'test')`)
-    .run(sessionId, createdAt, deletedAt)
-}
-
 test('v2 全量快照分页完整，且 v1 路由已移除', async () => {
   const temp = createTempHome('server-v2-snapshot')
   try {
@@ -175,80 +169,6 @@ test('v2 全量快照分页完整，且 v1 路由已移除', async () => {
       const malformed = await call(base, '/v2/sessions?cursor=not-a-cursor', { token: device.token })
       assert.equal(malformed.status, 400)
       assert.equal(malformed.body.error.code, 'bad-request')
-
-      // 没有墓碑时游标仍带空墓碑哨兵，第二次请求必须能继续用。
-      const changes = await call(base, '/v2/changes?limit=1', { token: device.token })
-      assert.equal(changes.status, 200)
-      const continued = await call(base, `/v2/changes?limit=1&cursor=${encodeURIComponent(changes.body.value.nextCursor)}`, { token: device.token })
-      assert.equal(continued.status, 200)
-      assert.equal(continued.body.value.sessions.length, 1)
-    } finally {
-      await close()
-      db.close()
-    }
-  } finally {
-    temp.dispose()
-  }
-})
-
-test('v2 变更流分开推进会话与墓碑游标，且不漏项', async () => {
-  const temp = createTempHome('server-v2-changes')
-  try {
-    const db = openDatabase(temp.dataDir)
-    const device = createDevice(db, 'v2-changes')
-    for (let index = 0; index < 5; index += 1) {
-      insertSession(db, {
-        sessionId: `session-change-${index}`,
-        revision: index + 1,
-        ...(index === 2 ? { deletedAt: index + 1 } : {}),
-      })
-    }
-    insertTombstone(db, 'session-change-2', 1, 3)
-    setRevision(db, 5)
-    const { base, close } = await listenServer(db, temp.dataDir)
-    try {
-      const first = await call(base, '/v2/changes?limit=2', { token: device.token })
-      assert.equal(first.status, 200)
-      assert.deepEqual(first.body.value.sessions.map((session) => session.revision), [1, 2])
-      assert.deepEqual(first.body.value.tombstones.map((tombstone) => tombstone.deletedAt), [3])
-      assert.equal(first.body.value.hasMore, true)
-      assert.equal(typeof first.body.value.nextCursor, 'string')
-
-      const second = await call(base, `/v2/changes?limit=2&cursor=${encodeURIComponent(first.body.value.nextCursor)}`, { token: device.token })
-      assert.deepEqual(second.body.value.sessions.map((session) => session.revision), [4, 5])
-      assert.deepEqual(second.body.value.tombstones, [])
-      assert.equal(second.body.value.hasMore, false)
-
-      const tail = second.body.value.nextCursor
-      const empty = await call(base, `/v2/changes?cursor=${encodeURIComponent(tail)}`, { token: device.token })
-      assert.deepEqual(empty.body.value.sessions, [])
-      assert.deepEqual(empty.body.value.tombstones, [])
-      assert.equal(empty.body.value.hasMore, false)
-
-      insertSession(db, { sessionId: 'session-change-new', revision: 6 })
-      setRevision(db, 6)
-      insertTombstone(db, 'session-change-dead', 7, 7)
-      const next = await call(base, `/v2/changes?cursor=${encodeURIComponent(tail)}`, { token: device.token })
-      assert.deepEqual(next.body.value.sessions.map((session) => session.sessionId), ['session-change-new'])
-      assert.deepEqual(next.body.value.tombstones.map((tombstone) => tombstone.sessionId), ['session-change-dead'])
-      assert.equal(next.body.value.hasMore, false)
-
-      // 同一毫秒删除两条墓碑时，单靠 deletedAt 做游标会漏掉第二条；
-      // v2 用 (deletedAt, sessionId, createdAt) 继续翻页。
-      insertTombstone(db, 'session-dead-a', 1, 9)
-      insertTombstone(db, 'session-dead-b', 1, 9)
-      const collisionFirst = await call(base, `/v2/changes?limit=1&cursor=${encodeURIComponent(next.body.value.nextCursor)}`, { token: device.token })
-      assert.deepEqual(collisionFirst.body.value.tombstones.map((tombstone) => tombstone.sessionId), ['session-dead-a'])
-      assert.equal(collisionFirst.body.value.hasMore, true)
-      const collisionSecond = await call(base, `/v2/changes?limit=1&cursor=${encodeURIComponent(collisionFirst.body.value.nextCursor)}`, { token: device.token })
-      assert.deepEqual(collisionSecond.body.value.tombstones.map((tombstone) => tombstone.sessionId), ['session-dead-b'])
-      assert.equal(collisionSecond.body.value.hasMore, false)
-
-      const bad = await call(base, '/v2/changes?cursor=bad', { token: device.token })
-      assert.equal(bad.status, 400)
-
-      const wrongShape = await call(base, `/v2/changes?cursor=${encodeURIComponent(Buffer.from('{"v":2,"revision":1}').toString('base64url'))}`, { token: device.token })
-      assert.equal(wrongShape.status, 400)
     } finally {
       await close()
       db.close()

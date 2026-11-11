@@ -103,12 +103,6 @@ test('v2 服务端接受 zstd 封帧并保留压缩元数据', async () => {
       assert.equal(listed.compression, 'zstd')
       assert.equal(listed.storedBytes, header.bytes.length + batch.bytes.length)
 
-      const changes = await call(base, '/v2/changes', { token: device.token })
-      assert.equal(changes.status, 200)
-      const changed = changes.body.value.sessions.find((session) => session.sessionId === sessionId)
-      assert.equal(changed.compression, 'zstd')
-      assert.equal(changed.storedBytes, header.bytes.length + batch.bytes.length)
-
       const manifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(manifest.status, 200)
       const frames = manifest.body.value.manifest.batches

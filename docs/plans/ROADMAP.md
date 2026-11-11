@@ -11,7 +11,7 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 |---|---|---|
 | **M0** | 免重启 ingest 实验：外部写入会话 + `attachSession`，运行中的客户端能看到 | ✅ 已完成；结论见 [tests/m0/README.md](../../tests/m0/README.md) |
 | **M1** | 骨架 + `shared`：帧工具、封帧/加密、协议类型、真实会话夹具、官方校验器 | ✅ 基础完成；帧工具保留给本地导出/兼容，**同步链已改为事件批次** |
-| **M2** | 自部署服务端：设备 token、blob、manifest、租约、append、墓碑、会话快照/变更流、批量 blob、zstd 封帧、配额、管理台、首次初始化 | ✅ 服务端 0.1.2 已实现 v2-only（`PROTOCOL_VERSION=3`）；插件走 v2 路径、cursor、幂等 append、批量 blob 与 zstd，0.0.x 插件不再兼容 |
+| **M2** | 自部署服务端：设备 token、blob、manifest、租约、append、墓碑、会话快照、批量 blob、zstd 封帧、配额、管理台、首次初始化 | ✅ 服务端已实现 v2-only（`PROTOCOL_VERSION=3`）；插件走 v2 路径、幂等 append、批量 blob 与 zstd，0.0.x 插件不再兼容；变更流已移除（见 [CURSOR-HISTORY](CURSOR-HISTORY.md)） |
 | **M3** | 插件 MVP：枚举会话、事件批次哈希、推送/拉取、免重启 ingest、手动触发/状态、断网降级、安全边界（`tailOpen`/`safeThroughSeq`）与 apply journal | ✅ 已完成；0.1.4 已发布（单会话推送、底部会话状态条、上传范围开关、空闲文案） |
 | **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | ✅ 主要项已完成（A1–A5、B1–B5、C1–C4/C6、E1）；C5 GUI 回归、D5 故障文案演练、E3 文档收口顺延，不阻塞发布 |
 | **Vault V0–V2.1** | 密钥域/记录链 → 服务端 append/cursor + 最小设备台账 → `workspaceKey` + 一次性绑定 + 未映射阻断 → 根会话级同步选择 + label 映射 | ✅ V0–V2.1 已完成（133 tests）；V3/V4 设计稿；见 [VAULT.md](../sync/VAULT.md) |

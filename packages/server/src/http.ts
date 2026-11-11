@@ -47,10 +47,8 @@ import {
   getManifest,
   getV2SessionSummary,
   listV2Batches,
-  listV2Changes,
   listV2Sessions,
   sessionCounts,
-  type V2TombstoneCursor,
 } from './sessions.ts'
 import { acquireLease, releaseLease, SYNC_RESOURCE, vaultResource } from './leases.ts'
 import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
@@ -346,41 +344,6 @@ function decodeSessionsCursor(raw: string | null): string | undefined {
 }
 
 /**
- * 解出 v2 变更流游标。
- * @param raw - 查询参数里的值。
- * @returns 已处理到的 revision 与墓碑游标；没有游标时都从 0 开始。
- * @throws 游标形状非法时抛出 `bad-request`。
- */
-function decodeChangesCursor(raw: string | null): { revision: number; tombstone: V2TombstoneCursor } {
-  const value = decodeCursorObject(raw)
-  if (value === undefined) {
-    return { revision: 0, tombstone: { deletedAt: 0, sessionId: '', createdAt: 0 } }
-  }
-  const revision = value['revision']
-  const tombstone = value['tombstone']
-  if (
-    value['v'] !== 2
-    || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0
-    || tombstone === null || typeof tombstone !== 'object' || Array.isArray(tombstone)
-  ) {
-    throw new SyncError('bad-request', 'cursor 非法')
-  }
-  const record = tombstone as Record<string, unknown>
-  const deletedAt = record['deletedAt']
-  const sessionId = record['sessionId']
-  const createdAt = record['createdAt']
-  const empty = deletedAt === 0 && sessionId === '' && createdAt === 0
-  if (
-    typeof deletedAt !== 'number' || !Number.isSafeInteger(deletedAt) || deletedAt < 0
-    || typeof sessionId !== 'string' || (!empty && !SESSION_ID_PATTERN.test(sessionId))
-    || typeof createdAt !== 'number' || !Number.isSafeInteger(createdAt) || createdAt < 0
-  ) {
-    throw new SyncError('bad-request', 'cursor 非法')
-  }
-  return { revision, tombstone: { deletedAt, sessionId, createdAt } }
-}
-
-/**
  * 判断 If-None-Match 是否命中当前摘要。
  * @param header - 请求头，可能是字符串或字符串数组。
  * @param digest - manifest 摘要（小写十六进制）。
@@ -475,7 +438,6 @@ function intParam(value: string | null, fallback: number, min: number, max: numb
 
 const SYNC_LEASE_PATH = /^\/v2\/sync\/lease$/u
 const V2_SESSIONS_PATH = /^\/v2\/sessions$/u
-const V2_CHANGES_PATH = /^\/v2\/changes$/u
 const V2_SUMMARY_PATH = /^\/v2\/sessions\/([^/]+)\/summary$/u
 const V2_BATCHES_PATH = /^\/v2\/sessions\/([^/]+)\/batches$/u
 const V2_MANIFEST_PATH = /^\/v2\/sessions\/([^/]+)\/manifest$/u
@@ -806,7 +768,7 @@ export function createHttpServer(options: ServerOptions): Server {
             apiVersions: [2],
             protocols: [PROTOCOL_VERSION],
             schemaVersion: SERVER_SCHEMA_VERSION,
-            capabilities: ['session-summary', 'changes-cursor', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame', 'me-device-info', 'me-counts', 'device-rename'],
+            capabilities: ['session-summary', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame', 'me-device-info', 'me-counts', 'device-rename'],
             limits: {
               batchBytes: MAX_BATCH_BODY_BYTES,
               batchBlobs: MAX_BATCH_BLOBS,
@@ -833,26 +795,6 @@ export function createHttpServer(options: ServerOptions): Server {
             nextCursor: page.nextSessionId === null
               ? null
               : encodeCursor({ v: 2, after: page.nextSessionId }),
-          },
-        })
-      },
-    },
-    {
-      method: 'GET',
-      path: V2_CHANGES_PATH,
-      handler: async (req, res) => {
-        requireDevice(db, req)
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const cursor = decodeChangesCursor(url.searchParams.get('cursor'))
-        const limit = intParam(url.searchParams.get('limit'), 200, 1, 1000)
-        const page = listV2Changes(db, cursor.revision, cursor.tombstone, limit)
-        return json(res, 200, {
-          ok: true,
-          value: {
-            sessions: page.sessions,
-            tombstones: page.tombstones,
-            nextCursor: encodeCursor({ v: 2, revision: page.nextRevision, tombstone: page.nextTombstone }),
-            hasMore: page.hasMore,
           },
         })
       },
@@ -1438,7 +1380,7 @@ export function createHttpServer(options: ServerOptions): Server {
             },
             counts: {
               workspaces: Number(workspaceRow?.n ?? 0),
-              // 只算存活会话；墓碑单独通过 /v2/changes 的 tombstones 体现。
+              // 只算存活会话；已删除会话不进快照列表，也不单独逐条推送。
               sessions: counts.total - counts.deleted,
             },
           },

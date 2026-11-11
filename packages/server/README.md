@@ -7,8 +7,7 @@ DSH Session CloudSync 的自部署服务端。
 
 ## 能力
 
-- `/v2/sessions` 全量快照、`/v2/changes` 增量流；
-- 会话摘要、ETag、批次条件分页；
+- `/v2/sessions` 全量快照、会话摘要、ETag、批次条件分页；
 - 带 `Idempotency-Key` 的 append；
 - `POST /v2/blobs/batch` / `POST /v2/blobs/batch/read` 批量 blob（8 MiB / 64 条）；
 - zstd 封帧（加密前压缩）与服务端压缩状态聚合；

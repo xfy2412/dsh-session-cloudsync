@@ -128,7 +128,10 @@ syncOnce
       → 一次 append
 ```
 
-### 4.2 Pull
+### 4.2 Pull（历史方案）
+
+> 变更流 `/v2/changes` 已在服务端移除；现行发现走 `/v2/sessions` 快照 + receipt，
+> 见 [CURSOR-HISTORY](../plans/CURSOR-HISTORY.md)。
 
 ```text
 GET /v2/changes

@@ -165,18 +165,6 @@ test('租约互斥、前缀 append、尾帧替换、墓碑与 cursor', async () 
         json: { baseIndex: -1, baseChainHash: null, createdAt: 2000, formatVersion: 4, batches: refs },
       })
       assert.equal(recreated.status, 200)
-
-      // v2 变更流：当前活跃会话 + 旧生命周期墓碑；推进游标后无增量。
-      const changes = await call(base, '/v2/changes?limit=10', { token: deviceA.token })
-      assert.equal(changes.status, 200)
-      assert.equal(changes.body.value.sessions.length, 1)
-      assert.equal(changes.body.value.sessions[0].sessionId, sessionId)
-      assert.equal(changes.body.value.sessions[0].deletedAt, null)
-      assert.equal(changes.body.value.tombstones.length, 1)
-      const current = await call(base, `/v2/changes?cursor=${encodeURIComponent(changes.body.value.nextCursor)}`, { token: deviceA.token })
-      assert.equal(current.status, 200)
-      assert.equal(current.body.value.sessions.length, 0)
-      assert.equal(current.body.value.tombstones.length, 0)
     } finally {
       await close()
       db.close()

@@ -329,7 +329,7 @@ plan 只做纯计算（本地快照 + 远端摘要 + receipt + 绑定）；分�
 ```ts
 interface PullJournal {
   version: 1
-  revision: number                 // /v2/changes 游标版本
+  revision: number                 // 旧变更流游标版本（已弃用，仅兼容读取）
   cursor?: string                  // 不透明游标
   pending?: { sessionId: string; targetSeq: number; at: number }
   cwdPending?: string[]
