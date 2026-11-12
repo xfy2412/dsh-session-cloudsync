@@ -51,6 +51,7 @@ import {
 } from './sessions.ts'
 import { acquireLease, releaseLease, SYNC_RESOURCE, vaultResource } from './leases.ts'
 import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
+import { listAudit, recordAudit } from './audit.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 
 /** `/health` 报告的服务端版本；从 package.json 读取，避免手写漂移。 */
@@ -890,7 +891,15 @@ export function createHttpServer(options: ServerOptions): Server {
         const id = sessionIdFrom(new URL(req.url ?? '/', 'http://localhost').pathname, V2_DELETE_PATH)
         const body = await readJson(req)
         if (!Number.isSafeInteger(body.createdAt)) throw new SyncError('bad-request', 'createdAt 必须是整数')
-        return json(res, 200, { ok: true, value: deleteSession(db, id, device.deviceId, clientId, Number(body.createdAt)) })
+        const value = deleteSession(db, id, device.deviceId, clientId, Number(body.createdAt))
+        recordAudit(db, {
+          actorKind: 'device',
+          actorId: device.deviceId,
+          action: 'session.delete',
+          target: id,
+          detail: { createdAt: Number(body.createdAt) },
+        }, req)
+        return json(res, 200, { ok: true, value })
       },
     },
     {
@@ -1171,9 +1180,11 @@ export function createHttpServer(options: ServerOptions): Server {
         const password = typeof body.password === 'string' ? body.password : ''
         if (!passwordMatches(password)) {
           noteFailure(`login:${ip}`)
+          recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'login_failed', detail: { reason: '密码不正确' } }, req)
           throw new SyncError('unauthorized', '密码不正确')
         }
         attemptsByKey.delete(`login:${ip}`)
+        recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'login' }, req)
         return json(res, 200, { ok: true, value: { expiresAt: issueAdminSession(res) } })
       },
     },
@@ -1182,7 +1193,10 @@ export function createHttpServer(options: ServerOptions): Server {
       path: /^\/admin\/logout$/u,
       handler: async (req, res) => {
         const token = cookieValue(req, ADMIN_COOKIE)
-        if (token !== undefined) adminSessionsByKey.delete(hashToken(token))
+        if (token !== undefined) {
+          adminSessionsByKey.delete(hashToken(token))
+          recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'logout' }, req)
+        }
         writeAdminCookie(res, '', 0)
         return json(res, 200, { ok: true, value: { loggedOut: true } })
       },
@@ -1239,6 +1253,7 @@ export function createHttpServer(options: ServerOptions): Server {
         if (problem !== undefined) throw new SyncError('bad-request', problem)
         const salt = newSalt()
         setAdminPassword(db, deriveMasterKey(String(body.password), salt).toString('hex'), salt.toString('hex'))
+        recordAudit(db, { actorKind: 'system', actorId: 'setup', action: 'setup.password' }, req)
         return json(res, 200, { ok: true, value: { passwordSet: true } })
       },
     },
@@ -1253,6 +1268,7 @@ export function createHttpServer(options: ServerOptions): Server {
         const maxBytes = Number(body.maxBytes)
         if (maxBytes < MIN_MAX_BYTES || maxBytes > MAX_MAX_BYTES) throw new SyncError('bad-request', '配额超出允许范围')
         writeMaxBytes(db, maxBytes)
+        recordAudit(db, { actorKind: 'system', actorId: 'setup', action: 'setup.quota', detail: { maxBytes } }, req)
         return json(res, 200, { ok: true, value: { maxBytes } })
       },
     },
@@ -1264,7 +1280,9 @@ export function createHttpServer(options: ServerOptions): Server {
         if (isAdminInitialized(db)) throw new SyncError('conflict', '已经完成初始化')
         const body = await readJson(req)
         const label = typeof body.label === 'string' && body.label.trim() !== '' ? body.label.trim() : 'device'
-        return json(res, 201, { ok: true, value: createDevice(db, label) })
+        const created = createDevice(db, label)
+        recordAudit(db, { actorKind: 'system', actorId: 'setup', action: 'setup.device', target: created.device.deviceId, detail: { label } }, req)
+        return json(res, 201, { ok: true, value: created })
       },
     },
     {
@@ -1279,6 +1297,7 @@ export function createHttpServer(options: ServerOptions): Server {
         setupSessionsByKey.clear()
         rmSync(join(options.dataDir, ONBOARDING_CODE_FILE), { force: true })
         writeSetupCookie(res, '', 0)
+        recordAudit(db, { actorKind: 'system', actorId: 'setup', action: 'setup.complete' }, req)
         return json(res, 200, { ok: true, value: { redirect: '/admin', expiresAt: issueAdminSession(res) } })
       },
     },
@@ -1291,7 +1310,9 @@ export function createHttpServer(options: ServerOptions): Server {
         if (!Number.isSafeInteger(body.maxBytes)) throw new SyncError('bad-request', '配额必须是整数')
         const maxBytes = Number(body.maxBytes)
         if (maxBytes < MIN_MAX_BYTES || maxBytes > MAX_MAX_BYTES) throw new SyncError('bad-request', '配额超出允许范围')
+        const from = effectiveMaxBytes()
         writeMaxBytes(db, maxBytes)
+        recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'quota.change', detail: { from, to: maxBytes } }, req)
         return json(res, 200, { ok: true, value: { maxBytes } })
       },
     },
@@ -1330,7 +1351,9 @@ export function createHttpServer(options: ServerOptions): Server {
         requireAdmin(req)
         const body = await readJson(req)
         const label = typeof body.label === 'string' && body.label.trim() !== '' ? body.label.trim() : 'device'
-        return json(res, 201, { ok: true, value: createDevice(db, label) })
+        const created = createDevice(db, label)
+        recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'device.create', target: created.device.deviceId, detail: { label } }, req)
+        return json(res, 201, { ok: true, value: created })
       },
     },
     {
@@ -1340,9 +1363,10 @@ export function createHttpServer(options: ServerOptions): Server {
         requireAdmin(req)
         const match = ADMIN_DEVICE_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
         if (match === null) return json(res, 404, errorBody('not-found', '没有这个设备'))
-        return revokeDevice(db, match[1]!)
-          ? json(res, 200, { ok: true, value: { deviceId: match[1], revoked: true } })
-          : json(res, 404, errorBody('not-found', '没有这个设备'))
+        const before = listDevices(db).find((device) => device.deviceId === match[1])
+        if (!revokeDevice(db, match[1]!)) return json(res, 404, errorBody('not-found', '没有这个设备'))
+        recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'device.revoke', target: match[1]!, detail: { label: before?.label } }, req)
+        return json(res, 200, { ok: true, value: { deviceId: match[1], revoked: true } })
       },
     },
     {
@@ -1354,9 +1378,24 @@ export function createHttpServer(options: ServerOptions): Server {
         if (match === null) return json(res, 404, errorBody('not-found', '没有这个设备'))
         const body = await readJson(req)
         const label = requireDeviceLabel(body.label)
+        const before = listDevices(db).find((device) => device.deviceId === match[1])
         const device = renameDevice(db, match[1]!, label)
         if (device === undefined) return json(res, 404, errorBody('not-found', '没有这个设备'))
+        recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'device.rename', target: match[1]!, detail: { from: before?.label, to: label } }, req)
         return json(res, 200, { ok: true, value: { device } })
+      },
+    },
+    {
+      method: 'GET',
+      path: /^\/admin\/audit$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const limit = intParam(url.searchParams.get('limit'), 50, 1, 200)
+        const beforeRaw = url.searchParams.get('before')
+        const before = beforeRaw === null ? undefined : intParam(beforeRaw, 0, 0, Number.MAX_SAFE_INTEGER)
+        const action = url.searchParams.get('action') ?? undefined
+        return json(res, 200, { ok: true, value: listAudit(db, { limit, ...before === undefined ? {} : { before }, ...action === undefined ? {} : { action } }) })
       },
     },
     {

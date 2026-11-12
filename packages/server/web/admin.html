@@ -136,6 +136,14 @@
 
   .layout { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); grid-template-areas: "sessions sessions" "storage devices"; gap: 12px; align-items: stretch; }
   .sessions-panel { grid-area: sessions; }
+  .audit-panel { margin-top: 12px; }
+  .audit-more { display: flex; justify-content: center; padding-top: 10px; }
+  .audit-detail { max-width: 360px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .audit-target { color: var(--muted); font-size: 11px; }
+  .audit-action { font-weight: 600; }
+  .audit-action.good { color: #9ce8bc; }
+  .audit-action.bad { color: #ffb0b0; }
+  .audit-action.warn { color: var(--warn); }
   .storage-panel { grid-area: storage; display: flex; flex-direction: column; }
   .devices-panel { grid-area: devices; }
   .panel { border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(180deg, rgba(28,33,41,.92), rgba(23,27,34,.96)); overflow: hidden; animation: rise-in .36s cubic-bezier(.16,1,.3,1) both; }
@@ -397,6 +405,40 @@
         </div>
       </section>
     </div>
+
+    <section class="panel audit-panel">
+      <div class="panel-head">
+        <span class="panel-icon" id="auditIcon"></span>
+        <div class="panel-title">
+          <b>审计</b>
+          <span>管理动作流水；不记录会话内容、token 或口令。</span>
+        </div>
+        <span class="spacer"></span>
+        <span id="auditBadge" class="badge">0 条</span>
+      </div>
+      <div class="panel-body">
+        <div class="session-tools">
+          <select id="auditFilter" aria-label="筛选审计动作">
+            <option value="">全部动作</option>
+          </select>
+          <input id="auditSearch" type="search" placeholder="搜索操作者或目标…" autocomplete="off" aria-label="搜索审计">
+          <span class="spacer"></span>
+          <button id="auditRefresh" class="btn small secondary" type="button">刷新</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>时间</th><th>动作</th><th>操作者</th><th>目标</th><th>详情</th></tr>
+            </thead>
+            <tbody id="auditRows"></tbody>
+          </table>
+        </div>
+        <div id="auditEmpty" class="empty" hidden></div>
+        <div id="auditMoreWrap" class="audit-more" hidden>
+          <button id="auditMore" class="btn small ghost" type="button">加载更多</button>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -436,6 +478,9 @@ const state = {
   editingDeviceId: null,
   revokeTarget: null,
   collapsed: new Set(),
+  audit: [],
+  auditBefore: null,
+  auditHasMore: false,
 }
 let toastTimer = null
 let updatedAt = 0
@@ -449,6 +494,7 @@ const ICONS = {
   copy: ['M6 5V3.5A1.5 1.5 0 0 1 7.5 2h5A1.5 1.5 0 0 1 14 3.5v5A1.5 1.5 0 0 1 12.5 10H11', 'M2 6.5A1.5 1.5 0 0 1 3.5 5h5A1.5 1.5 0 0 1 10 6.5v5A1.5 1.5 0 0 1 8.5 13h-5A1.5 1.5 0 0 1 2 11.5z'],
   pencil: ['M11 2.5l2.5 2.5-8 8H3v-2.5z'],
   chevron: ['M4 6l4 4 4-4'],
+  audit: ['M3 2.5h10v11H3z', 'M5.5 5.5h5', 'M5.5 8h5', 'M5.5 10.5h3'],
 }
 
 function icon(name, size = 16) {
@@ -542,8 +588,18 @@ async function api(path, options) {
     throw new Error('unauthorized')
   }
   const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error((payload && payload.error && payload.error.message) || '请求失败')
+  if (!response.ok) {
+    const error = new Error((payload && payload.error && payload.error.message) || '请求失败')
+    error.status = response.status
+    throw error
+  }
   return payload.value
+}
+
+function isUninitialized(error) {
+  return error !== null && typeof error === 'object'
+    && error.status === 409
+    && /初始化/u.test(String(error.message || ''))
 }
 
 function showLogin() {
@@ -551,6 +607,13 @@ function showLogin() {
   $('appView').hidden = true
   $('loginError').textContent = ''
   setTimeout(() => $('password').focus(), 30)
+  // 服务端数据被清空（开发 --clean 或换库）时，直接回初始化向导。
+  fetch('/setup/state', { credentials: 'same-origin' })
+    .then((response) => response.json())
+    .then((payload) => {
+      if (payload && payload.value && payload.value.initialized === false) location.replace('/setup')
+    })
+    .catch(() => {})
 }
 
 function showApp() {
@@ -845,6 +908,124 @@ function renderSessions() {
   }
 }
 
+const AUDIT_ACTIONS = {
+  'login': '登录',
+  'login_failed': '登录失败',
+  'logout': '退出登录',
+  'device.create': '签发设备',
+  'device.rename': '设备改名',
+  'device.revoke': '吊销设备',
+  'quota.change': '修改配额',
+  'setup.password': '初始化密码',
+  'setup.quota': '初始化配额',
+  'setup.device': '初始化设备',
+  'setup.complete': '完成初始化',
+  'session.delete': '删除会话',
+}
+
+function auditActionLabel(action) {
+  return AUDIT_ACTIONS[action] || action
+}
+
+function auditActionTone(action) {
+  if (action === 'device.revoke' || action === 'session.delete' || action === 'login_failed') return 'bad'
+  if (action === 'device.create' || action === 'login' || action === 'setup.complete') return 'good'
+  if (action === 'device.rename' || action === 'quota.change') return 'warn'
+  return ''
+}
+
+function auditTargetText(target) {
+  if (target === null || target === '') return '—'
+  return target
+}
+
+function auditDetailText(action, detail) {
+  if (detail === null || detail === undefined) return '—'
+  if (typeof detail !== 'object') return String(detail)
+  if ('reason' in detail) return String(detail.reason)
+  if ('from' in detail && 'to' in detail) {
+    if (action === 'quota.change') return formatBytes(detail.from) + ' → ' + formatBytes(detail.to)
+    return String(detail.from) + ' → ' + String(detail.to)
+  }
+  if ('maxBytes' in detail) return formatBytes(detail.maxBytes)
+  if ('label' in detail) return '标签 ' + String(detail.label)
+  if ('createdAt' in detail) return 'createdAt ' + time(detail.createdAt)
+  return Object.entries(detail).map(([key, value]) => {
+    const text = value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value)
+    return key + ': ' + text
+  }).join(' · ')
+}
+
+function renderAudit() {
+  const query = $('auditSearch').value.trim().toLowerCase()
+  const rows = state.audit.filter((event) => {
+    if (query === '') return true
+    return (event.actorLabel || '').toLowerCase().includes(query)
+      || (event.target || '').toLowerCase().includes(query)
+      || (event.action || '').toLowerCase().includes(query)
+  })
+  const body = $('auditRows')
+  body.replaceChildren(...rows.map((event) => {
+    const row = el('tr')
+    const timeCell = el('td', 'muted', formatAgo(event.at))
+    timeCell.title = time(event.at)
+    const actionCell = el('td')
+    actionCell.append(el('span', 'audit-action ' + auditActionTone(event.action), auditActionLabel(event.action)))
+    const actorCell = el('td')
+    actorCell.append(el('span', null, event.actorLabel || event.actorId))
+    if (event.actorKind === 'device') {
+      const id = el('span', 'audit-target', ' · ' + event.actorId)
+      id.title = event.actorId
+      actorCell.append(id)
+    }
+    const targetCell = el('td')
+    const target = auditTargetText(event.target)
+    targetCell.append(el('code', 'audit-target', target))
+    targetCell.title = target
+    const detailCell = el('td', 'audit-detail', auditDetailText(event.action, event.detail))
+    const meta = [event.ip, event.userAgent].filter((value) => value !== null && value !== undefined && value !== '')
+    if (meta.length > 0) detailCell.title = meta.join(' · ')
+    row.title = event.actorId + (meta.length > 0 ? ' · ' + meta.join(' · ') : '')
+    row.append(timeCell, actionCell, actorCell, targetCell, detailCell)
+    return row
+  }))
+  $('auditBadge').textContent = rows.length + ' 条'
+  const table = body.closest('.table-wrap')
+  table.hidden = rows.length === 0
+  const empty = $('auditEmpty')
+  empty.hidden = rows.length > 0
+  empty.replaceChildren()
+  if (rows.length === 0) {
+    const mark = el('div', 'icon'); mark.append(icon('audit', 22))
+    empty.append(mark, el('b', null, '还没有审计记录'), el('span', null, '登录、签发设备、修改配额等动作会出现在这里。'))
+  }
+  $('auditMoreWrap').hidden = !state.auditHasMore
+}
+
+async function loadAudit(reset) {
+  const button = $('auditRefresh')
+  button.disabled = true
+  try {
+    const action = $('auditFilter').value
+    const params = new URLSearchParams({ limit: '100' })
+    if (action !== '') params.set('action', action)
+    if (!reset && state.auditBefore !== null) params.set('before', String(state.auditBefore))
+    const data = await api('/admin/audit?' + params.toString())
+    state.audit = reset ? data.events : state.audit.concat(data.events)
+    state.auditBefore = data.nextBefore
+    state.auditHasMore = data.nextBefore !== null
+    renderAudit()
+  } catch (error) {
+    if (isUninitialized(error)) {
+      location.replace('/setup')
+      return
+    }
+    if (error.message !== 'unauthorized') showToast(error.message, true)
+  } finally {
+    button.disabled = false
+  }
+}
+
 async function refresh(silent) {
   const button = $('refresh')
   const svg = button.querySelector('svg')
@@ -872,6 +1053,10 @@ async function refresh(silent) {
     $('health').classList.remove('bad')
     $('updatedBadge').textContent = '更新于 ' + formatAgo(updatedAt)
   } catch (error) {
+    if (isUninitialized(error)) {
+      location.replace('/setup')
+      return
+    }
     if (error.message !== 'unauthorized') {
       $('healthText').textContent = '连接异常'
       $('health').classList.add('bad')
@@ -897,6 +1082,12 @@ $('refresh').append(icon('refresh', 14), el('span', null, '刷新'))
 $('sessionsIcon').append(icon('sessions', 15))
 $('storageIcon').append(icon('storage', 15))
 $('devicesIcon').append(icon('devices', 15))
+$('auditIcon').append(icon('audit', 15))
+for (const [action, label] of Object.entries(AUDIT_ACTIONS)) {
+  const option = el('option', null, label)
+  option.value = action
+  $('auditFilter').append(option)
+}
 
 $('loginButton').onclick = async () => {
   const button = $('loginButton')
@@ -916,11 +1107,17 @@ $('loginButton').onclick = async () => {
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}))
-      $('loginError').textContent = (payload && payload.error && payload.error.message) || '登录失败'
+      const message = (payload && payload.error && payload.error.message) || '登录失败'
+      if (response.status === 409 && /初始化/u.test(message)) {
+        location.replace('/setup')
+        return
+      }
+      $('loginError').textContent = message
       return
     }
     $('password').value = ''
     await refresh(false)
+    await loadAudit(true)
   } catch (error) {
     $('loginError').textContent = error.message || '登录失败'
   } finally {
@@ -940,7 +1137,7 @@ $('logout').onclick = async () => {
   await fetch('/admin/logout', { method: 'POST' }).catch(() => {})
   showLogin()
 }
-$('refresh').onclick = () => refresh(false)
+$('refresh').onclick = () => { refresh(false); loadAudit(true) }
 $('autoRefresh').addEventListener('change', (event) => { state.autoRefresh = event.target.checked })
 $('quotaPresets').addEventListener('click', (event) => {
   const button = event.target.closest('.preset')
@@ -1033,8 +1230,13 @@ document.addEventListener('keydown', (event) => {
 })
 $('sessionSearch').addEventListener('input', renderSessions)
 $('sessionFilter').addEventListener('change', renderSessions)
+$('auditSearch').addEventListener('input', renderAudit)
+$('auditFilter').addEventListener('change', () => loadAudit(true))
+$('auditRefresh').addEventListener('click', () => loadAudit(true))
+$('auditMore').addEventListener('click', () => loadAudit(false))
 
 refresh(false)
+loadAudit(true)
 startPolling()
 </script>
 </body>

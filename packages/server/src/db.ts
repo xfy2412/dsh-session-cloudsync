@@ -109,6 +109,22 @@ CREATE TABLE IF NOT EXISTS tombstones (
   deleted_by TEXT NOT NULL,
   PRIMARY KEY (dataset, session_id, created_at)
 );
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dataset TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  actor_kind TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target TEXT,
+  detail TEXT,
+  ip TEXT,
+  user_agent TEXT
+);
+
+CREATE INDEX IF NOT EXISTS audit_events_by_time ON audit_events (dataset, at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_by_action ON audit_events (dataset, action, at DESC);
 `
 
 /** 一个已打开的服务端数据库。 */
