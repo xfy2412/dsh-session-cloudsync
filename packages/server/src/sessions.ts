@@ -600,6 +600,8 @@ export interface AdminSession {
   readonly revision: number
   readonly updatedAt: number
   readonly deletedAt: number | null
+  /** 该会话所有封帧的密文字节总和。 */
+  readonly storedBytes: number
   /** manifest 里的 opaque workspaceKey；子代理或旧 manifest 为 null。 */
   readonly workspaceKey: string | null
 }
@@ -613,7 +615,7 @@ export interface AdminSession {
 export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
   const rows = db.handle
     .prepare(`SELECT s.session_id, s.created_at, s.format_version, s.frame_count, s.last_seq, s.head_chain_hash,
-                     s.revision, s.updated_at, s.deleted_at,
+                     s.revision, s.updated_at, s.deleted_at, s.stored_bytes,
                      json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key
               FROM sessions s
               WHERE s.dataset = ? ORDER BY s.updated_at DESC LIMIT ?`)
@@ -627,6 +629,7 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
       revision: number
       updated_at: number
       deleted_at: number | null
+      stored_bytes: number
       workspace_key: string | null
     }>
   return rows.map((row) => ({
@@ -639,6 +642,7 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
     revision: row.revision,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    storedBytes: row.stored_bytes,
     workspaceKey: row.workspace_key === null ? null : String(row.workspace_key),
   }))
 }

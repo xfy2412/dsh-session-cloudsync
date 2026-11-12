@@ -65,6 +65,9 @@
   .btn.danger:hover { background: var(--bad-soft); border-color: rgba(239,119,119,.58); }
   .btn.small { min-height: 27px; padding: 3px 9px; font-size: 11.5px; }
   .btn.wide { width: 100%; }
+  .btn svg { flex: 0 0 auto; }
+  .spinner { animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .input, input, select {
     width: 100%; min-height: 36px;
@@ -82,36 +85,12 @@
   input::placeholder { color: var(--faint); }
 
   /* login */
-  .login-page {
-    min-height: 100vh;
-    display: grid;
-    place-items: center;
-    padding: 28px 20px;
-  }
-  .login-inner {
-    width: min(420px, 100%);
-    display: flex; flex-direction: column; align-items: center;
-    animation: card-in .38s cubic-bezier(.16,1,.3,1) both;
-  }
-  .brand-mark {
-    width: 44px; height: 44px; border-radius: 13px;
-    display: grid; place-items: center;
-    background: linear-gradient(145deg, #24314a, #17202f);
-    border: 1px solid #33415a;
-    box-shadow: 0 12px 30px rgba(0,0,0,.28);
-  }
+  .login-page { min-height: 100vh; display: grid; place-items: center; padding: 28px 20px; }
+  .login-inner { width: min(420px, 100%); display: flex; flex-direction: column; align-items: center; animation: card-in .38s cubic-bezier(.16,1,.3,1) both; }
+  .brand-mark { width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; background: linear-gradient(145deg, #24314a, #17202f); border: 1px solid #33415a; box-shadow: 0 12px 30px rgba(0,0,0,.28); }
   .brand-mark img { width: 26px; height: 26px; }
-  .auth-card {
-    width: 100%; margin-top: 18px; padding: 28px;
-    border: 1px solid var(--line); border-radius: 18px;
-    background: linear-gradient(180deg, rgba(32,37,46,.92), rgba(26,30,37,.96));
-    box-shadow: var(--shadow);
-  }
-  .eyebrow {
-    display: inline-block;
-    color: var(--accent-2); font-size: 10.5px; font-weight: 700;
-    letter-spacing: .14em; text-transform: uppercase;
-  }
+  .auth-card { width: 100%; margin-top: 18px; padding: 28px; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(180deg, rgba(32,37,46,.92), rgba(26,30,37,.96)); box-shadow: var(--shadow); }
+  .eyebrow { display: inline-block; color: var(--accent-2); font-size: 10.5px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
   .auth-card h1 { margin: 8px 0 4px; font-size: 24px; line-height: 1.2; letter-spacing: -.01em; }
   .auth-card .muted { margin: 0; }
   .auth-card .field { margin-top: 22px; }
@@ -120,96 +99,68 @@
   .field > span, .field-label { color: var(--muted); font-size: 12px; font-weight: 500; }
   .input-wrap { position: relative; }
   .input-wrap input { padding-right: 58px; }
-  .input-wrap .reveal {
-    position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
-    border: 0; background: transparent; color: var(--muted);
-    font-size: 11.5px; padding: 5px 7px; border-radius: 6px;
-  }
+  .input-wrap .reveal { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; color: var(--muted); font-size: 11.5px; padding: 5px 7px; border-radius: 6px; }
   .input-wrap .reveal:hover { color: var(--text); background: rgba(255,255,255,.05); }
   .error { min-height: 20px; margin-top: 7px; color: #ffaaaa; font-size: 12px; }
   .login-card .error { margin-top: 9px; }
 
   /* app shell */
-  .app { max-width: 1180px; margin: 0 auto; padding: 24px 24px 52px; }
-  .topbar {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: 8px 0 22px;
-    animation: fade-in .24s ease both;
-  }
-  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .brand img { width: 26px; height: 26px; }
+  .app { max-width: 1240px; margin: 0 auto; padding: 22px 24px 60px; }
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 0 18px; animation: fade-in .24s ease both; }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 0 auto; }
+  .brand img { width: 30px; height: 30px; border-radius: 9px; }
   .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
-  .brand .brand-sub { color: var(--faint); font-size: 11.5px; margin-left: 2px; }
-  .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-  .version-pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    color: var(--faint); font-size: 11.5px;
-    padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px;
-  }
+  .brand .brand-sub { color: var(--faint); font-size: 11.5px; margin-left: 2px; white-space: nowrap; }
+  .topbar .spacer { flex: 1 1 auto; }
+  .version-pill { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: 11.5px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; white-space: nowrap; }
   .version-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
-  .hero {
-    display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
-    margin: 4px 0 18px;
-    animation: rise-in .32s cubic-bezier(.16,1,.3,1) both;
-  }
-  .hero h2 { margin: 5px 0 4px; font-size: 22px; line-height: 1.2; letter-spacing: -.015em; }
+  .topbar .badge { white-space: nowrap; }
+  .top-actions { display: flex; align-items: center; gap: 8px; }
+
+  .hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 6px 0 18px; }
+  .hero h2 { margin: 5px 0 4px; font-size: 26px; line-height: 1.2; letter-spacing: -.02em; }
   .hero .muted { margin: 0; }
-  .health { display: inline-flex; align-items: center; gap: 7px; color: var(--good); font-size: 12px; white-space: nowrap; }
-  .health i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 4px var(--good-soft); }
+  .health { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border: 1px solid rgba(94,211,146,.28); border-radius: 999px; background: var(--good-soft); color: var(--good); font-size: 12px; white-space: nowrap; }
+  .health i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
+  .health.bad { border-color: rgba(239,119,119,.35); background: var(--bad-soft); color: #ffabab; }
+  .health.bad i { background: var(--bad); }
 
-  .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
-  .metric {
-    padding: 15px 16px; border: 1px solid var(--line); border-radius: var(--radius);
-    background: linear-gradient(180deg, rgba(30,35,44,.9), rgba(24,28,35,.94));
-    animation: rise-in .34s cubic-bezier(.16,1,.3,1) both;
-  }
-  .metric:nth-child(2) { animation-delay: .04s; }
-  .metric:nth-child(3) { animation-delay: .08s; }
-  .metric:nth-child(4) { animation-delay: .12s; }
-  .metric .k { color: var(--faint); font-size: 11.5px; }
-  .metric .v { margin-top: 4px; font-size: 23px; line-height: 1.15; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .metric { padding: 14px 15px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(180deg, rgba(30,35,44,.9), rgba(24,28,35,.94)); animation: rise-in .34s cubic-bezier(.16,1,.3,1) both; }
+  .metric .k { display: flex; align-items: center; gap: 7px; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+  .metric .k svg { color: var(--muted); }
+  .metric .v { margin-top: 6px; font-size: 24px; line-height: 1.1; font-weight: 650; font-variant-numeric: tabular-nums; }
   .metric .hint { margin-top: 3px; color: var(--faint); font-size: 11px; }
+  .metric .bar { height: 4px; margin-top: 8px; border-radius: 2px; background: rgba(255,255,255,.07); overflow: hidden; }
+  .metric .bar i { display: block; height: 100%; background: var(--accent); }
 
-  .layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1.48fr) minmax(320px, .82fr);
-    grid-template-areas: "sessions storage" "devices devices";
-    gap: 16px;
-    align-items: stretch;
-  }
+  .layout { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); grid-template-areas: "sessions sessions" "storage devices"; gap: 12px; align-items: stretch; }
   .sessions-panel { grid-area: sessions; }
   .storage-panel { grid-area: storage; display: flex; flex-direction: column; }
-  .storage-panel .panel-body { display: flex; flex-direction: column; flex: 1 1 auto; }
-  .storage-panel .quota-form { margin-top: auto; padding-top: 14px; }
   .devices-panel { grid-area: devices; }
-  .panel {
-    border: 1px solid var(--line); border-radius: var(--radius);
-    background: linear-gradient(180deg, rgba(28,33,41,.92), rgba(23,27,34,.96));
-    overflow: hidden;
-    animation: rise-in .36s cubic-bezier(.16,1,.3,1) both;
-  }
-  .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 16px 16px 0; }
-  .panel-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
-  .panel-head p { margin: 3px 0 0; color: var(--faint); font-size: 11.5px; }
-  .panel-body { padding: 14px 16px 16px; }
-  .badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    min-height: 22px; padding: 1px 8px;
-    border: 1px solid var(--line); border-radius: 999px;
-    color: var(--muted); background: rgba(255,255,255,.025);
-    font-size: 11px; white-space: nowrap;
-  }
+  .panel { border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(180deg, rgba(28,33,41,.92), rgba(23,27,34,.96)); overflow: hidden; animation: rise-in .36s cubic-bezier(.16,1,.3,1) both; }
+  .panel-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
+  .panel-icon { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid var(--line); background: var(--bg-soft); color: var(--muted); }
+  .panel-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .panel-title b { margin: 0; font-size: 14px; font-weight: 650; }
+  .panel-title span { margin: 0; color: var(--faint); font-size: 11.5px; }
+  .panel-head .spacer { flex: 1 1 auto; }
+  .panel-body { padding: 4px 16px 16px; }
+  .badge { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: rgba(255,255,255,.025); font-size: 11px; white-space: nowrap; }
   .badge.good { color: #9ce8bc; border-color: rgba(94,211,146,.28); background: var(--good-soft); }
   .badge.bad { color: #ffb0b0; border-color: rgba(239,119,119,.3); background: var(--bad-soft); }
   .badge.accent { color: #b9ccff; border-color: rgba(91,136,255,.32); background: var(--accent-soft); }
 
-  /* storage */
-  .storage-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-  .storage-line b { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .storage-line { display: flex; align-items: baseline; gap: 7px; margin-bottom: 8px; }
+  .storage-line b { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
   .storage-line span { color: var(--faint); font-size: 11.5px; }
-  .bar { height: 7px; border-radius: 999px; background: rgba(255,255,255,.07); overflow: hidden; }
+  .bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.07); overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .35s cubic-bezier(.16,1,.3,1); }
-  .quota-form { display: flex; align-items: center; gap: 7px; margin-top: 13px; }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .preset { height: 26px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11.5px; }
+  .preset:hover { color: var(--text); border-color: var(--line-strong); }
+  .preset.on { border-color: rgba(91,136,255,.5); background: var(--accent-soft); color: var(--accent-2); }
+  .quota-form { display: flex; align-items: center; gap: 7px; margin-top: 12px; }
   .quota-form input { width: 84px; min-height: 32px; }
   .quota-form .unit { color: var(--faint); font-size: 11.5px; }
   .quota-form .btn { margin-left: auto; }
@@ -217,125 +168,100 @@
   .inline-result.good { color: var(--good); }
   .inline-result.bad { color: #ffaaaa; }
 
-  /* devices */
-  .device-form { display: flex; gap: 7px; }
+  .device-form { display: flex; gap: 7px; max-width: 520px; }
   .device-form input { min-width: 0; }
   .device-form .btn { flex: 0 0 auto; }
-  .device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
-  .device-form { max-width: 520px; }
-  .device-row {
-    display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 10px;
-    padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px;
-    background: rgba(255,255,255,.018);
-  }
-  .device-main { min-width: 0; }
-  .device-label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
-  .device-id { display: flex; align-items: center; gap: 5px; margin-top: 2px; color: var(--faint); font-size: 10.5px; }
-  .device-id code { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-  .icon-btn {
-    border: 0; background: transparent; color: var(--faint);
-    border-radius: 6px; padding: 2px 5px; font-size: 10.5px;
-  }
+  .device-list { margin-top: 10px; display: flex; flex-direction: column; }
+  .device-row { display: flex; align-items: center; gap: 12px; padding: 11px 4px; border-top: 1px solid var(--line); }
+  .device-row:first-child { border-top: 0; }
+  .device-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
+  .device-label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .device-label .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+  .device-label .dot.good { background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
+  .device-label .dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(240,182,74,.12); }
+  .device-id { display: flex; align-items: center; gap: 4px; color: var(--faint); font-size: 11px; }
+  .device-id code { color: var(--muted); }
+  .device-meta { display: flex; gap: 12px; color: var(--faint); font-size: 11px; flex-wrap: wrap; }
+  .device-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+  .inline-edit { display: flex; align-items: center; gap: 6px; }
+  .inline-edit input { height: 28px; width: 160px; min-height: 28px; padding: 0 8px; font-size: 12.5px; border-color: var(--accent); }
+  .icon-btn { border: 0; background: transparent; color: var(--faint); border-radius: 6px; padding: 2px 5px; font-size: 10.5px; display: inline-flex; align-items: center; gap: 3px; }
   .icon-btn:hover { color: var(--text); background: rgba(255,255,255,.06); }
-  .device-meta { color: var(--faint); font-size: 10.5px; line-height: 1.5; margin-top: 3px; display: flex; flex-direction: column; gap: 1px; }
-  .device-actions { display: flex; align-items: flex-start; }
+  .icon-btn.danger:hover { color: #ffb0b0; background: var(--bad-soft); }
 
-  /* sessions */
-  .session-tools { display: flex; align-items: center; gap: 7px; margin-bottom: 11px; }
-  .session-tools input { min-width: 0; flex: 1 1 auto; max-width: 300px; min-height: 32px; }
+  .session-tools { display: flex; align-items: center; gap: 7px; margin-bottom: 11px; flex-wrap: wrap; }
+  .session-tools input { min-width: 0; flex: 1 1 220px; max-width: 360px; min-height: 32px; }
   .session-tools select { width: auto; min-width: 112px; min-height: 32px; }
+  .session-tools .spacer { flex: 1 1 auto; }
+  .switch { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap; }
+  .switch input { display: none; }
+  .switch i { width: 30px; height: 17px; border-radius: 999px; background: #303845; position: relative; transition: background .15s; }
+  .switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #9aa5b5; transition: transform .15s, background .15s; }
+  .switch input:checked + i { background: rgba(91,136,255,.6); }
+  .switch input:checked + i::after { transform: translateX(13px); background: #fff; }
+
   .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
   table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
   th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,.055); white-space: nowrap; }
   th { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; background: rgba(255,255,255,.025); position: sticky; top: 0; }
   tr:last-child td { border-bottom: 0; }
   tbody tr:hover td { background: rgba(255,255,255,.025); }
-
-  /* session groups */
+  td.session-id { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  td.session-id code { color: #b8c7de; }
+  .row-copy { border: 0; background: transparent; color: var(--faint); padding: 2px 4px; border-radius: 5px; font-size: 10px; display: inline-flex; align-items: center; }
+  .row-copy:hover { color: var(--text); background: rgba(255,255,255,.07); }
   .session-group td { background: rgba(255,255,255,.03); padding: 7px 10px; }
   .session-group-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .chev { display: grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); transition: transform .15s; padding: 0; }
+  .chev.closed { transform: rotate(-90deg); }
   .workspace-alias { width: 150px; min-height: 26px; font-size: 11px; }
   .session-group-key { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; }
   .session-group-key code { color: var(--muted); font-size: 10.5px; }
-  .session-group-meta { margin-left: auto; color: var(--faint); font-size: 10.5px; }
-  td.session-id { max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
-  td.session-id code { color: #b8c7de; }
-  .row-copy { border: 0; background: transparent; color: var(--faint); padding: 2px 4px; border-radius: 5px; font-size: 10px; }
-  .row-copy:hover { color: var(--text); background: rgba(255,255,255,.07); }
-  .empty { padding: 24px 14px; text-align: center; color: var(--faint); }
+  .session-group-meta { margin-left: auto; color: var(--faint); font-size: 10.5px; white-space: nowrap; }
+  .empty { padding: 30px 16px; text-align: center; color: var(--faint); }
+  .empty .icon { color: var(--muted); margin-bottom: 6px; }
   .empty b { display: block; margin-bottom: 3px; color: var(--muted); font-size: 12.5px; }
   .empty .btn { margin-top: 10px; }
-  .empty-filter { color: var(--faint); font-size: 11.5px; padding: 16px; text-align: center; }
 
   .muted { color: var(--muted); }
   .faint { color: var(--faint); }
   .mono { font-variant-ligatures: none; }
 
-  /* toast + modal */
-  .toast {
-    position: fixed; left: 50%; bottom: 24px; z-index: 80;
-    max-width: min(520px, calc(100vw - 32px));
-    padding: 9px 14px; border: 1px solid var(--line-strong); border-radius: 10px;
-    background: rgba(30,35,44,.97); color: var(--text);
-    box-shadow: 0 16px 40px rgba(0,0,0,.4);
-    font-size: 12px; opacity: 0; pointer-events: none;
-    transform: translate(-50%, 8px);
-    transition: opacity .18s, transform .18s;
-  }
+  .toast { position: fixed; left: 50%; bottom: 24px; z-index: 80; max-width: min(520px, calc(100vw - 32px)); padding: 9px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(30,35,44,.97); color: var(--text); box-shadow: 0 16px 40px rgba(0,0,0,.4); font-size: 12px; opacity: 0; pointer-events: none; transform: translate(-50%, 8px); transition: opacity .18s, transform .18s; }
   .toast.on { opacity: 1; transform: translate(-50%, 0); }
   .toast.bad { border-color: rgba(239,119,119,.4); color: #ffb0b0; }
-  .modal {
-    position: fixed; inset: 0; z-index: 70;
-    display: grid; place-items: center; padding: 24px;
-    background: rgba(6,8,11,.66); backdrop-filter: blur(6px);
-    animation: fade-in .18s ease both;
-  }
+  .modal { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 24px; background: rgba(6,8,11,.66); backdrop-filter: blur(6px); animation: fade-in .18s ease both; }
   body.modal-open { overflow: hidden; }
-  .modal-card {
-    width: min(520px, 100%);
-    padding: 24px; border: 1px solid var(--line-strong); border-radius: 17px;
-    background: var(--panel); box-shadow: 0 28px 80px rgba(0,0,0,.55);
-    animation: card-in .28s cubic-bezier(.16,1,.3,1) both;
-  }
+  .modal-card { width: min(520px, 100%); padding: 24px; border: 1px solid var(--line-strong); border-radius: 17px; background: var(--panel); box-shadow: 0 28px 80px rgba(0,0,0,.55); animation: card-in .28s cubic-bezier(.16,1,.3,1) both; }
   .modal-card h2 { margin: 0 0 4px; font-size: 18px; }
   .modal-card p { margin: 0; color: var(--muted); font-size: 12.5px; }
-  .token-box {
-    margin: 16px 0 6px; padding: 12px;
-    border: 1px solid var(--line); border-radius: 10px;
-    background: var(--bg);
-    color: #c7dbff; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
-    word-break: break-all;
-  }
+  .token-box { margin: 16px 0 6px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: #c7dbff; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; word-break: break-all; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  /* 单行元素统一禁止换行，避免窄列被压成竖排。 */
+  .topbar, .brand, .brand h1, .brand .brand-sub, .version-pill, .badge, .btn, .health,
+  .eyebrow, .hero h2, .metric .k, .metric .v, .metric .hint,
+  .panel-title b, .panel-head > .badge, .device-label, .device-id, .device-meta,
+  .storage-line, .preset, .quota-form, .session-tools, th, td { white-space: nowrap; }
 
   @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
   @keyframes card-in { from { opacity: 0; transform: translateY(-10px) scale(.98); } to { opacity: 1; transform: none; } }
   @keyframes rise-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-  }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
-  @media (max-width: 980px) {
-    .layout { grid-template-columns: 1fr; grid-template-areas: "sessions" "storage" "devices"; }
-  }
+  @media (max-width: 980px) { .layout { grid-template-columns: 1fr; grid-template-areas: "sessions" "storage" "devices"; } }
   @media (max-width: 760px) {
     body { font-size: 13px; }
-    .app { padding: 16px 14px 36px; }
+    .app { padding: 16px 14px 40px; }
     .topbar { align-items: flex-start; flex-direction: column; gap: 10px; padding-bottom: 16px; }
     .top-actions { width: 100%; justify-content: space-between; }
     .hero { align-items: flex-start; flex-direction: column; gap: 8px; }
-    .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 9px; }
-    .metric { padding: 12px; }
-    .metric .v { font-size: 20px; }
-    .session-tools { flex-wrap: wrap; }
+    .hero h2 { font-size: 22px; }
     .session-tools input { max-width: none; }
     .session-tools select { flex: 1 1 auto; }
+    .device-row { flex-wrap: wrap; }
+    .device-actions { width: 100%; justify-content: flex-end; }
     .auth-card { padding: 22px; }
-  }
-  @media (max-width: 420px) {
-    .metrics { grid-template-columns: 1fr; }
-    .brand h1 { font-size: 14px; }
-    .brand-sub { display: none; }
   }
 </style>
 </head>
@@ -368,9 +294,11 @@
       <h1>dsh-session-cloudsync</h1>
       <span class="brand-sub">管理台</span>
     </div>
+    <span class="version-pill"><i></i><span id="version">连接中…</span></span>
+    <span class="spacer"></span>
+    <span id="updatedBadge" class="badge">更新于刚刚</span>
     <div class="top-actions">
-      <span class="version-pill"><i></i><span id="version">连接中…</span></span>
-      <button id="refresh" class="btn secondary" type="button">刷新</button>
+      <button id="refresh" class="btn secondary" type="button"></button>
       <button id="logout" class="btn ghost" type="button">退出</button>
     </div>
   </header>
@@ -382,7 +310,7 @@
         <h2>同步概览</h2>
         <p class="muted">自部署节点、设备与会话视图；设备可签发、改名、吊销。</p>
       </div>
-      <div class="health"><i></i><span id="healthText">服务正常</span></div>
+      <div id="health" class="health"><i></i><span id="healthText">服务正常</span></div>
     </section>
 
     <section id="metrics" class="metrics" aria-label="概览指标"></section>
@@ -390,25 +318,29 @@
     <div class="layout">
       <section class="panel sessions-panel">
         <div class="panel-head">
-          <div>
-            <h2>会话</h2>
-            <p>按服务端更新时间倒序；只展示元数据。</p>
+          <span class="panel-icon" id="sessionsIcon"></span>
+          <div class="panel-title">
+            <b>会话</b>
+            <span>按服务端更新时间倒序；只展示元数据，内容端到端加密。</span>
           </div>
+          <span class="spacer"></span>
           <span id="sessionBadge" class="badge">0 个</span>
         </div>
         <div class="panel-body">
           <div class="session-tools">
-            <input id="sessionSearch" type="search" placeholder="搜索 session id…" autocomplete="off">
+            <input id="sessionSearch" type="search" placeholder="搜索 session id 或工作区…" autocomplete="off">
             <select id="sessionFilter" aria-label="筛选会话">
               <option value="all">全部状态</option>
               <option value="active">正常</option>
               <option value="deleted">已删除</option>
             </select>
+            <span class="spacer"></span>
+            <label class="switch"><input id="autoRefresh" type="checkbox" checked><i></i>自动刷新 10s</label>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap" id="sessionTableWrap">
             <table>
               <thead>
-                <tr><th>会话 id</th><th>格式</th><th>批次</th><th>最后序号</th><th>更新时间</th><th>状态</th></tr>
+                <tr><th>会话</th><th>格式</th><th>批次</th><th>最后序号</th><th>大小</th><th>更新时间</th><th>状态</th></tr>
               </thead>
               <tbody id="sessions"></tbody>
             </table>
@@ -419,19 +351,22 @@
 
       <section class="panel storage-panel">
         <div class="panel-head">
-          <div>
-            <h2>存储</h2>
-            <p>按唯一密文字节计算。</p>
+          <span class="panel-icon" id="storageIcon"></span>
+          <div class="panel-title">
+            <b>存储</b>
+            <span>按唯一密文字节计算。</span>
           </div>
+          <span class="spacer"></span>
           <span id="storageBadge" class="badge">0%</span>
         </div>
         <div class="panel-body">
-          <div class="storage-line">
-            <b id="storageUsed">0 B</b>
-            <span id="storageTotal">/ 0 GiB</span>
-          </div>
-          <div class="bar" role="progressbar" aria-label="存储配额使用率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-            <i id="storageBar"></i>
+          <div class="storage-line"><b id="storageUsed">0 B</b><span id="storageTotal">/ 0 GiB</span></div>
+          <div class="bar" role="progressbar" aria-label="存储配额使用率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="storageBar"></i></div>
+          <div class="presets" id="quotaPresets">
+            <button class="preset" type="button" data-gb="1">1 GiB</button>
+            <button class="preset" type="button" data-gb="5">5 GiB</button>
+            <button class="preset" type="button" data-gb="10">10 GiB</button>
+            <button class="preset" type="button" data-gb="50">50 GiB</button>
           </div>
           <form id="quotaForm" class="quota-form">
             <input id="quotaGb" type="number" min="1" step="1" inputmode="numeric" aria-label="配额 GiB">
@@ -444,10 +379,12 @@
 
       <section class="panel devices-panel">
         <div class="panel-head">
-          <div>
-            <h2>设备</h2>
-            <p>每台设备一个 token；token 只显示一次。</p>
+          <span class="panel-icon" id="devicesIcon"></span>
+          <div class="panel-title">
+            <b>设备</b>
+            <span>每台设备一个 token；token 只显示一次。</span>
           </div>
+          <span class="spacer"></span>
           <span id="deviceBadge" class="badge">0 台</span>
         </div>
         <div class="panel-body">
@@ -477,10 +414,61 @@
   </div>
 </div>
 
+<div id="revokeDialog" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="revokeTitle">
+    <h2 id="revokeTitle">吊销设备</h2>
+    <p id="revokeText"></p>
+    <div class="modal-actions">
+      <button id="cancelRevoke" class="btn ghost" type="button">取消</button>
+      <button id="confirmRevoke" class="btn danger" type="button">确认吊销</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id)
-const state = { overview: null, devices: [], sessions: [] }
+const GiB = 1024 ** 3
+const state = {
+  overview: null,
+  devices: [],
+  sessions: [],
+  autoRefresh: true,
+  editingDeviceId: null,
+  revokeTarget: null,
+  collapsed: new Set(),
+}
 let toastTimer = null
+let updatedAt = 0
+let pollTimer = null
+
+const ICONS = {
+  devices: ['M2.5 3.5h8v6h-8z', 'M11.5 7h2v5.5h-2z', 'M4.5 12h4'],
+  sessions: ['M2 3.5h12v7H7l-3 2.5v-2.5H2z'],
+  storage: ['M3 3.5h10v3H3z', 'M3 6.5h10v3H3z', 'M3 9.5h10v3H3z'],
+  refresh: ['M13 8a5 5 0 1 1-1.5-3.5', 'M13 3.5V6h-2.5'],
+  copy: ['M6 5V3.5A1.5 1.5 0 0 1 7.5 2h5A1.5 1.5 0 0 1 14 3.5v5A1.5 1.5 0 0 1 12.5 10H11', 'M2 6.5A1.5 1.5 0 0 1 3.5 5h5A1.5 1.5 0 0 1 10 6.5v5A1.5 1.5 0 0 1 8.5 13h-5A1.5 1.5 0 0 1 2 11.5z'],
+  pencil: ['M11 2.5l2.5 2.5-8 8H3v-2.5z'],
+  chevron: ['M4 6l4 4 4-4'],
+}
+
+function icon(name, size = 16) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', '0 0 16 16')
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('aria-hidden', 'true')
+  for (const d of ICONS[name] || []) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', d)
+    path.setAttribute('stroke', 'currentColor')
+    path.setAttribute('stroke-width', '1.5')
+    path.setAttribute('stroke-linecap', 'round')
+    path.setAttribute('stroke-linejoin', 'round')
+    svg.append(path)
+  }
+  return svg
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag)
@@ -493,12 +481,28 @@ function formatBytes(value) {
   const bytes = Number(value) || 0
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
-  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GiB'
+  if (bytes < GiB) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+  return (bytes / GiB).toFixed(2) + ' GiB'
 }
 
 function time(value) {
   return value === null || value === undefined ? '—' : new Date(value).toLocaleString()
+}
+
+function formatAgo(value) {
+  if (value === null || value === undefined) return '从未'
+  const diff = Date.now() - value
+  if (diff < 0) return '刚刚'
+  if (diff < 60 * 1000) return '刚刚'
+  if (diff < 3600 * 1000) return Math.floor(diff / 60000) + ' 分钟前'
+  if (diff < 86400 * 1000) return Math.floor(diff / 3600000) + ' 小时前'
+  return Math.floor(diff / 86400000) + ' 天前'
+}
+
+function agoCell(value) {
+  const cell = el('td', 'muted', formatAgo(value))
+  cell.title = time(value)
+  return cell
 }
 
 function showToast(text, bad) {
@@ -557,13 +561,22 @@ function showApp() {
 function renderMetrics(overview) {
   const percent = overview.maxBytes > 0 ? Math.min(100, Math.round(overview.usedBytes / overview.maxBytes * 1000) / 10) : 0
   const items = [
-    { key: '设备', value: overview.devices, hint: '已签发 token' },
-    { key: '会话', value: overview.sessions, hint: overview.deletedSessions > 0 ? overview.deletedSessions + ' 个墓碑' : '没有墓碑' },
-    { key: '已用存储', value: formatBytes(overview.usedBytes), hint: percent + '% · 配额 ' + formatBytes(overview.maxBytes) },
+    { icon: 'devices', key: '设备', value: overview.devices, hint: '已签发 token' },
+    { icon: 'sessions', key: '会话', value: overview.sessions, hint: overview.deletedSessions > 0 ? overview.deletedSessions + ' 个墓碑' : '没有墓碑' },
+    { icon: 'storage', key: '已用存储', value: formatBytes(overview.usedBytes), hint: percent + '% · 配额 ' + formatBytes(overview.maxBytes), bar: percent },
   ]
   $('metrics').replaceChildren(...items.map((item) => {
     const box = el('div', 'metric')
-    box.append(el('div', 'k', item.key), el('div', 'v', String(item.value)), el('div', 'hint', item.hint))
+    const head = el('div', 'k')
+    head.append(icon(item.icon, 13), el('span', null, item.key))
+    box.append(head, el('div', 'v', String(item.value)), el('div', 'hint', item.hint))
+    if (item.bar !== undefined) {
+      const bar = el('div', 'bar')
+      const fill = el('i', null)
+      fill.style.width = item.bar + '%'
+      bar.append(fill)
+      box.append(bar)
+    }
     return box
   }))
   $('version').textContent = 'v' + overview.version + ' · protocol ' + overview.protocol
@@ -571,9 +584,18 @@ function renderMetrics(overview) {
   $('storageUsed').textContent = formatBytes(overview.usedBytes)
   $('storageTotal').textContent = '/ ' + formatBytes(overview.maxBytes)
   $('storageBar').style.width = Math.min(100, percent) + '%'
-  const bar = $('storageBar').parentElement
-  bar.setAttribute('aria-valuenow', String(percent))
-  $('quotaGb').value = String(Math.max(1, Math.round(overview.maxBytes / 1024 / 1024 / 1024)))
+  $('storageBar').parentElement.setAttribute('aria-valuenow', String(percent))
+  const quotaGb = Math.max(1, Math.round(overview.maxBytes / GiB))
+  $('quotaGb').value = String(quotaGb)
+  for (const button of $('quotaPresets').querySelectorAll('.preset')) {
+    const gb = Number(button.dataset.gb)
+    button.classList.toggle('on', gb === quotaGb)
+  }
+}
+
+function deviceOnline(device) {
+  return device.lastSeenAt !== null && device.lastSeenAt !== undefined
+    && Date.now() - device.lastSeenAt < 5 * 60 * 1000
 }
 
 function renderDevices(devices) {
@@ -581,7 +603,9 @@ function renderDevices(devices) {
   const list = $('devices')
   if (devices.length === 0) {
     const empty = el('div', 'empty')
-    empty.append(el('b', null, '还没有设备'), el('span', null, '签发一个 token，把 DSH 插件接到这台服务器。'))
+    const mark = el('div', 'icon')
+    mark.append(icon('devices', 22))
+    empty.append(mark, el('b', null, '还没有设备'), el('span', null, '签发一个 token，把 DSH 插件接到这台服务器。'))
     list.replaceChildren(empty)
     return
   }
@@ -589,72 +613,93 @@ function renderDevices(devices) {
     const row = el('div', 'device-row')
     const main = el('div', 'device-main')
     const label = el('div', 'device-label')
-    label.append(el('span', null, device.label || 'device'), el('span', 'badge good', '有效'))
+    label.append(el('i', 'dot ' + (deviceOnline(device) ? 'good' : 'warn')))
+    if (state.editingDeviceId === device.deviceId) {
+      const form = el('div', 'inline-edit')
+      const input = el('input')
+      input.value = device.label || 'device'
+      input.maxLength = 64
+      input.setAttribute('aria-label', '设备名称')
+      const save = el('button', 'btn small', '保存')
+      save.type = 'button'
+      save.onclick = () => saveDeviceLabel(device, input.value)
+      const cancel = el('button', 'btn small ghost', '取消')
+      cancel.type = 'button'
+      cancel.onclick = () => { state.editingDeviceId = null; renderDevices(state.devices) }
+      form.append(input, save, cancel)
+      label.append(form)
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') save.click()
+        if (event.key === 'Escape') cancel.click()
+      })
+      setTimeout(() => input.focus(), 0)
+    } else {
+      label.append(el('b', null, device.label || 'device'), el('span', 'badge', '设备'))
+    }
     const idLine = el('div', 'device-id')
-    idLine.append(el('code', null, device.deviceId))
-    const copy = el('button', 'row-copy', '复制')
+    const copy = el('button', 'row-copy')
     copy.type = 'button'
+    copy.title = '复制设备 ID'
+    copy.append(icon('copy', 11))
     copy.onclick = () => copyText(device.deviceId)
-    idLine.append(copy)
+    idLine.append(el('code', null, device.deviceId), copy)
     const meta = el('div', 'device-meta')
-    meta.append(
-      el('span', null, '创建 ' + time(device.createdAt)),
-      el('span', null, '最后在线 ' + (device.lastSeenAt === null || device.lastSeenAt === undefined ? '从未' : time(device.lastSeenAt))),
-    )
+    const created = el('span', null, '创建 ' + formatAgo(device.createdAt))
+    created.title = time(device.createdAt)
+    const seen = el('span', null, '最后在线 ' + formatAgo(device.lastSeenAt))
+    seen.title = time(device.lastSeenAt)
+    meta.append(created, seen)
     main.append(label, idLine, meta)
     const actions = el('div', 'device-actions')
-    const rename = el('button', 'btn small', '改名')
+    const rename = el('button', 'icon-btn')
     rename.type = 'button'
-    rename.onclick = async () => {
-      const next = prompt('新设备名（1–64 个字符）', device.label || 'device')
-      if (next === null) return
-      const label = next.trim()
-      if (label === '') {
-        showToast('设备名不能为空', true)
-        return
-      }
-      rename.disabled = true
-      rename.textContent = '改名中…'
-      try {
-        await api('/admin/devices/' + encodeURIComponent(device.deviceId), {
-          method: 'PATCH',
-          body: JSON.stringify({ label }),
-        })
-        showToast('设备已改名')
-        await refresh(true)
-      } catch (error) {
-        showToast(error.message, true)
-        rename.disabled = false
-        rename.textContent = '改名'
-      }
-    }
-    const revoke = el('button', 'btn small danger', '吊销')
+    rename.append(icon('pencil', 12), el('span', null, '改名'))
+    rename.onclick = () => { state.editingDeviceId = device.deviceId; renderDevices(state.devices) }
+    const revoke = el('button', 'icon-btn danger')
     revoke.type = 'button'
-    revoke.onclick = async () => {
-      if (!confirm('吊销后该设备 token 立即失效，确定？')) return
-      revoke.disabled = true
-      revoke.textContent = '吊销中…'
-      try {
-        await api('/admin/devices/' + encodeURIComponent(device.deviceId), { method: 'DELETE' })
-        showToast('设备已吊销')
-        await refresh(true)
-      } catch (error) {
-        showToast(error.message, true)
-        revoke.disabled = false
-        revoke.textContent = '吊销'
-      }
-    }
+    revoke.append(el('span', null, '吊销'))
+    revoke.onclick = () => openRevoke(device)
     actions.append(rename, revoke)
     row.append(main, actions)
     return row
   }))
 }
 
+async function saveDeviceLabel(device, raw) {
+  const label = String(raw || '').trim()
+  if (label === '') { showToast('设备名不能为空', true); return }
+  try {
+    await api('/admin/devices/' + encodeURIComponent(device.deviceId), {
+      method: 'PATCH',
+      body: JSON.stringify({ label }),
+    })
+    state.editingDeviceId = null
+    showToast('设备已改名')
+    await refresh(true)
+  } catch (error) {
+    showToast(error.message, true)
+  }
+}
+
+function openRevoke(device) {
+  state.revokeTarget = device.deviceId
+  $('revokeText').textContent = '吊销「' + (device.label || 'device') + '」后，它的 token 立即失效；该设备将无法再推送或拉取。'
+  $('revokeDialog').hidden = false
+  document.body.classList.add('modal-open')
+  setTimeout(() => $('confirmRevoke').focus(), 30)
+}
+
+function closeRevoke() {
+  state.revokeTarget = null
+  $('revokeDialog').hidden = true
+  document.body.classList.remove('modal-open')
+}
+
 function filteredSessions() {
   const query = $('sessionSearch').value.trim().toLowerCase()
   const mode = $('sessionFilter').value
   return state.sessions.filter((session) => {
-    if (query && !session.sessionId.toLowerCase().includes(query)) return false
+    if (query && !session.sessionId.toLowerCase().includes(query) && !(session.workspaceKey || '').toLowerCase().includes(query)) return false
     if (mode === 'active' && session.deletedAt !== null) return false
     if (mode === 'deleted' && session.deletedAt === null) return false
     return true
@@ -665,40 +710,85 @@ function sessionRow(session) {
   const row = el('tr')
   const idCell = el('td', 'session-id')
   idCell.append(el('code', null, session.sessionId))
-  const copy = el('button', 'row-copy', '复制')
+  const copy = el('button', 'row-copy')
   copy.type = 'button'
+  copy.title = '复制 session id'
+  copy.append(icon('copy', 11))
   copy.onclick = () => copyText(session.sessionId)
   idCell.append(copy)
-  row.append(idCell, el('td', null, 'v' + session.formatVersion), el('td', null, String(session.batchCount)), el('td', null, String(session.lastSeq)), el('td', null, time(session.updatedAt)))
+  row.append(
+    idCell,
+    el('td', null, 'v' + session.formatVersion),
+    el('td', null, String(session.batchCount)),
+    el('td', null, String(session.lastSeq)),
+    el('td', null, formatBytes(session.storedBytes)),
+    agoCell(session.updatedAt),
+  )
   const status = el('td')
   status.append(el('span', 'badge' + (session.deletedAt === null ? ' good' : ' bad'), session.deletedAt === null ? '正常' : '已删除'))
   row.append(status)
   return row
 }
 
+function workspaceAlias(key) {
+  if (!key) return ''
+  try { return localStorage.getItem(WORKSPACE_ALIAS_PREFIX + key) || '' } catch { return '' }
+}
+
+function saveWorkspaceAlias(key, value) {
+  if (!key) return
+  try {
+    const trimmed = String(value || '').trim()
+    if (trimmed === '') localStorage.removeItem(WORKSPACE_ALIAS_PREFIX + key)
+    else localStorage.setItem(WORKSPACE_ALIAS_PREFIX + key, trimmed)
+  } catch {
+    // 浏览器禁用 localStorage 时别名不持久化，不影响服务端数据。
+  }
+}
+const WORKSPACE_ALIAS_PREFIX = 'dsh-sync-workspace-alias:'
+
 function workspaceGroupRow(group) {
   const row = el('tr', 'session-group')
   const cell = el('td')
-  cell.colSpan = 6
+  cell.colSpan = 7
   const head = el('div', 'session-group-head')
+  const collapseKey = group.key || '__unmapped__'
+  const collapsed = state.collapsed.has(collapseKey)
+  const chev = el('button', 'chev' + (collapsed ? ' closed' : ''))
+  chev.type = 'button'
+  chev.title = collapsed ? '展开' : '折叠'
+  chev.append(icon('chevron', 12))
+  chev.onclick = (event) => {
+    event.stopPropagation()
+    if (collapsed) state.collapsed.delete(collapseKey)
+    else state.collapsed.add(collapseKey)
+    renderSessions()
+  }
+  head.append(chev)
   if (group.key) {
     const input = el('input', 'workspace-alias')
     input.value = workspaceAlias(group.key)
-    input.placeholder = '工作区本机别名（仅浏览器）'
+    input.placeholder = '工作区别名（可选）'
     input.setAttribute('aria-label', '工作区别名')
+    input.onclick = (event) => event.stopPropagation()
     input.onchange = () => saveWorkspaceAlias(group.key, input.value)
     head.append(input)
+  } else {
+    head.append(el('b', null, '未归属'))
   }
   const keyLine = el('div', 'session-group-key')
-  keyLine.append(el('code', null, group.key ? group.key.slice(0, 16) + '…' : '未归属（子代理/旧 manifest）'))
+  keyLine.append(el('code', null, group.key ? group.key.slice(0, 16) + '…' : '子代理/旧 manifest'))
   if (group.key) {
-    const copy = el('button', 'row-copy', '复制')
+    const copy = el('button', 'row-copy')
     copy.type = 'button'
-    copy.onclick = () => copyText(group.key)
+    copy.title = '复制 workspaceKey'
+    copy.append(icon('copy', 11))
+    copy.onclick = (event) => { event.stopPropagation(); copyText(group.key) }
     keyLine.append(copy)
   }
   head.append(keyLine)
-  head.append(el('div', 'session-group-meta', group.sessions.length + ' 个会话 · 最近 ' + time(group.sessions[0].updatedAt)))
+  const totalBytes = group.sessions.reduce((sum, session) => sum + (session.storedBytes || 0), 0)
+  head.append(el('div', 'session-group-meta', group.sessions.length + ' 个 · ' + formatBytes(totalBytes)))
   cell.append(head)
   row.append(cell)
   return row
@@ -709,7 +799,6 @@ function renderSessions() {
   const sessions = filteredSessions()
   $('sessionBadge').textContent = (sessions.length === all.length ? all.length : sessions.length + ' / ' + all.length) + ' 个'
   const body = $('sessions')
-  // 会话按 manifest 里的 opaque workspaceKey 分组；子代理没有 key，归到“未归属”。
   const groups = new Map()
   for (const session of sessions) {
     const key = session.workspaceKey || null
@@ -724,18 +813,21 @@ function renderSessions() {
   })
   const rows = []
   for (const group of ordered) {
+    const collapseKey = group.key || '__unmapped__'
     rows.push(workspaceGroupRow(group))
+    if (state.collapsed.has(collapseKey)) continue
     for (const session of group.sessions) rows.push(sessionRow(session))
   }
   body.replaceChildren(...rows)
   const empty = $('sessionsEmpty')
-  const table = body.closest('.table-wrap')
+  const table = $('sessionTableWrap')
   if (sessions.length === 0) {
     table.hidden = true
     empty.hidden = false
     empty.replaceChildren()
     if (all.length === 0) {
-      empty.append(el('b', null, '还没有同步过会话'), el('span', null, '接入 DSH 插件后，会话会出现在这里。'))
+      const mark = el('div', 'icon'); mark.append(icon('sessions', 22))
+      empty.append(mark, el('b', null, '还没有同步过会话'), el('span', null, '接入 DSH 插件后，会话会出现在这里。'))
       const button = el('button', 'btn secondary small', '签发第一台设备')
       button.type = 'button'
       button.onclick = () => { $('deviceLabel').focus(); $('deviceLabel').scrollIntoView({ behavior: 'smooth', block: 'center' }) }
@@ -753,29 +845,14 @@ function renderSessions() {
   }
 }
 
-const WORKSPACE_ALIAS_PREFIX = 'dsh-sync-workspace-alias:'
-
-function workspaceAlias(key) {
-  if (!key) return ''
-  try { return localStorage.getItem(WORKSPACE_ALIAS_PREFIX + key) || '' } catch { return '' }
-}
-
-function saveWorkspaceAlias(key, value) {
-  if (!key) return
-  try {
-    const trimmed = String(value || '').trim()
-    if (trimmed === '') localStorage.removeItem(WORKSPACE_ALIAS_PREFIX + key)
-    else localStorage.setItem(WORKSPACE_ALIAS_PREFIX + key, trimmed)
-  } catch {
-    // 浏览器禁用 localStorage 时别名只是不持久化，不影响服务端数据。
-  }
-}
-
 async function refresh(silent) {
   const button = $('refresh')
+  const svg = button.querySelector('svg')
   if (!silent) {
     button.disabled = true
-    button.textContent = '刷新中…'
+    if (svg) svg.classList.add('spinner')
+    button.textContent = ''
+    button.append(svg || icon('refresh', 14), el('span', null, '刷新中…'))
   }
   try {
     const [overview, devices, sessions] = await Promise.all([
@@ -786,24 +863,40 @@ async function refresh(silent) {
     state.overview = overview
     state.devices = devices
     state.sessions = sessions
+    updatedAt = Date.now()
     showApp()
     renderMetrics(overview)
-    renderDevices(devices)
-    // 正在编辑工作区别名时不重绘会话表，避免 10 秒轮询抢走焦点。
+    if (state.editingDeviceId === null) renderDevices(devices)
     if (!$('sessions').contains(document.activeElement)) renderSessions()
     $('healthText').textContent = '服务正常'
+    $('health').classList.remove('bad')
+    $('updatedBadge').textContent = '更新于 ' + formatAgo(updatedAt)
   } catch (error) {
     if (error.message !== 'unauthorized') {
       $('healthText').textContent = '连接异常'
+      $('health').classList.add('bad')
       showToast(error.message, true)
     }
   } finally {
     if (!silent) {
       button.disabled = false
-      button.textContent = '刷新'
+      button.textContent = ''
+      button.append(icon('refresh', 14), el('span', null, '刷新'))
     }
   }
 }
+
+function startPolling() {
+  if (pollTimer !== null) clearInterval(pollTimer)
+  pollTimer = setInterval(() => {
+    if (state.autoRefresh && !$('appView').hidden) refresh(true)
+  }, 10000)
+}
+
+$('refresh').append(icon('refresh', 14), el('span', null, '刷新'))
+$('sessionsIcon').append(icon('sessions', 15))
+$('storageIcon').append(icon('storage', 15))
+$('devicesIcon').append(icon('devices', 15))
 
 $('loginButton').onclick = async () => {
   const button = $('loginButton')
@@ -848,6 +941,13 @@ $('logout').onclick = async () => {
   showLogin()
 }
 $('refresh').onclick = () => refresh(false)
+$('autoRefresh').addEventListener('change', (event) => { state.autoRefresh = event.target.checked })
+$('quotaPresets').addEventListener('click', (event) => {
+  const button = event.target.closest('.preset')
+  if (!button) return
+  $('quotaGb').value = button.dataset.gb
+  for (const item of $('quotaPresets').querySelectorAll('.preset')) item.classList.toggle('on', item === button)
+})
 $('quotaForm').addEventListener('submit', async (event) => {
   event.preventDefault()
   const button = $('saveQuota')
@@ -862,7 +962,7 @@ $('quotaForm').addEventListener('submit', async (event) => {
   button.disabled = true
   button.textContent = '保存中…'
   try {
-    await api('/admin/quota', { method: 'POST', body: JSON.stringify({ maxBytes: Math.round(gib * 1024 * 1024 * 1024) }) })
+    await api('/admin/quota', { method: 'POST', body: JSON.stringify({ maxBytes: Math.round(gib * GiB) }) })
     $('quotaResult').textContent = '已保存'
     $('quotaResult').className = 'inline-result good'
     await refresh(true)
@@ -906,14 +1006,36 @@ function closeToken() {
 }
 $('closeToken').onclick = closeToken
 $('tokenDialog').addEventListener('click', (event) => { if (event.target === $('tokenDialog')) closeToken() })
+$('cancelRevoke').onclick = closeRevoke
+$('revokeDialog').addEventListener('click', (event) => { if (event.target === $('revokeDialog')) closeRevoke() })
+$('confirmRevoke').onclick = async () => {
+  const deviceId = state.revokeTarget
+  if (deviceId === null) return
+  const button = $('confirmRevoke')
+  button.disabled = true
+  button.textContent = '吊销中…'
+  try {
+    await api('/admin/devices/' + encodeURIComponent(deviceId), { method: 'DELETE' })
+    closeRevoke()
+    showToast('设备已吊销')
+    await refresh(true)
+  } catch (error) {
+    showToast(error.message, true)
+  } finally {
+    button.disabled = false
+    button.textContent = '确认吊销'
+  }
+}
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !$('tokenDialog').hidden) closeToken()
+  if (event.key !== 'Escape') return
+  if (!$('tokenDialog').hidden) closeToken()
+  if (!$('revokeDialog').hidden) closeRevoke()
 })
 $('sessionSearch').addEventListener('input', renderSessions)
 $('sessionFilter').addEventListener('change', renderSessions)
 
 refresh(false)
-setInterval(() => { if (!$('appView').hidden) refresh(true) }, 10000)
+startPolling()
 </script>
 </body>
 </html>
