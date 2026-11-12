@@ -146,7 +146,7 @@ owner 为 `(deviceId, clientId)`）：只有持有者才能创建/append/删会�
 3. 设置存储配额（默认 10 GiB，之后可在管理台修改）；
 4. 可选创建第一台设备（token 只显示一次，可跳过）。
 
-完成后管理台改用密码登录；setup token 只保留给设备 CLI 和 break-glass。忘记密码时执行 `admin reset` 清除密码，重启后重新打印初始化密钥。
+完成后管理台改用密码登录；setup token 只保留给设备 CLI 和 break-glass。忘记密码时执行 `dscs-server admin reset-password`（默认生成随机密码，`--stdin` 自定义；重启 server 后旧会话失效）。
 
 ## 版本策略
 

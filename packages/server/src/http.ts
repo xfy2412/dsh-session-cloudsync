@@ -1202,6 +1202,31 @@ export function createHttpServer(options: ServerOptions): Server {
       },
     },
     {
+      method: 'POST',
+      path: /^\/admin\/password$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const body = await readJson(req)
+        const current = typeof body.currentPassword === 'string' ? body.currentPassword : ''
+        if (!passwordMatches(current)) {
+          recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'password.change_failed', detail: { reason: '当前密码不正确' } }, req)
+          throw new SyncError('bad-request', '当前密码不正确')
+        }
+        const problem = validateAdminPassword(body.newPassword)
+        if (problem !== undefined) throw new SyncError('bad-request', problem)
+        const salt = newSalt()
+        setAdminPassword(db, deriveMasterKey(String(body.newPassword), salt).toString('hex'), salt.toString('hex'))
+        // 只失效其它管理会话；保留当前 cookie，避免修改密码瞬间的并发请求把页面踢回登录。
+        const token = cookieValue(req, ADMIN_COOKIE)
+        const currentKey = token === undefined ? undefined : hashToken(token)
+        for (const key of [...adminSessionsByKey.keys()]) {
+          if (key !== currentKey) adminSessionsByKey.delete(key)
+        }
+        recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'password.change' }, req)
+        return json(res, 200, { ok: true, value: { changed: true } })
+      },
+    },
+    {
       method: 'GET',
       path: /^\/setup\/state$/u,
       handler: async (_req, res) => {

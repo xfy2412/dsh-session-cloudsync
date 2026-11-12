@@ -26,6 +26,8 @@ audit_events(
 | `setup.password` / `setup.quota` / `setup.device` / `setup.complete` | 初始化向导 |
 | `device.create` / `device.rename` / `device.revoke` | 设备管理 |
 | `quota.change` | 修改存储配额 |
+| `password.change` / `password.change_failed` | 修改管理密码 |
+| `password.reset_cli` | CLI 直接重置管理密码 |
 | `session.delete` | 设备调用删除会话接口 |
 
 `detail` 只放展示所需字段，例如改名的 `{from,to}`、配额的 `{from,to}`、设备的 `{label}`。

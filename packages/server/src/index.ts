@@ -7,7 +7,7 @@
  *
  * @module @dsh-session-cloudsync/server
  */
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ONBOARDING_CODE_FILE,
@@ -19,7 +19,8 @@ import {
   revokeDevice,
   DEFAULT_MAX_BYTES,
 } from './http.ts'
-import { clearAdminPassword, ensureSetupToken, isAdminInitialized, openDatabase, readMaxBytes } from './db.ts'
+import { generateAdminPassword, resetAdminPassword } from './admin-password.ts'
+import { ensureSetupToken, isAdminInitialized, openDatabase, readMaxBytes } from './db.ts'
 
 interface Parsed {
   command: string
@@ -57,13 +58,15 @@ function usage(): never {
   token list                 列出存活设备
   token revoke <deviceId>    吊销某个设备 token
   admin status               查看初始化状态与配额
-  admin reset                忘记管理密码时重置（重启 serve 后重新初始化）
+  admin reset-password       忘记管理密码时重置为新密码
+                             （默认生成随机密码；--stdin 从标准输入读取自定义密码）
 
 选项：
   --data-dir <目录>           数据目录（默认 .tmp/dev-data）
   --host <地址>               绑定地址（默认 127.0.0.1）
   --port <端口>               监听端口（默认 8787）
   --max-bytes <n>             存储上限（默认 10 GiB）
+  --stdin                     admin reset-password 从标准输入读取新密码
 `)
   process.exit(2)
 }
@@ -79,6 +82,10 @@ function parse(argv: readonly string[]): Parsed {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!
     if (argument.startsWith('--')) {
+      if (argument === '--stdin') {
+        flags.set('stdin', '')
+        continue
+      }
       const value = argv[index + 1]
       if (value === undefined || value.startsWith('--')) usage()
       flags.set(argument.slice(2), value)
@@ -130,10 +137,21 @@ async function main(parsed: Parsed): Promise<void> {
         }, null, 2))
         return
       }
-      if (action === 'reset') {
-        clearAdminPassword(db)
-        clearOnboardingCode(dataDir)
-        console.log('已清除管理密码。重启 server 后会在控制台打印新的初始化密钥。')
+      if (action === 'reset-password') {
+        const fromStdin = parsed.flags.has('stdin')
+        const password = fromStdin
+          ? readFileSync(0, 'utf8').replace(/\r?\n$/u, '')
+          : generateAdminPassword()
+        resetAdminPassword(db, password)
+        if (fromStdin) {
+          console.log('已重置管理密码。旧管理会话需要重启 server 后失效。')
+        } else {
+          console.log('已重置管理密码（只显示一次）：')
+          console.log('')
+          console.log(password)
+          console.log('')
+          console.log('请登录管理台后立即修改；旧管理会话需要重启 server 后失效。')
+        }
         return
       }
       usage()

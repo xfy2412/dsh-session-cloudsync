@@ -67,8 +67,9 @@ irm https://raw.githubusercontent.com/xfy2412/dsh-session-cloudsync/main/scripts
 
 **首次启动**会打印一次性初始化密钥，并提示打开 <http://127.0.0.1:8787/admin>；同时写入数据目录的
 `onboarding-code.json`（0600，初始化完成即删除）。按向导设置管理密码、存储配额，可选创建第一台设备。
-之后管理台用密码登录；忘记密码执行 `dscs-server admin reset`（源码运行时是
-`node packages/server/src/index.ts admin reset`），重启后会重新打印初始化密钥。
+之后管理台用密码登录；忘记密码执行 `dscs-server admin reset-password`
+默认生成随机新密码并只打印一次，也支持 `--stdin` 从标准输入读取自定义密码；
+重置后需重启 server 让旧管理会话失效。
 
 默认只监听 `127.0.0.1`，公网部署请放在 TLS 反代后；数据目录含 SQLite 与 blob，升级前先备份。
 服务端细节见 [packages/server/README.md](packages/server/README.md)。开发用 `pnpm dev:server` 起在
@@ -115,6 +116,8 @@ pnpm run check:plugin     # 插件/shared：插件发布门禁（不含跨包集
 pnpm run test:integration # 插件↔服务端跨包集成；不阻塞任一发布
 pnpm fixtures             # 重新生成夹具的 .zstd 兄弟文件
 pnpm dev:server           # 在 .tmp/dev-data 起服务端（127.0.0.1:8787）
+pnpm dev:server admin status             # 透传服务端 CLI（默认同一数据目录）
+pnpm dev:server reset-password [--stdin] # 重置开发管理密码
 pnpm dev:dsh              # 起隔离的 DSH 开发实例（默认端口 3090）
 pnpm dev:panel            # 双实例开发面板（默认 http://127.0.0.1:3092）
 pnpm dev:console          # 起 M0 控制台（127.0.0.1:3091，见 tests/m0/README.md）
