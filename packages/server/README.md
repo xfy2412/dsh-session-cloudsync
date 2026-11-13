@@ -2,37 +2,80 @@
 
 DSH Session CloudSync 的自部署服务端。
 
-当前版本：**0.1.3，v2-only**（`PROTOCOL_VERSION = 3`）。设备 API 只有 `/v2/*`，
-旧的 `/v1/*` 已移除；0.0.x 插件不兼容，需要 0.1.0 起的插件。
+当前 npm 发布版本：**0.1.3**（协议版本 3，设备 API 只有 `/v2/*`）。
+`main` 分支已包含下一版的管理台、审计、会话历史与删除三档，数据库结构版本 6；
+发版前请以实际 tag 与发布说明为准。
 
-## 能力
+## 能做什么
 
-- `/v2/sessions` 全量快照、会话摘要、ETag、批次条件分页；
-- 带 `Idempotency-Key` 的 append；
-- `POST /v2/blobs/batch` / `POST /v2/blobs/batch/read` 批量 blob（8 MiB / 64 条）；
-- zstd 封帧（加密前压缩）与服务端压缩状态聚合；
-- Vault 租约、append、cursor、stream。
+- **多设备接续**：把 DSH 会话同步到自己的服务器，在另一台设备继续；
+- **私有部署**：数据留在自己的机器或 NAS，不经过第三方；
+- **端到端加密**：服务端只保存不透明密文和同步所需的基本信息，看不到会话内容；
+- **弱网可用**：断点续传、批量传输、加密前压缩，网络恢复后继续；
+- **不会互相覆盖**：同一时间只允许一台设备上传，避免多端同时写乱；
+- **设备管理**：签发/改名/吊销设备，查看最后在线时间，为设备设置颜色；
+- **会话管理**：存档、移除并释放空间、重置后重新上传、恢复存档；
+- **审计**：记录登录、设备、配额、密码和会话管理动作，不记录内容或密钥；
+- **历史与活动**：查看单个会话的变更时间线，以及全局的每日同步强度热力图。
 
 ## 安装
+
+### 一键安装（推荐）
+
+Linux / macOS：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xfy2412/dsh-session-cloudsync/main/scripts/install.sh -o install.sh
+less install.sh   # 建议先看一眼脚本
+sh install.sh
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://raw.githubusercontent.com/xfy2412/dsh-session-cloudsync/main/scripts/install.ps1 -OutFile install.ps1
+notepad install.ps1   # 建议先看一眼脚本
+.\install.ps1
+```
+
+安装脚本会把版本装到独立目录，并可选注册 systemd 或计划任务；支持
+`--version`、`--upgrade`、`--uninstall`、`--purge` 等参数。
+
+### 手动安装
 
 ```sh
 npm i -g dscs-server
 dscs-server serve --data-dir /var/lib/dscs --host 127.0.0.1 --port 8787
 ```
 
-首次启动会在控制台打印一次性初始化密钥，同时写入数据目录的 `onboarding-code.json`。打开 `http://127.0.0.1:8787/admin` 完成管理密码、配额和设备初始化。
+首次启动会在控制台打印一次性初始化密钥，同时写入数据目录的 `onboarding-code.json`。
+打开 `http://127.0.0.1:8787/admin` 完成管理密码、配额和设备初始化。
 
-Linux/macOS 也可以使用仓库的 `scripts/install.sh`；Windows 使用 `scripts/install.ps1`。安装脚本会把版本装到独立目录，并可选注册 systemd 或计划任务。
+## CLI
 
-## 要求
+```sh
+dscs-server serve --data-dir /var/lib/dscs --host 127.0.0.1 --port 8787
+dscs-server token add laptop
+dscs-server token list
+dscs-server token revoke <deviceId>
+dscs-server admin status
+dscs-server admin reset-password --data-dir /var/lib/dscs
+printf '%s' "$NEW_PASSWORD" | dscs-server admin reset-password --data-dir /var/lib/dscs --stdin
+```
+
+`admin reset-password` 默认生成并打印一次随机密码；`--stdin` 读取自定义密码。
+重置后需重启 server 让旧管理会话失效；在管理台修改密码会立即失效其它会话。
+
+## 要求与迁移
 
 - Node.js >= 24；
 - 默认只监听 `127.0.0.1`，公网部署请放在 TLS 反代后；
-- 数据目录包含 SQLite 与 blob 文件，升级前请备份；
-- 服务端不持有明文会话内容，只存不透明密文；
-- 0.0.1 数据目录升级到 0.1.0 会迁移到 schema 4，但旧插件仍会 404；
-- 已有未压缩会话不会自动压缩；需要清空数据目录后由 0.1.0 插件全量重传；
-- 协议说明见仓库 `docs/architecture/PROTOCOL.md`。
+- 数据目录包含 SQLite、blob 文件与迁移备份，升级前请先备份；
+- 数据库结构版本 6，支持从旧版本自动迁移，迁移前会写本地备份；
+- 旧的变更流接口已移除；0.1.0 插件不兼容，需要插件 >= 0.1.1；
+- 服务端不持有明文会话内容，只存不透明密文和同步元数据；
+- 已有未压缩会话不会自动压缩；需要清空数据目录后由插件全量重传；
+- 协议说明见 `docs/architecture/PROTOCOL.md`，错误分类见 `docs/architecture/ERRORS.md`。
 
 ## 许可证
 
