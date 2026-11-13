@@ -1412,7 +1412,7 @@ test('探测与口令验证：真实服务端上判 token、设备与口令', as
       assert.equal(probe.probe.me.role, 'device')
       assert.equal(probe.probe.me.device.label, 'probe-test')
       assert.equal(probe.probe.counts.sessions, 1)
-      assert.equal(probe.probe.server.version, '0.1.3')
+      assert.equal(probe.probe.server.version, SERVER_VERSION)
 
       const unauthorized = await probeServer({ serverUrl: base, token: 'nope' })
       assert.equal(unauthorized.ok, false)
