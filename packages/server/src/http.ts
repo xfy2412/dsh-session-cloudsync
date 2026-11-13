@@ -52,6 +52,7 @@ import {
 import { acquireLease, releaseLease, SYNC_RESOURCE, vaultResource } from './leases.ts'
 import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
 import { listAudit, recordAudit } from './audit.ts'
+import { archiveSession, removeSession, resetSession, restoreSession } from './session-admin.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 
 /** `/health` 报告的服务端版本；从 package.json 读取，避免手写漂移。 */
@@ -466,6 +467,7 @@ const VAULT_LEASE_PATH = /^\/v2\/vault\/lease$/u
 const VAULT_CURSOR_PATH = /^\/v2\/vault\/cursor$/u
 const VAULT_STREAM_PATH = /^\/v2\/vault\/stream\/([^/]+)$/u
 const ADMIN_DEVICE_PATH = /^\/admin\/devices\/([0-9a-f]+)$/u
+const ADMIN_SESSION_ACTION_PATH = /^\/admin\/sessions\/([^/]+)\/(archive|remove|reset|restore|clear-reset)$/u
 
 /**
  * 把 manifest 的内部 `frames` 输出成唯一的 `batches`。
@@ -801,7 +803,8 @@ export function createHttpServer(options: ServerOptions): Server {
         const url = new URL(req.url ?? '/', 'http://localhost')
         const after = decodeSessionsCursor(url.searchParams.get('cursor'))
         const limit = intParam(url.searchParams.get('limit'), 200, 1, 1000)
-        const page = listV2Sessions(db, after, limit)
+        const includeDeleted = url.searchParams.get('includeDeleted') === '1'
+        const page = listV2Sessions(db, after, limit, includeDeleted)
         return json(res, 200, {
           ok: true,
           value: {
@@ -1429,6 +1432,59 @@ export function createHttpServer(options: ServerOptions): Server {
       handler: async (req, res) => {
         requireAdmin(req)
         return json(res, 200, { ok: true, value: adminSessions(db) })
+      },
+    },
+    {
+      method: 'POST',
+      path: ADMIN_SESSION_ACTION_PATH,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const match = ADMIN_SESSION_ACTION_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
+        if (match === null) return json(res, 404, errorBody('not-found', '没有这个会话'))
+        const sessionId = decodeURIComponent(match[1]!)
+        const action = match[2]!
+        const body = await readJson(req)
+        if (!Number.isSafeInteger(body.createdAt)) throw new SyncError('bad-request', 'createdAt 必须是整数')
+        const createdAt = Number(body.createdAt)
+        if (action === 'clear-reset') {
+          const result = db.handle
+            .prepare('DELETE FROM session_resets WHERE dataset = ? AND session_id = ?')
+            .run(DEFAULT_DATASET, sessionId)
+          if (Number(result.changes) === 0) throw new SyncError('not-found', '没有等待重建的重置记录')
+          recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'session.reset_cleared', target: sessionId }, req)
+          return json(res, 200, { ok: true, value: { sessionId, action, cleared: true } })
+        }
+        if (action === 'reset') {
+          const requested = body.deviceId
+          if (requested !== undefined && requested !== null && typeof requested !== 'string') {
+            throw new SyncError('bad-request', 'deviceId 必须是字符串或 null')
+          }
+          if (typeof requested === 'string' && requested !== '') {
+            const device = db.handle
+              .prepare('SELECT 1 FROM devices WHERE dataset = ? AND device_id = ? AND revoked_at IS NULL')
+              .get(DEFAULT_DATASET, requested)
+            if (device === undefined) throw new SyncError('bad-request', '指定设备不存在或已吊销')
+          }
+        }
+        if (action === 'archive') {
+          archiveSession(db, sessionId, createdAt)
+          recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'session.archive', target: sessionId, detail: { createdAt } }, req)
+          return json(res, 200, { ok: true, value: { sessionId, action, archived: true } })
+        }
+        if (action === 'restore') {
+          restoreSession(db, sessionId, createdAt)
+          recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'session.restore', target: sessionId, detail: { createdAt } }, req)
+          return json(res, 200, { ok: true, value: { sessionId, action, restored: true } })
+        }
+        if (action === 'remove') {
+          const purgedBytes = removeSession(db, options.dataDir, sessionId, createdAt)
+          recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'session.remove', target: sessionId, detail: { createdAt, purgedBytes } }, req)
+          return json(res, 200, { ok: true, value: { sessionId, action, purgedBytes } })
+        }
+        const deviceId = typeof body.deviceId === 'string' && body.deviceId !== '' ? body.deviceId : null
+        const purgedBytes = resetSession(db, options.dataDir, sessionId, createdAt, deviceId)
+        recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'session.reset', target: sessionId, detail: { createdAt, purgedBytes, deviceId } }, req)
+        return json(res, 200, { ok: true, value: { sessionId, action, purgedBytes, resetDeviceId: deviceId } })
       },
     },
     {

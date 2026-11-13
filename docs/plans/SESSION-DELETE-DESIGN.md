@@ -1,6 +1,6 @@
 # 会话删除设计：存档 / 移除 / 重置
 
-> 状态：设计稿（2026-11-11），尚未实现。目标是把"删除"拆成三种明确语义，
+> 状态：服务端已实现（2026-11-12）；插件的 `includeDeleted` 读取仍待下个插件版本。
 > 既支持"停止同步、以后还能恢复"，也支持"删掉后从某台设备全量重推"。
 
 ## 1. 三种模式
@@ -18,7 +18,7 @@
 
 ## 2. 数据模型
 
-### 2.1 `sessions` 增加
+### 2.1 `sessions` 增加（schema v5）
 
 ```sql
 ALTER TABLE sessions ADD COLUMN purged_at INTEGER;
@@ -26,6 +26,7 @@ ALTER TABLE sessions ADD COLUMN purged_at INTEGER;
 
 - `deleted_at`：存档/移除的时间；
 - `purged_at`：帧/blob 被清理的时间；`NULL` 表示数据还在（可恢复），非 `NULL` 表示已移除、不可恢复。
+- schema 版本升到 5；v4 旧库通过 `ensureSessionLifecycleColumns` 增加列，迁移前照常备份。
 
 ### 2.2 `tombstones`
 
@@ -47,12 +48,14 @@ CREATE TABLE session_resets (
   reset_at   INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   device_id  TEXT,                -- 可选：只允许这台设备重建
+  workspace_key TEXT,             -- 重置前的工作区 key，供管理台分组
   PRIMARY KEY (dataset, session_id)
 );
 ```
 
 - `device_id IS NULL`：重置后第一台推送的设备获胜；
-- `device_id` 指定：只有该设备可以 append，其它设备返回 `conflict`；
+- `device_id` 指定：只有该设备可以 append，其它设备返回 `reset-pending`；
+- `workspace_key` 在重置时从 manifest 复制，管理台用它与普通会话分到同一工作区组。
 - `expires_at`（默认 24h）：过期后可清除记录，回到"先到先得"。
 
 ### 2.4 `append_requests`
@@ -71,18 +74,20 @@ POST /admin/sessions/:id/archive   { createdAt }
 POST /admin/sessions/:id/remove    { createdAt }
 POST /admin/sessions/:id/reset     { createdAt, deviceId? }
 POST /admin/sessions/:id/restore   { createdAt }
+POST /admin/sessions/:id/clear-reset { createdAt }
 ```
 
 语义：
 
 - `archive`：`deleted_at=now`，写墓碑 `deleted_by='admin:archive'`，不动 blob；
-- `remove`：同 archive，加 `purged_at=now`，删帧/blob，清空 manifest 的 frames，`stored_bytes=0`；
+- `remove`：同 archive，加 `purged_at=now`，删帧/blob，清空 manifest 的 frames，`stored_bytes=0`；保留 `frame_count/last_seq/head_chain_hash` 作为历史元数据；
 - `reset`：清 blob/帧、删除 sessions 行、删除该 session 全部 tombstones、清 append_requests、写 `session_resets`；
 - `restore`：仅当 `deleted_at IS NOT NULL AND purged_at IS NULL`；清 `deleted_at`、删对应墓碑、`updated_at=now`、`bumpRevision`。
 
 管理端 `GET /admin/sessions` 增加字段：
 
-- `deletedAt`、`deletedBy`、`purgedAt`、`resetPending`（是否有 reset 记录）。
+- `deletedAt`、`deletedBy`、`purgedAt`、`resetDeviceId`、`resetExpiresAt`；
+- 审计动作：`session.archive` / `session.remove` / `session.reset` / `session.restore`（detail 带 `createdAt`、`purgedBytes`、`deviceId`）。
 
 ## 4. 设备端 API
 
@@ -103,7 +108,7 @@ GET /v2/sessions?includeDeleted=1&cursor=...&limit=...
 
 `appendFrames` 在创建/追加前检查 `session_resets`：
 
-- 存在记录且 `device_id` 非空且不等于当前设备 → `409 conflict`："该会话正在等待指定设备重建"；
+- 存在记录且 `device_id` 非空且不等于当前设备 → `409 reset-pending`："该会话正在等待指定设备重建"；
 - 存在记录且 `device_id` 为空：允许当前设备，成功后删除 reset 记录；
 - 记录已过期：删除记录，按正常流程处理。
 

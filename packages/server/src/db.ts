@@ -19,7 +19,7 @@ import { DatabaseSync } from 'node:sqlite'
 export const DEFAULT_DATASET = 'default'
 
 /** 当前库结构版本；结构有破坏性变化时递增。 */
-export const SERVER_SCHEMA_VERSION = 4
+export const SERVER_SCHEMA_VERSION = 5
 
 const SCHEMA_VERSION = SERVER_SCHEMA_VERSION
 
@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   revision INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
+  purged_at INTEGER,
   compression TEXT NOT NULL DEFAULT 'none',
   stored_bytes INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (dataset, session_id)
@@ -125,6 +126,17 @@ CREATE TABLE IF NOT EXISTS audit_events (
 
 CREATE INDEX IF NOT EXISTS audit_events_by_time ON audit_events (dataset, at DESC);
 CREATE INDEX IF NOT EXISTS audit_events_by_action ON audit_events (dataset, action, at DESC);
+
+CREATE TABLE IF NOT EXISTS session_resets (
+  dataset TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  reset_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  device_id TEXT,
+  workspace_key TEXT,
+  PRIMARY KEY (dataset, session_id)
+);
 `
 
 /** 一个已打开的服务端数据库。 */
@@ -220,11 +232,37 @@ function ensureSessionStatsColumns(handle: DatabaseSync): boolean {
 }
 
 /**
+ * 确保会话的删除/清理列存在（v5）。
+ * @param handle - 已打开的数据库。
+ * @returns 是否新增了列。
+ */
+function ensureSessionLifecycleColumns(handle: DatabaseSync): boolean {
+  const columns = tableColumns(handle, 'sessions')
+  if (columns.has('purged_at')) return false
+  handle.exec('ALTER TABLE sessions ADD COLUMN purged_at INTEGER')
+  return true
+}
+
+/**
+ * 确保重置记录保存工作区 key（同属 v5，避免已创建的 v5 开发库缺列）。
+ * @param handle - 已打开的数据库。
+ * @returns 是否新增了列。
+ */
+function ensureSessionResetColumns(handle: DatabaseSync): boolean {
+  if (!tableExists(handle, 'session_resets')) return false
+  const columns = tableColumns(handle, 'session_resets')
+  if (columns.has('workspace_key')) return false
+  handle.exec('ALTER TABLE session_resets ADD COLUMN workspace_key TEXT')
+  return true
+}
+
+/**
  * 迁移旧库；只迁移明确支持的版本，不删除会话/墓碑/Vault。
  *
  * v2 → v3：租约是 60s 的瞬时状态，允许重建；新增 vault_records。
  * v3 → v4：新增 append_requests、会话压缩聚合列；不重写旧表。
- * v0 → v4：只接受没有旧表、或已是 v2 形状的库；v1 的 frames/session_frames 直接拒绝。
+ * v4 → v5：新增会话 purged_at 与 session_resets；不重写旧表。
+ * v0 → v5：只接受没有旧表、或已是 v2 形状的库；v1 的 frames/session_frames 直接拒绝。
  */
 function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number): void {
   if (version > SCHEMA_VERSION) {
@@ -232,12 +270,14 @@ function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number)
   }
   if (version === SCHEMA_VERSION) {
     handle.exec(SCHEMA)
+    ensureSessionResetColumns(handle)
     const columns = tableColumns(handle, 'sessions')
-    if (!columns.has('compression') || !columns.has('stored_bytes')) {
+    if (!columns.has('compression') || !columns.has('stored_bytes') || !columns.has('purged_at')) {
       backupBeforeMigration(handle, dataDir, version)
       handle.exec('BEGIN IMMEDIATE')
       try {
         ensureSessionStatsColumns(handle)
+        ensureSessionLifecycleColumns(handle)
         handle.exec('COMMIT')
       } catch (error: unknown) {
         handle.exec('ROLLBACK')
@@ -265,7 +305,7 @@ function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number)
     sourceVersion = 2
   }
 
-  if (sourceVersion !== 2 && sourceVersion !== 3) {
+  if (sourceVersion !== 2 && sourceVersion !== 3 && sourceVersion !== 4) {
     throw new Error(`不支持的数据库结构版本 ${sourceVersion}；请使用对应版本的服务端迁移。`)
   }
 
@@ -280,6 +320,8 @@ function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number)
     }
     handle.exec(SCHEMA)
     ensureSessionStatsColumns(handle)
+    ensureSessionLifecycleColumns(handle)
+    ensureSessionResetColumns(handle)
     handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
     handle.exec('COMMIT')
   } catch (error: unknown) {

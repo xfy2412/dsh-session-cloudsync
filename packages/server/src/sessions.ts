@@ -34,6 +34,7 @@ interface SessionRow {
   readonly revision: number
   readonly updated_at: number
   readonly deleted_at: number | null
+  readonly purged_at: number | null
   readonly compression: string
   readonly stored_bytes: number
 }
@@ -123,8 +124,27 @@ function toChain(frames: readonly SealedFrameRef[]): ChainFrame[] {
  */
 function sessionRow(db: ServerDb, sessionId: string): SessionRow | undefined {
   return db.handle
-    .prepare('SELECT created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at, compression, stored_bytes FROM sessions WHERE dataset = ? AND session_id = ?')
+    .prepare('SELECT created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at, purged_at, compression, stored_bytes FROM sessions WHERE dataset = ? AND session_id = ?')
     .get(DEFAULT_DATASET, sessionId) as SessionRow | undefined
+}
+
+/**
+ * 读取有效的重置闸门；过期记录顺手清掉。
+ * @param db - 已打开的数据库。
+ * @param sessionId - 会话 id。
+ * @param now - 当前时间。
+ * @returns 重置记录，或 undefined。
+ */
+function activeReset(db: ServerDb, sessionId: string, now: number): { device_id: string | null } | undefined {
+  const row = db.handle
+    .prepare('SELECT device_id, expires_at FROM session_resets WHERE dataset = ? AND session_id = ?')
+    .get(DEFAULT_DATASET, sessionId) as { device_id: string | null; expires_at: number } | undefined
+  if (row === undefined) return undefined
+  if (row.expires_at <= now) {
+    db.handle.prepare('DELETE FROM session_resets WHERE dataset = ? AND session_id = ?').run(DEFAULT_DATASET, sessionId)
+    return undefined
+  }
+  return { device_id: row.device_id }
 }
 
 /**
@@ -230,6 +250,10 @@ function appendRequestHash(input: AppendInput): string {
  */
 export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, now = Date.now()): SessionSummary {
   return withTransaction(db, () => {
+    const reset = activeReset(db, input.sessionId, now)
+    if (reset !== undefined && reset.device_id !== null && reset.device_id !== input.deviceId) {
+      throw new SyncError('reset-pending', '该会话正在等待指定设备重建')
+    }
     const idempotencyKey = input.idempotencyKey
     const requestHash = idempotencyKey === undefined ? undefined : appendRequestHash(input)
     if (idempotencyKey !== undefined && requestHash !== undefined) {
@@ -253,6 +277,9 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
     let origin = input.origin
     let delegationDepth = input.delegationDepth
 
+    if (row !== undefined && row.purged_at !== null) {
+      throw new SyncError('gone', `会话 ${input.sessionId} 已移除并释放空间，需要由管理台重置后才能重建`)
+    }
     if (row !== undefined && row.deleted_at !== null && row.created_at === input.createdAt) {
       throw new SyncError('gone', `会话 ${input.sessionId} 的这个生命周期已被删除`)
     }
@@ -325,13 +352,13 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
     const revision = bumpRevision(db)
     const stats = statsOf(combined)
     db.handle
-      .prepare(`INSERT INTO sessions (dataset, session_id, created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at, compression, stored_bytes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      .prepare(`INSERT INTO sessions (dataset, session_id, created_at, format_version, last_seq, frame_count, head_chain_hash, manifest_json, manifest_digest, revision, updated_at, deleted_at, purged_at, compression, stored_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
                 ON CONFLICT(dataset, session_id) DO UPDATE SET
                   created_at = excluded.created_at, format_version = excluded.format_version, last_seq = excluded.last_seq,
                   frame_count = excluded.frame_count, head_chain_hash = excluded.head_chain_hash,
                   manifest_json = excluded.manifest_json, manifest_digest = excluded.manifest_digest,
-                  revision = excluded.revision, updated_at = excluded.updated_at, deleted_at = NULL,
+                  revision = excluded.revision, updated_at = excluded.updated_at, deleted_at = NULL, purged_at = NULL,
                   compression = excluded.compression, stored_bytes = excluded.stored_bytes`)
       .run(DEFAULT_DATASET, input.sessionId, createdAt, formatVersion, manifest.lastSeq, combined.length, headChainHash, JSON.stringify(manifest), digest, revision, now, stats.compression, stats.storedBytes)
     const summary: SessionSummary = {
@@ -356,6 +383,9 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
         JSON.stringify(summary),
         now,
       )
+    }
+    if (reset !== undefined) {
+      db.handle.prepare('DELETE FROM session_resets WHERE dataset = ? AND session_id = ?').run(DEFAULT_DATASET, input.sessionId)
     }
     return summary
   })
@@ -448,6 +478,10 @@ export interface V2SessionSummary {
   readonly delegationDepth: number | null
   readonly updatedAt: number
   readonly deletedAt: number | null
+  /** 删除来源：设备 id、admin:archive、admin:remove；未删除为 null。 */
+  readonly deletedBy: string | null
+  /** 帧/blob 被清理的时间；未清理为 null。 */
+  readonly purgedAt: number | null
   /** 整个会话的压缩状态。 */
   readonly compression: SessionCompression
   /** 会话所有封帧的密文字节总和。 */
@@ -465,6 +499,8 @@ interface V2SummaryRow {
   readonly revision: number
   readonly updated_at: number
   readonly deleted_at: number | null
+  readonly purged_at: number | null
+  readonly deleted_by: string | null
   readonly compression: string
   readonly stored_bytes: number
   readonly workspace_key: string | null
@@ -477,7 +513,10 @@ interface V2SummaryRow {
 
 const V2_SUMMARY_SELECT = `s.session_id, s.created_at, s.format_version, s.last_seq, s.frame_count,
   s.head_chain_hash, s.manifest_digest, s.revision, s.updated_at, s.deleted_at,
-  s.compression, s.stored_bytes,
+  s.purged_at, s.compression, s.stored_bytes,
+  (SELECT t.deleted_by FROM tombstones t
+     WHERE t.dataset = s.dataset AND t.session_id = s.session_id AND t.created_at = s.created_at
+     LIMIT 1) AS deleted_by,
   json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key,
   json_extract(s.manifest_json, '$.tailOpen') AS tail_open,
   json_extract(s.manifest_json, '$.safeThroughSeq') AS safe_through_seq,
@@ -513,6 +552,8 @@ function mapV2Summary(row: V2SummaryRow): V2SessionSummary {
       : null,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    deletedBy: row.deleted_by,
+    purgedAt: row.purged_at,
     compression: compressionOf(row.compression),
     storedBytes: Number.isSafeInteger(row.stored_bytes) ? row.stored_bytes : 0,
   }
@@ -532,13 +573,14 @@ export function listV2Sessions(
   db: ServerDb,
   after: string | undefined,
   limit: number,
+  includeDeleted = false,
 ): { sessions: V2SessionSummary[]; nextSessionId: string | null } {
   const rows = db.handle
     .prepare(`SELECT ${V2_SUMMARY_SELECT}
               FROM sessions s
-              WHERE s.dataset = ? AND s.deleted_at IS NULL AND s.session_id > ?
+              WHERE s.dataset = ? AND (? = 1 OR s.deleted_at IS NULL) AND s.session_id > ?
               ORDER BY s.session_id ASC LIMIT ?`)
-    .all(DEFAULT_DATASET, after ?? '', limit + 1) as unknown as V2SummaryRow[]
+    .all(DEFAULT_DATASET, includeDeleted ? 1 : 0, after ?? '', limit + 1) as unknown as V2SummaryRow[]
   const visible = rows.slice(0, limit)
   const last = visible[visible.length - 1]
   return {
@@ -600,6 +642,16 @@ export interface AdminSession {
   readonly revision: number
   readonly updatedAt: number
   readonly deletedAt: number | null
+  /** 删除来源：设备 id、admin:archive、admin:remove；未删除为 null。 */
+  readonly deletedBy: string | null
+  /** 帧/blob 被清理的时间；未清理为 null。 */
+  readonly purgedAt: number | null
+  /** 重置发生时间；没有重置为 null。 */
+  readonly resetAt: number | null
+  /** 重置后等待重建的指定设备；没有重置为 null。 */
+  readonly resetDeviceId: string | null
+  /** 重置闸门的过期时间；没有重置为 null。 */
+  readonly resetExpiresAt: number | null
   /** 该会话所有封帧的密文字节总和。 */
   readonly storedBytes: number
   /** manifest 里的 opaque workspaceKey；子代理或旧 manifest 为 null。 */
@@ -614,12 +666,27 @@ export interface AdminSession {
  */
 export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
   const rows = db.handle
-    .prepare(`SELECT s.session_id, s.created_at, s.format_version, s.frame_count, s.last_seq, s.head_chain_hash,
-                     s.revision, s.updated_at, s.deleted_at, s.stored_bytes,
-                     json_extract(s.manifest_json, '$.workspaceKey') AS workspace_key
-              FROM sessions s
-              WHERE s.dataset = ? ORDER BY s.updated_at DESC LIMIT ?`)
-    .all(DEFAULT_DATASET, limit) as unknown as Array<{
+    .prepare(`SELECT * FROM (
+                SELECT s.session_id, s.created_at, s.format_version, s.frame_count, s.last_seq, s.head_chain_hash,
+                       s.revision, s.updated_at, s.deleted_at, s.purged_at, s.stored_bytes,
+                       t.deleted_by, r.device_id AS reset_device_id, r.expires_at AS reset_expires_at, r.reset_at,
+                       COALESCE(json_extract(s.manifest_json, '$.workspaceKey'), r.workspace_key) AS workspace_key
+                FROM sessions s
+                LEFT JOIN tombstones t
+                  ON t.dataset = s.dataset AND t.session_id = s.session_id AND t.created_at = s.created_at
+                LEFT JOIN session_resets r
+                  ON r.dataset = s.dataset AND r.session_id = s.session_id
+                WHERE s.dataset = ?
+                UNION ALL
+                SELECT r.session_id, r.created_at, 0, 0, 0, '', 0, r.reset_at, NULL, NULL, 0,
+                       NULL, r.device_id, r.expires_at, r.reset_at, r.workspace_key
+                FROM session_resets r
+                WHERE r.dataset = ? AND NOT EXISTS (
+                  SELECT 1 FROM sessions s WHERE s.dataset = r.dataset AND s.session_id = r.session_id
+                )
+              )
+              ORDER BY updated_at DESC LIMIT ?`)
+    .all(DEFAULT_DATASET, DEFAULT_DATASET, limit) as unknown as Array<{
       session_id: string
       created_at: number
       format_version: number
@@ -629,7 +696,12 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
       revision: number
       updated_at: number
       deleted_at: number | null
+      purged_at: number | null
       stored_bytes: number
+      deleted_by: string | null
+      reset_device_id: string | null
+      reset_expires_at: number | null
+      reset_at: number | null
       workspace_key: string | null
     }>
   return rows.map((row) => ({
@@ -642,6 +714,11 @@ export function adminSessions(db: ServerDb, limit = 500): AdminSession[] {
     revision: row.revision,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    deletedBy: row.deleted_by,
+    purgedAt: row.purged_at,
+    resetAt: row.reset_at,
+    resetDeviceId: row.reset_device_id,
+    resetExpiresAt: row.reset_expires_at,
     storedBytes: row.stored_bytes,
     workspaceKey: row.workspace_key === null ? null : String(row.workspace_key),
   }))

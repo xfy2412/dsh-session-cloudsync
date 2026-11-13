@@ -15,6 +15,7 @@ export const ERROR_STATUS: Readonly<Record<SyncErrorCode, number>> = {
   conflict: 409,
   diverged: 409,
   'lease-held': 409,
+  'reset-pending': 409,
   gone: 410,
   quota: 507,
   'rate-limited': 429,

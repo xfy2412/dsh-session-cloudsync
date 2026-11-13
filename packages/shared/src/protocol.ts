@@ -67,6 +67,7 @@ export type SyncErrorCode =
   | 'conflict'
   | 'diverged'
   | 'lease-held'
+  | 'reset-pending'
   | 'gone'
   | 'quota'
   | 'rate-limited'

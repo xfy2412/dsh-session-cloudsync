@@ -98,10 +98,10 @@ GET /health
 ### 全量快照
 
 ```http
-GET /v2/sessions?cursor=<opaque>&limit=200
+GET /v2/sessions?cursor=<opaque>&limit=200&includeDeleted=1
 ```
 
-返回未删除会话（下面是 `value` 的内容，外层还有 `{"ok":true,...}`）：
+默认只返回未删除会话；`includeDeleted=1` 时同时返回已存档/已移除会话（下面是 `value` 的内容，外层还有 `{"ok":true,...}`）：
 
 ```json
 {
@@ -136,7 +136,8 @@ GET /v2/sessions?cursor=<opaque>&limit=200
 - `compression`：`none` / `zstd` / `mixed`。
 - `storedBytes`：本会话所有封帧的密文字节总和。
 
-- 已删除会话不进入快照；客户端以快照为准，不再有独立的"变更流"。
+- 默认快照不含已删除会话；`includeDeleted=1` 会返回 `deletedAt/deletedBy/purgedAt`，用于让客户端把本地副本标成阻塞而不是反复 push。
+- 重置后的会话没有行，客户端会看到"远端没有"，由 `session_resets` 闸门决定谁能重建。
 
 > 变更流 `/v2/changes` 与 revision/墓碑游标已在服务端移除；历史设计与失败原因见
 > [CURSOR-HISTORY](../plans/CURSOR-HISTORY.md)。
@@ -314,12 +315,12 @@ Vault 的设备台账与工作区 profile（L3 笔记尚未实现）使用 `/v2/
 ## 错误码
 
 `unauthorized` · `bad-request` · `not-found` · `conflict` · `diverged` ·
-`lease-held` · `gone` · `quota` · `rate-limited`
+`lease-held` · `reset-pending` · `gone` · `quota` · `rate-limited`
 
 HTTP 映射：
 
 ```text
-401 · 400 · 404 · 409 · 409 · 409 · 410 · 507 · 429
+401 · 400 · 404 · 409 · 409 · 409 · 409 · 410 · 507 · 429
 ```
 
 `rate-limited` 目前只用于管理台登录与初始化密钥校验（同一来源 10 次/10 分钟，`http.ts:726-736`）。
@@ -333,7 +334,10 @@ HTTP 映射：
 ## 管理台端点
 
 `/admin`、`/admin/login`、`/admin/logout`、`/admin/overview`、`/admin/quota`、
-`/admin/devices`、`/admin/sessions` 保持不变，另增 `PATCH /admin/devices/:id`（`{label}`）改名；管理台不接受设备 bearer token。
+`/admin/devices`、`/admin/sessions` 保持不变；另增 `PATCH /admin/devices/:id`（`{label}`）改名、
+`GET /admin/audit`、`POST /admin/password`，以及会话生命周期
+`POST /admin/sessions/:id/archive|remove|reset|restore|clear-reset`（body `{createdAt, deviceId?}`）。
+管理台不接受设备 bearer token。
 
 初始化向导的 cookie 会话接口是 `/setup/state`、`/setup/verify`、`/setup/password`、`/setup/quota`、
 `/setup/device`、`/setup/complete`（`packages/server/src/http.ts:1198-1292`；向导会话 15 分钟，

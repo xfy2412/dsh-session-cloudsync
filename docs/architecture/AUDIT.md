@@ -29,6 +29,7 @@ audit_events(
 | `password.change` / `password.change_failed` | 修改管理密码 |
 | `password.reset_cli` | CLI 直接重置管理密码 |
 | `session.delete` | 设备调用删除会话接口 |
+| `session.archive` / `session.remove` / `session.reset` / `session.restore` / `session.reset_cleared` | 管理台会话生命周期操作 |
 
 `detail` 只放展示所需字段，例如改名的 `{from,to}`、配额的 `{from,to}`、设备的 `{label}`。
 

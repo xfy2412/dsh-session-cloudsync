@@ -64,6 +64,8 @@
   .btn.danger { background: transparent; border-color: rgba(239,119,119,.38); color: #ffabab; }
   .btn.danger:hover { background: var(--bad-soft); border-color: rgba(239,119,119,.58); }
   .btn.small { min-height: 27px; padding: 3px 9px; font-size: 11.5px; }
+  .btn.tiny { min-height: 22px; padding: 1px 7px; font-size: 10.5px; border-radius: 6px; }
+  .row-actions { display: flex; gap: 4px; }
   .btn.wide { width: 100%; }
   .btn svg { flex: 0 0 auto; }
   .spinner { animation: spin .9s linear infinite; }
@@ -332,7 +334,7 @@
           <span class="panel-icon" id="sessionsIcon"></span>
           <div class="panel-title">
             <b>会话</b>
-            <span>按服务端更新时间倒序；只展示元数据，内容端到端加密。</span>
+            <span>按服务端更新时间倒序；只显示同步时间、大小等摘要，内容端到端加密。</span>
           </div>
           <span class="spacer"></span>
           <span id="sessionBadge" class="badge">0 个</span>
@@ -351,7 +353,7 @@
           <div class="table-wrap" id="sessionTableWrap">
             <table>
               <thead>
-                <tr><th>会话</th><th>格式</th><th>批次</th><th>最后序号</th><th>大小</th><th>更新时间</th><th>状态</th></tr>
+                <tr><th>会话</th><th>格式</th><th>批次</th><th>最后序号</th><th>大小</th><th>更新时间</th><th>状态</th><th>操作</th></tr>
               </thead>
               <tbody id="sessions"></tbody>
             </table>
@@ -365,7 +367,7 @@
           <span class="panel-icon" id="storageIcon"></span>
           <div class="panel-title">
             <b>存储</b>
-            <span>按唯一密文字节计算。</span>
+            <span>只统计服务端实际占用的加密数据。</span>
           </div>
           <span class="spacer"></span>
           <span id="storageBadge" class="badge">0%</span>
@@ -393,7 +395,7 @@
           <span class="panel-icon" id="devicesIcon"></span>
           <div class="panel-title">
             <b>设备</b>
-            <span>每台设备一个 token；token 只显示一次。</span>
+            <span>每台设备一把接入密钥，只在创建时显示一次。</span>
           </div>
           <span class="spacer"></span>
           <span id="deviceBadge" class="badge">0 台</span>
@@ -414,7 +416,7 @@
         <span class="panel-icon" id="auditIcon"></span>
         <div class="panel-title">
           <b>审计</b>
-          <span>管理动作流水；不记录会话内容、token 或口令。</span>
+          <span>管理动作流水；不记录会话内容、设备密钥或管理密码。</span>
         </div>
         <span class="spacer"></span>
         <span id="auditBadge" class="badge">0 条</span>
@@ -449,11 +451,11 @@
 
 <div id="tokenDialog" class="modal" hidden>
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="tokenTitle">
-    <h2 id="tokenTitle">设备 token</h2>
+    <h2 id="tokenTitle">设备接入密钥</h2>
     <p>只显示这一次。关闭后无法再次查看，只能重新签发。</p>
     <div id="tokenValue" class="token-box" tabindex="0"></div>
     <div class="modal-actions">
-      <button id="copyToken" class="btn secondary" type="button">复制 token</button>
+      <button id="copyToken" class="btn secondary" type="button">复制密钥</button>
       <button id="closeToken" class="btn" type="button">我已保存</button>
     </div>
   </div>
@@ -494,6 +496,22 @@
   </div>
 </div>
 
+<div id="sessionDialog" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sessionActionTitle">
+    <h2 id="sessionActionTitle">会话操作</h2>
+    <p id="sessionActionText"></p>
+    <label class="field" id="sessionResetField" hidden>
+      <span>指定重建设备</span>
+      <select id="sessionResetDevice"></select>
+    </label>
+    <div id="sessionActionError" class="inline-result bad" role="alert"></div>
+    <div class="modal-actions">
+      <button id="cancelSessionAction" class="btn ghost" type="button">取消</button>
+      <button id="confirmSessionAction" class="btn danger" type="button">确认</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id)
 const GiB = 1024 ** 3
@@ -504,6 +522,7 @@ const state = {
   autoRefresh: true,
   editingDeviceId: null,
   revokeTarget: null,
+  sessionAction: null,
   collapsed: new Set(),
   audit: [],
   auditBefore: null,
@@ -634,6 +653,7 @@ function showLogin() {
   $('appView').hidden = true
   $('loginError').textContent = ''
   if (!$('passwordDialog').hidden) closePassword()
+  if (!$('sessionDialog').hidden) closeSessionAction()
   setTimeout(() => $('password').focus(), 30)
   // 服务端数据被清空（开发 --clean 或换库）时，直接回初始化向导。
   fetch('/setup/state', { credentials: 'same-origin' })
@@ -652,8 +672,8 @@ function showApp() {
 function renderMetrics(overview) {
   const percent = overview.maxBytes > 0 ? Math.min(100, Math.round(overview.usedBytes / overview.maxBytes * 1000) / 10) : 0
   const items = [
-    { icon: 'devices', key: '设备', value: overview.devices, hint: '已签发 token' },
-    { icon: 'sessions', key: '会话', value: overview.sessions, hint: overview.deletedSessions > 0 ? overview.deletedSessions + ' 个墓碑' : '没有墓碑' },
+    { icon: 'devices', key: '设备', value: overview.devices, hint: '已签发接入密钥' },
+    { icon: 'sessions', key: '会话', value: overview.sessions, hint: overview.deletedSessions > 0 ? overview.deletedSessions + ' 个已删除' : '没有删除记录' },
     { icon: 'storage', key: '已用存储', value: formatBytes(overview.usedBytes), hint: percent + '% · 配额 ' + formatBytes(overview.maxBytes), bar: percent },
   ]
   $('metrics').replaceChildren(...items.map((item) => {
@@ -696,7 +716,7 @@ function renderDevices(devices) {
     const empty = el('div', 'empty')
     const mark = el('div', 'icon')
     mark.append(icon('devices', 22))
-    empty.append(mark, el('b', null, '还没有设备'), el('span', null, '签发一个 token，把 DSH 插件接到这台服务器。'))
+    empty.append(mark, el('b', null, '还没有设备'), el('span', null, '签发一把接入密钥，把 DSH 插件接到这台服务器。'))
     list.replaceChildren(empty)
     return
   }
@@ -774,7 +794,7 @@ async function saveDeviceLabel(device, raw) {
 
 function openRevoke(device) {
   state.revokeTarget = device.deviceId
-  $('revokeText').textContent = '吊销「' + (device.label || 'device') + '」后，它的 token 立即失效；该设备将无法再推送或拉取。'
+  $('revokeText').textContent = '吊销「' + (device.label || 'device') + '」后，它的接入密钥立即失效；该设备将无法再推送或拉取。'
   $('revokeDialog').hidden = false
   document.body.classList.add('modal-open')
   setTimeout(() => $('confirmRevoke').focus(), 30)
@@ -799,6 +819,113 @@ function openPassword() {
 function closePassword() {
   $('passwordDialog').hidden = true
   document.body.classList.remove('modal-open')
+}
+
+const SESSION_ACTIONS = {
+  archive: {
+    title: '存档会话',
+    text: '停止同步，但保留服务端保存的完整数据；之后可以恢复。其他设备上的本地副本不会被删除。',
+    confirm: '存档',
+    danger: false,
+  },
+  restore: {
+    title: '恢复会话',
+    text: '让这个会话重新参与同步。其他设备上的副本可能与服务端版本不一致，请确认。',
+    confirm: '恢复',
+    danger: false,
+  },
+  remove: {
+    title: '移除并释放空间',
+    text: '停止同步并永久删除服务端保存的数据，以释放空间；不可恢复。其他设备上的本地副本仍会保留。',
+    confirm: '移除并释放',
+    danger: true,
+  },
+  reset: {
+    title: '重置远端会话',
+    text: '删除服务端保存的这个会话及删除标记，允许指定设备把本地完整副本重新上传。会中断正在进行的同步；请先让目标设备同步。',
+    confirm: '重置',
+    danger: true,
+  },
+  'clear-reset': {
+    title: '取消重置',
+    text: '清除等待重建状态；之后任意设备都可以重新上传这个会话。',
+    confirm: '取消重置',
+    danger: false,
+  },
+}
+
+function openSessionAction(session, action) {
+  const info = SESSION_ACTIONS[action]
+  if (info === undefined) return
+  state.sessionAction = { session, action }
+  $('sessionActionTitle').textContent = info.title
+  $('sessionActionText').textContent = info.text
+  $('sessionActionError').textContent = ''
+  const field = $('sessionResetField')
+  const select = $('sessionResetDevice')
+  const confirm = $('confirmSessionAction')
+  confirm.className = 'btn' + (info.danger ? ' danger' : '')
+  confirm.textContent = info.confirm
+  confirm.disabled = false
+  if (action === 'reset') {
+    field.hidden = false
+    select.replaceChildren()
+    for (const device of state.devices) {
+      const option = el('option', null, device.label || device.deviceId)
+      option.value = device.deviceId
+      select.append(option)
+    }
+    if (state.devices.length === 0) {
+      const option = el('option', null, '没有可用设备')
+      option.value = ''
+      select.append(option)
+      $('sessionActionError').textContent = '没有可指定的设备；请先创建设备接入密钥'
+      confirm.disabled = true
+    }
+  } else {
+    field.hidden = true
+  }
+  $('sessionDialog').hidden = false
+  document.body.classList.add('modal-open')
+  setTimeout(() => confirm.focus(), 30)
+}
+
+function closeSessionAction() {
+  state.sessionAction = null
+  $('sessionDialog').hidden = true
+  document.body.classList.remove('modal-open')
+}
+
+async function confirmSessionAction() {
+  const pending = state.sessionAction
+  if (pending === null) return
+  const { session, action } = pending
+  const button = $('confirmSessionAction')
+  $('sessionActionError').textContent = ''
+  button.disabled = true
+  const label = button.textContent
+  button.textContent = '处理中…'
+  try {
+    const body = { createdAt: session.createdAt }
+    if (action === 'reset') {
+      const deviceId = $('sessionResetDevice').value
+      if (deviceId === '') throw new Error('请选择一台设备')
+      body.deviceId = deviceId
+    }
+    await api('/admin/sessions/' + encodeURIComponent(session.sessionId) + '/' + action, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    closeSessionAction()
+    showToast('会话操作完成')
+    await refresh(true)
+    await loadAudit(true)
+  } catch (error) {
+    $('sessionActionError').textContent = error.message
+  } finally {
+    button.disabled = false
+    button.textContent = label
+  }
 }
 
 async function savePassword() {
@@ -841,6 +968,7 @@ function filteredSessions() {
 
 function sessionRow(session) {
   const row = el('tr')
+  const resetting = session.resetExpiresAt !== null && session.resetExpiresAt !== undefined && session.resetExpiresAt > Date.now()
   const idCell = el('td', 'session-id')
   idCell.append(el('code', null, session.sessionId))
   const copy = el('button', 'row-copy')
@@ -851,16 +979,44 @@ function sessionRow(session) {
   idCell.append(copy)
   row.append(
     idCell,
-    el('td', null, 'v' + session.formatVersion),
-    el('td', null, String(session.batchCount)),
-    el('td', null, String(session.lastSeq)),
-    el('td', null, formatBytes(session.storedBytes)),
+    el('td', null, resetting ? '—' : 'v' + session.formatVersion),
+    el('td', null, resetting ? '—' : String(session.batchCount)),
+    el('td', null, resetting ? '—' : String(session.lastSeq)),
+    el('td', null, resetting ? '—' : formatBytes(session.storedBytes)),
     agoCell(session.updatedAt),
   )
   const status = el('td')
-  status.append(el('span', 'badge' + (session.deletedAt === null ? ' good' : ' bad'), session.deletedAt === null ? '正常' : '已删除'))
-  row.append(status)
+  const purged = session.purgedAt !== null && session.purgedAt !== undefined
+  const deleted = session.deletedAt !== null && session.deletedAt !== undefined
+  status.append(el('span', 'badge' + (resetting ? ' accent' : deleted ? ' bad' : ' good'), resetting ? '重置中' : purged ? '已移除' : deleted ? (session.deletedBy === 'admin:archive' ? '已存档' : '已删除') : '正常'))
+  const actions = el('td')
+  const actionBox = el('div', 'row-actions')
+  if (resetting) {
+    actionBox.append(sessionActionButton(session, '取消重置', 'clear-reset'))
+  } else {
+    if (!deleted) actionBox.append(sessionActionButton(session, '存档', 'archive'))
+    if (deleted && !purged) actionBox.append(sessionActionButton(session, '恢复', 'restore'))
+    if (!purged) actionBox.append(sessionActionButton(session, '移除', 'remove', true))
+    actionBox.append(sessionActionButton(session, '重置', 'reset'))
+  }
+  actions.append(actionBox)
+  row.append(status, actions)
   return row
+}
+
+/**
+ * 生成会话操作按钮；具体行为由 openSessionAction 处理。
+ * @param {object} session - 会话行。
+ * @param {string} label - 按钮文字。
+ * @param {'archive'|'restore'|'remove'|'reset'|'clear-reset'} action - 动作。
+ * @param {boolean} danger - 是否危险色。
+ */
+function sessionActionButton(session, label, action, danger) {
+  const button = el('button', 'btn tiny' + (danger ? ' danger' : ' secondary'))
+  button.type = 'button'
+  button.textContent = label
+  button.onclick = () => openSessionAction(session, action)
+  return button
 }
 
 function workspaceAlias(key) {
@@ -883,7 +1039,7 @@ const WORKSPACE_ALIAS_PREFIX = 'dsh-sync-workspace-alias:'
 function workspaceGroupRow(group) {
   const row = el('tr', 'session-group')
   const cell = el('td')
-  cell.colSpan = 7
+  cell.colSpan = 8
   const head = el('div', 'session-group-head')
   const collapseKey = group.key || '__unmapped__'
   const collapsed = state.collapsed.has(collapseKey)
@@ -910,11 +1066,11 @@ function workspaceGroupRow(group) {
     head.append(el('b', null, '未归属'))
   }
   const keyLine = el('div', 'session-group-key')
-  keyLine.append(el('code', null, group.key ? group.key.slice(0, 16) + '…' : '子代理/旧 manifest'))
+  keyLine.append(el('code', null, group.key ? group.key.slice(0, 16) + '…' : '子代理 / 较早版本'))
   if (group.key) {
     const copy = el('button', 'row-copy')
     copy.type = 'button'
-    copy.title = '复制 workspaceKey'
+    copy.title = '复制工作区标识'
     copy.append(icon('copy', 11))
     copy.onclick = (event) => { event.stopPropagation(); copyText(group.key) }
     keyLine.append(copy)
@@ -994,6 +1150,11 @@ const AUDIT_ACTIONS = {
   'setup.device': '初始化设备',
   'setup.complete': '完成初始化',
   'session.delete': '删除会话',
+  'session.archive': '存档会话',
+  'session.remove': '移除会话',
+  'session.reset': '重置会话',
+  'session.restore': '恢复会话',
+  'session.reset_cleared': '取消重置',
 }
 
 function auditActionLabel(action) {
@@ -1001,9 +1162,9 @@ function auditActionLabel(action) {
 }
 
 function auditActionTone(action) {
-  if (action === 'device.revoke' || action === 'session.delete' || action === 'login_failed' || action === 'password.change_failed') return 'bad'
+  if (action === 'device.revoke' || action === 'session.delete' || action === 'session.remove' || action === 'session.reset' || action === 'login_failed' || action === 'password.change_failed') return 'bad'
   if (action === 'device.create' || action === 'login' || action === 'setup.complete') return 'good'
-  if (action === 'device.rename' || action === 'quota.change' || action === 'password.change' || action === 'password.reset_cli') return 'warn'
+  if (action === 'device.rename' || action === 'quota.change' || action === 'password.change' || action === 'password.reset_cli' || action === 'session.archive' || action === 'session.restore' || action === 'session.reset_cleared') return 'warn'
   return ''
 }
 
@@ -1282,6 +1443,9 @@ $('changePassword').onclick = openPassword
 $('cancelPassword').onclick = closePassword
 $('passwordDialog').addEventListener('click', (event) => { if (event.target === $('passwordDialog')) closePassword() })
 $('savePassword').onclick = savePassword
+$('cancelSessionAction').onclick = closeSessionAction
+$('sessionDialog').addEventListener('click', (event) => { if (event.target === $('sessionDialog')) closeSessionAction() })
+$('confirmSessionAction').onclick = confirmSessionAction
 for (const id of ['currentPassword', 'newPassword', 'confirmPassword']) {
   $(id).addEventListener('keydown', (event) => { if (event.key === 'Enter') savePassword() })
 }
@@ -1308,6 +1472,7 @@ document.addEventListener('keydown', (event) => {
   if (!$('tokenDialog').hidden) closeToken()
   if (!$('revokeDialog').hidden) closeRevoke()
   if (!$('passwordDialog').hidden) closePassword()
+  if (!$('sessionDialog').hidden) closeSessionAction()
 })
 $('sessionSearch').addEventListener('input', renderSessions)
 $('sessionFilter').addEventListener('change', renderSessions)

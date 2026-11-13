@@ -45,7 +45,7 @@ function createV2Database(dir) {
   raw.close()
 }
 
-test('数据库迁移：v2 → v4 保留会话/墓碑并新增 Vault 与幂等表，重建瞬时租约', () => {
+test('数据库迁移：v2 → v5 保留会话/墓碑并新增 Vault、幂等表与删除列，重建瞬时租约', () => {
   const dir = tempDir()
   try {
     createV2Database(dir)
@@ -58,6 +58,9 @@ test('数据库迁移：v2 → v4 保留会话/墓碑并新增 Vault 与幂等�
       assert.equal(session.last_seq, 2)
       assert.equal(session.compression, 'none')
       assert.equal(session.stored_bytes, 0)
+      const sessionColumns = db.handle.prepare('PRAGMA table_info(sessions)').all().map((row) => row.name)
+      assert.ok(sessionColumns.includes('purged_at'))
+      assert.ok(db.handle.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_resets'").get())
       const tombstone = db.handle.prepare('SELECT session_id FROM tombstones').get()
       assert.equal(tombstone.session_id, 'kept-session')
       assert.ok(db.handle.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vault_records'").get())
