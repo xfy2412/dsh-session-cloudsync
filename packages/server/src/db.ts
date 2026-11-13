@@ -19,7 +19,7 @@ import { DatabaseSync } from 'node:sqlite'
 export const DEFAULT_DATASET = 'default'
 
 /** 当前库结构版本；结构有破坏性变化时递增。 */
-export const SERVER_SCHEMA_VERSION = 5
+export const SERVER_SCHEMA_VERSION = 6
 
 const SCHEMA_VERSION = SERVER_SCHEMA_VERSION
 
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS devices (
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER,
   revoked_at INTEGER,
+  color TEXT,
   PRIMARY KEY (dataset, device_id)
 );
 
@@ -137,6 +138,28 @@ CREATE TABLE IF NOT EXISTS session_resets (
   workspace_key TEXT,
   PRIMARY KEY (dataset, session_id)
 );
+
+CREATE TABLE IF NOT EXISTS session_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dataset TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  device_id TEXT,
+  actor_kind TEXT NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
+  events INTEGER NOT NULL DEFAULT 0,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  seq_from INTEGER,
+  seq_to INTEGER,
+  batch_count INTEGER NOT NULL DEFAULT 0,
+  last_seq INTEGER,
+  stored_bytes INTEGER,
+  detail TEXT
+);
+
+CREATE INDEX IF NOT EXISTS session_events_by_session ON session_events (dataset, session_id, at);
+CREATE INDEX IF NOT EXISTS session_events_by_time ON session_events (dataset, at);
 `
 
 /** 一个已打开的服务端数据库。 */
@@ -231,6 +254,70 @@ function ensureSessionStatsColumns(handle: DatabaseSync): boolean {
   return added
 }
 
+/** 设备颜色调色板；写入 devices.color，历史/热力图共用。 */
+export const DEVICE_COLORS = [
+  '#5b88ff', '#5ed392', '#f0b64a', '#c084fc', '#38bdf8',
+  '#f472b6', '#a3e635', '#fb923c', '#94a3b8', '#f87171',
+] as const
+
+/**
+ * 给新设备挑一个尚未使用的颜色；用完调色板后循环。
+ * @param db - 已打开的数据库。
+ * @returns 颜色值。
+ */
+export function nextDeviceColor(db: ServerDb): string {
+  const rows = db.handle
+    .prepare('SELECT color FROM devices WHERE dataset = ? ORDER BY created_at')
+    .all(DEFAULT_DATASET) as unknown as Array<{ color: string | null }>
+  const used = new Set(rows.map((row) => row.color).filter((color): color is string => typeof color === 'string' && color !== ''))
+  const free = DEVICE_COLORS.find((color) => !used.has(color))
+  return free ?? DEVICE_COLORS[rows.length % DEVICE_COLORS.length]!
+}
+
+/**
+ * 给没有颜色的旧设备补色；不改已有颜色。
+ * @param handle - 已打开的数据库。
+ */
+function backfillDeviceColors(handle: DatabaseSync): void {
+  const rows = handle
+    .prepare('SELECT device_id, color FROM devices ORDER BY created_at, device_id')
+    .all() as unknown as Array<{ device_id: string; color: string | null }>
+  const used = new Set(rows.map((row) => row.color).filter((color): color is string => typeof color === 'string' && color !== ''))
+  const update = handle.prepare('UPDATE devices SET color = ? WHERE device_id = ?')
+  let next = 0
+  for (const row of rows) {
+    if (typeof row.color === 'string' && row.color !== '') continue
+    let color: string | undefined
+    while (next < DEVICE_COLORS.length) {
+      const candidate = DEVICE_COLORS[next]
+      next += 1
+      if (candidate !== undefined && !used.has(candidate)) {
+        color = candidate
+        break
+      }
+    }
+    color ??= DEVICE_COLORS[next % DEVICE_COLORS.length] ?? DEVICE_COLORS[0]
+    used.add(color)
+    update.run(color, row.device_id)
+  }
+}
+
+/**
+ * 确保设备颜色列存在，并给旧设备补色（同属 v6，避免以后单独迁移）。
+ * @param handle - 已打开的数据库。
+ * @returns 是否新增了列。
+ */
+function ensureDeviceColorColumn(handle: DatabaseSync): boolean {
+  const columns = tableColumns(handle, 'devices')
+  let added = false
+  if (!columns.has('color')) {
+    handle.exec('ALTER TABLE devices ADD COLUMN color TEXT')
+    added = true
+  }
+  backfillDeviceColors(handle)
+  return added
+}
+
 /**
  * 确保会话的删除/清理列存在（v5）。
  * @param handle - 已打开的数据库。
@@ -257,12 +344,86 @@ function ensureSessionResetColumns(handle: DatabaseSync): boolean {
 }
 
 /**
+ * 确保历史事件表有 actor_id（同属 v6，兼容刚跑过开发库的情况）。
+ * @param handle - 已打开的数据库。
+ * @returns 是否新增了列。
+ */
+function ensureSessionEventColumns(handle: DatabaseSync): boolean {
+  if (!tableExists(handle, 'session_events')) return false
+  const columns = tableColumns(handle, 'session_events')
+  if (columns.has('actor_id')) return false
+  handle.exec("ALTER TABLE session_events ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''")
+  return true
+}
+
+/**
+ * 从 append_requests 回填 session_events（只跑一次）。
+ * 旧库没有逐次 append 的批次增量，用相邻 lastSeq/storedBytes 差值近似。
+ * @param handle - 已打开的数据库。
+ */
+function backfillSessionEvents(handle: DatabaseSync): void {
+  const marker = handle.prepare("SELECT value FROM meta WHERE key = 'session_events_backfill'").get()
+  if (marker !== undefined) return
+  const existing = handle.prepare('SELECT COUNT(*) AS n FROM session_events').get() as { n?: number } | undefined
+  if (Number(existing?.n ?? 0) > 0) {
+    handle.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('session_events_backfill', '1')").run()
+    return
+  }
+  if (!tableExists(handle, 'append_requests')) return
+  const rows = handle.prepare(`SELECT session_id, device_id, created_at, result_json
+                              FROM append_requests WHERE dataset = ?
+                              ORDER BY session_id ASC, created_at ASC, rowid ASC`).all(DEFAULT_DATASET) as unknown as Array<{
+    session_id: string
+    device_id: string
+    created_at: number
+    result_json: string
+  }>
+  const state = new Map<string, { lastSeq: number; storedBytes: number; seen: boolean }>()
+  const insert = handle.prepare(`INSERT INTO session_events
+    (dataset, session_id, at, kind, device_id, actor_kind, actor_id, events, bytes, seq_from, seq_to, batch_count, last_seq, stored_bytes, detail)
+    VALUES (?, ?, ?, ?, ?, 'device', ?, ?, ?, NULL, NULL, 1, ?, ?, ?)`)
+  for (const row of rows) {
+    let summary: { lastSeq?: unknown; storedBytes?: unknown }
+    try {
+      summary = JSON.parse(row.result_json) as { lastSeq?: unknown; storedBytes?: unknown }
+    } catch {
+      continue
+    }
+    if (typeof summary.lastSeq !== 'number' || !Number.isSafeInteger(summary.lastSeq)) continue
+    const storedBytes = typeof summary.storedBytes === 'number' && Number.isSafeInteger(summary.storedBytes)
+      ? summary.storedBytes
+      : 0
+    const previous = state.get(row.session_id)
+    const oldSeq = previous?.seen === true ? previous.lastSeq : 0
+    const oldBytes = previous?.seen === true ? previous.storedBytes : 0
+    const events = Math.max(0, summary.lastSeq - oldSeq)
+    const bytes = Math.max(0, storedBytes - oldBytes)
+    insert.run(
+      DEFAULT_DATASET,
+      row.session_id,
+      row.created_at,
+      previous?.seen === true ? 'append' : 'create',
+      row.device_id,
+      row.device_id,
+      events,
+      bytes,
+      summary.lastSeq,
+      storedBytes,
+      JSON.stringify({ backfilled: true }),
+    )
+    state.set(row.session_id, { lastSeq: summary.lastSeq, storedBytes, seen: true })
+  }
+  handle.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('session_events_backfill', '1')").run()
+}
+
+/**
  * 迁移旧库；只迁移明确支持的版本，不删除会话/墓碑/Vault。
  *
  * v2 → v3：租约是 60s 的瞬时状态，允许重建；新增 vault_records。
  * v3 → v4：新增 append_requests、会话压缩聚合列；不重写旧表。
  * v4 → v5：新增会话 purged_at 与 session_resets；不重写旧表。
- * v0 → v5：只接受没有旧表、或已是 v2 形状的库；v1 的 frames/session_frames 直接拒绝。
+ * v5 → v6：新增 session_events，并从 append_requests 回填。
+ * v0 → v6：只接受没有旧表、或已是 v2 形状的库；v1 的 frames/session_frames 直接拒绝。
  */
 function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number): void {
   if (version > SCHEMA_VERSION) {
@@ -270,7 +431,10 @@ function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number)
   }
   if (version === SCHEMA_VERSION) {
     handle.exec(SCHEMA)
+    ensureDeviceColorColumn(handle)
     ensureSessionResetColumns(handle)
+    ensureSessionEventColumns(handle)
+    backfillSessionEvents(handle)
     const columns = tableColumns(handle, 'sessions')
     if (!columns.has('compression') || !columns.has('stored_bytes') || !columns.has('purged_at')) {
       backupBeforeMigration(handle, dataDir, version)
@@ -305,7 +469,7 @@ function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number)
     sourceVersion = 2
   }
 
-  if (sourceVersion !== 2 && sourceVersion !== 3 && sourceVersion !== 4) {
+  if (sourceVersion !== 2 && sourceVersion !== 3 && sourceVersion !== 4 && sourceVersion !== 5) {
     throw new Error(`不支持的数据库结构版本 ${sourceVersion}；请使用对应版本的服务端迁移。`)
   }
 
@@ -320,8 +484,11 @@ function migrateDatabase(handle: DatabaseSync, dataDir: string, version: number)
     }
     handle.exec(SCHEMA)
     ensureSessionStatsColumns(handle)
+    ensureDeviceColorColumn(handle)
     ensureSessionLifecycleColumns(handle)
     ensureSessionResetColumns(handle)
+    ensureSessionEventColumns(handle)
+    backfillSessionEvents(handle)
     handle.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
     handle.exec('COMMIT')
   } catch (error: unknown) {

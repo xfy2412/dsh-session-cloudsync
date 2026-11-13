@@ -16,6 +16,7 @@ import { SyncError } from '../../shared/src/wire.ts'
 import { blobPath } from './blobs.ts'
 import { DEFAULT_DATASET, bumpRevision, readAppendRequest, withTransaction, writeAppendRequest, type ServerDb } from './db.ts'
 import { requireLease as requireResourceLease, SYNC_RESOURCE } from './leases.ts'
+import { recordSessionEvent } from './session-history.ts'
 
 /** 单个 append 请求体上限（万帧会话首次同步约 1.5 MB）。 */
 export const MAX_APPEND_BODY_BYTES = 8 * 1024 * 1024
@@ -387,6 +388,30 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
     if (reset !== undefined) {
       db.handle.prepare('DELETE FROM session_resets WHERE dataset = ? AND session_id = ?').run(DEFAULT_DATASET, input.sessionId)
     }
+    const created = row === undefined || replacingLifecycle
+    const oldSeq = created ? 0 : row.last_seq
+    const oldBytes = created ? 0 : row.stored_bytes
+    const tailReplaced = !created && input.baseIndex < row.frame_count - 1
+    recordSessionEvent(db, {
+      sessionId: input.sessionId,
+      at: now,
+      kind: created ? 'create' : 'append',
+      deviceId: input.deviceId,
+      actorKind: 'device',
+      actorId: input.deviceId,
+      events: tailReplaced ? 0 : Math.max(0, summary.lastSeq - oldSeq),
+      bytes: Math.max(0, summary.storedBytes - oldBytes),
+      seqFrom: input.frames[0]?.seqFrom ?? null,
+      seqTo: input.frames[input.frames.length - 1]?.seqTo ?? null,
+      batchCount: input.frames.length,
+      lastSeq: summary.lastSeq,
+      storedBytes: summary.storedBytes,
+      detail: {
+        createdAt,
+        ...tailReplaced ? { tailReplaced: true } : {},
+        ...workspaceKey === undefined ? {} : { workspaceKey },
+      },
+    })
     return summary
   })
 }
@@ -413,6 +438,17 @@ export function deleteSession(db: ServerDb, sessionId: string, deviceId: string,
     db.handle
       .prepare('INSERT OR REPLACE INTO tombstones (dataset, session_id, created_at, deleted_at, deleted_by) VALUES (?, ?, ?, ?, ?)')
       .run(DEFAULT_DATASET, sessionId, createdAt, now, deviceId)
+    recordSessionEvent(db, {
+      sessionId,
+      at: now,
+      kind: 'device-delete',
+      deviceId,
+      actorKind: 'device',
+      actorId: deviceId,
+      lastSeq: row.last_seq,
+      storedBytes: row.stored_bytes,
+      detail: { createdAt },
+    })
     return {
       sessionId,
       revision,

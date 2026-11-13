@@ -186,6 +186,7 @@
   .device-row:first-child { border-top: 0; }
   .device-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
   .device-label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .device-label .device-color { width: 7px; height: 7px; border-radius: 2px; background: var(--faint); flex: 0 0 auto; }
   .device-label .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
   .device-label .dot.good { background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
   .device-label .dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(240,182,74,.12); }
@@ -247,6 +248,27 @@
   .modal-card p { margin: 0; color: var(--muted); font-size: 12.5px; }
   .modal-card .field { margin-top: 12px; }
   .modal-card .field input { min-height: 34px; }
+  .history-card { width: min(760px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+  .history-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+  .history-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .history-chip i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .history-list { flex: 1 1 auto; min-height: 80px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: rgba(0,0,0,.12); }
+  .history-item { display: grid; grid-template-columns: 82px 16px minmax(0, 1fr); gap: 9px; padding: 9px 11px; border-top: 1px solid rgba(255,255,255,.055); }
+  .history-item:first-child { border-top: 0; }
+  .history-time { color: var(--faint); font-size: 11px; padding-top: 1px; white-space: nowrap; }
+  .history-rail { position: relative; display: flex; justify-content: center; }
+  .history-rail::before { content: ""; position: absolute; top: -9px; bottom: -9px; width: 1px; background: var(--line); }
+  .history-item:first-child .history-rail::before { top: 6px; }
+  .history-item:last-child .history-rail::before { bottom: calc(100% - 7px); }
+  .history-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--dot-color, var(--muted)); position: relative; z-index: 1; box-shadow: 0 0 0 3px rgba(15,17,21,.9); }
+  .history-item.admin .history-dot { --dot-color: var(--warn); }
+  .history-item.gone .history-dot { --dot-color: var(--bad); }
+  .history-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .history-title { color: var(--text); font-size: 12.5px; font-weight: 600; }
+  .history-detail { color: var(--faint); font-size: 11px; }
+  .history-item.admin .history-title { color: var(--warn); }
+  .history-item.gone .history-title { color: #ffb0b0; }
+  .history-empty { padding: 30px 16px; text-align: center; color: var(--faint); }
   .token-box { margin: 16px 0 6px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: #c7dbff; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; word-break: break-all; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
@@ -496,6 +518,19 @@
   </div>
 </div>
 
+<div id="historyDialog" class="modal" hidden>
+  <div class="modal-card history-card" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+    <h2 id="historyTitle">会话历史</h2>
+    <p id="historySession"></p>
+    <div id="historySummary" class="history-summary"></div>
+    <div id="historyList" class="history-list"></div>
+    <div id="historyError" class="inline-result bad" role="alert"></div>
+    <div class="modal-actions">
+      <button id="closeHistory" class="btn secondary" type="button">关闭</button>
+    </div>
+  </div>
+</div>
+
 <div id="sessionDialog" class="modal" hidden>
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sessionActionTitle">
     <h2 id="sessionActionTitle">会话操作</h2>
@@ -654,6 +689,7 @@ function showLogin() {
   $('loginError').textContent = ''
   if (!$('passwordDialog').hidden) closePassword()
   if (!$('sessionDialog').hidden) closeSessionAction()
+  if (!$('historyDialog').hidden) closeHistory()
   setTimeout(() => $('password').focus(), 30)
   // 服务端数据被清空（开发 --clean 或换库）时，直接回初始化向导。
   fetch('/setup/state', { credentials: 'same-origin' })
@@ -724,7 +760,9 @@ function renderDevices(devices) {
     const row = el('div', 'device-row')
     const main = el('div', 'device-main')
     const label = el('div', 'device-label')
-    label.append(el('i', 'dot ' + (deviceOnline(device) ? 'good' : 'warn')))
+    const color = el('i', 'device-color')
+    color.style.background = device.color || historyDeviceColor(device.deviceId)
+    label.append(color, el('i', 'dot ' + (deviceOnline(device) ? 'good' : 'warn')))
     if (state.editingDeviceId === device.deviceId) {
       const form = el('div', 'inline-edit')
       const input = el('input')
@@ -896,6 +934,190 @@ function closeSessionAction() {
   document.body.classList.remove('modal-open')
 }
 
+function openHistory(session) {
+  $('historySession').textContent = shortDisplayId(session.sessionId) + (session.workspaceKey ? ' · 工作区 ' + session.workspaceKey.slice(0, 12) + '…' : '')
+  $('historySummary').replaceChildren()
+  $('historyList').replaceChildren(el('div', 'history-empty', '正在读取历史…'))
+  $('historyError').textContent = ''
+  $('historyDialog').hidden = false
+  document.body.classList.add('modal-open')
+  void loadHistory(session)
+}
+
+function closeHistory() {
+  $('historyDialog').hidden = true
+  document.body.classList.remove('modal-open')
+}
+
+function shortDisplayId(id) {
+  return id.length > 32 ? id.slice(0, 30) + '…' : id
+}
+
+function historyEventLabel(kind) {
+  const labels = {
+    create: '创建并上传',
+    append: '更新',
+    'device-delete': '设备删除',
+    archive: '存档',
+    remove: '移除',
+    reset: '重置',
+    restore: '恢复',
+  }
+  return labels[kind] || kind
+}
+
+const HISTORY_DEVICE_COLORS = ['#5b88ff', '#5ed392', '#f0b64a', '#c084fc', '#38bdf8', '#f472b6', '#a3e635', '#fb923c']
+
+function historyDeviceColor(id) {
+  let hash = 0
+  for (const char of String(id || '')) hash = (hash * 31 + char.charCodeAt(0)) | 0
+  return HISTORY_DEVICE_COLORS[Math.abs(hash) % HISTORY_DEVICE_COLORS.length]
+}
+
+function historyDeviceLabel(id) {
+  if (!id) return '管理台'
+  const device = state.devices.find((item) => item.deviceId === id)
+  return device ? device.label || device.deviceId : id
+}
+
+function historyEventDetail(event) {
+  const parts = []
+  if (event.kind === 'create' || event.kind === 'append') {
+    if (event.events > 0) parts.push('+' + event.events + ' 事件')
+    if (event.bytes > 0) parts.push(formatBytes(event.bytes))
+    if (event.batchCount > 0) parts.push(event.batchCount + ' 批')
+    if (event.seqFrom !== null && event.seqTo !== null) parts.push('seq ' + event.seqFrom + '–' + event.seqTo)
+    if (event.detail && event.detail.tailReplaced === true) parts.push('替换尾部')
+  } else if (event.kind === 'reset') {
+    const deviceId = event.detail && typeof event.detail === 'object' ? event.detail.deviceId : null
+    if (deviceId) parts.push('指定 ' + historyDeviceLabel(deviceId))
+    if (event.bytes > 0) parts.push('释放 ' + formatBytes(event.bytes))
+  } else if (event.kind === 'remove') {
+    if (event.bytes > 0) parts.push('释放 ' + formatBytes(event.bytes))
+  }
+  if (event.detail && event.detail.backfilled === true) parts.push('回填')
+  return parts.join(' · ')
+}
+
+function historyRunDetail(run) {
+  const parts = []
+  if (run.events > 0) parts.push('+' + run.events + ' 事件')
+  if (run.bytes > 0) parts.push(formatBytes(run.bytes))
+  if (run.batches > 0) parts.push(run.batches + ' 批')
+  if (run.seqFrom !== null && run.seqTo !== null) parts.push('seq ' + run.seqFrom + '–' + run.seqTo)
+  return parts.join(' · ')
+}
+
+async function loadHistory(session) {
+  try {
+    const data = await api('/admin/sessions/' + encodeURIComponent(session.sessionId) + '/history?limit=200')
+    const summary = data.summary
+    const chips = [
+      '总事件 ' + summary.events,
+      '总批次 ' + summary.batches,
+      '总大小 ' + formatBytes(summary.bytes),
+      '设备 ' + summary.devices,
+      summary.firstAt !== null ? '首次 ' + formatAgo(summary.firstAt) : '还没有事件',
+      summary.lastAt !== null ? '最后 ' + formatAgo(summary.lastAt) : '',
+    ].filter((chip) => chip !== '')
+    const deviceLegend = new Map()
+    for (const event of data.events) {
+      if (event.deviceId && !deviceLegend.has(event.deviceId)) {
+        deviceLegend.set(event.deviceId, {
+          label: event.deviceLabel || historyDeviceLabel(event.deviceId),
+          color: event.deviceColor || historyDeviceColor(event.deviceId),
+        })
+      }
+    }
+    function deviceLegendColor(deviceId) {
+      return deviceLegend.get(deviceId)?.color || historyDeviceColor(deviceId)
+    }
+    $('historySummary').replaceChildren(
+      ...chips.map((chip) => el('span', 'history-chip', chip)),
+      ...[...deviceLegend.entries()].map(([deviceId, entry]) => {
+        const chip = el('span', 'history-chip')
+        const dot = el('i')
+        dot.style.background = deviceLegendColor(deviceId)
+        chip.append(dot, el('span', null, entry.label))
+        return chip
+      }),
+    )
+    const list = $('historyList')
+    if (data.events.length === 0) {
+      list.replaceChildren(el('div', 'history-empty', '还没有这个会话的历史记录。'))
+      return
+    }
+    const ordered = [...data.events].reverse()
+    const rows = []
+    let run = null
+    for (const event of ordered) {
+      if (event.kind === 'create') {
+        if (run !== null) { rows.push(run); run = null }
+        rows.push({ kind: 'event', event })
+        continue
+      }
+      if (event.kind === 'append') {
+        if (run !== null && run.deviceId === event.deviceId) {
+          run.events += event.events
+          run.bytes += event.bytes
+          run.batches += event.batchCount
+          run.lastAt = event.at
+          if (event.seqFrom !== null) run.seqFrom = run.seqFrom === null ? event.seqFrom : Math.min(run.seqFrom, event.seqFrom)
+          if (event.seqTo !== null) run.seqTo = run.seqTo === null ? event.seqTo : Math.max(run.seqTo, event.seqTo)
+          run.last = event
+          continue
+        }
+        if (run !== null) rows.push(run)
+        run = {
+          kind: 'run', deviceId: event.deviceId, first: event, last: event,
+          events: event.events, bytes: event.bytes, batches: event.batchCount,
+          seqFrom: event.seqFrom, seqTo: event.seqTo, firstAt: event.at, lastAt: event.at,
+        }
+        continue
+      }
+      if (run !== null) { rows.push(run); run = null }
+      rows.push({ kind: 'event', event })
+    }
+    if (run !== null) rows.push(run)
+    list.replaceChildren(...rows.map((row) => {
+      if (row.kind === 'run') {
+        const timeCell = el('div', 'history-time', formatAgo(row.firstAt))
+        timeCell.title = time(row.firstAt) + ' → ' + time(row.lastAt)
+        const main = el('div', 'history-main')
+        main.append(
+          el('div', 'history-title', historyEventLabel(row.first.kind) + ' · ' + historyDeviceLabel(row.deviceId)),
+          el('div', 'history-detail', historyRunDetail(row)),
+        )
+        const rail = el('div', 'history-rail')
+        const dot = el('i', 'history-dot')
+        dot.style.setProperty('--dot-color', row.first.deviceColor || historyDeviceColor(row.deviceId))
+        rail.append(dot)
+        const item = el('div', 'history-item')
+        item.append(timeCell, rail, main)
+        return item
+      }
+      const event = row.event
+      const timeCell = el('div', 'history-time', formatAgo(event.at))
+      timeCell.title = time(event.at)
+      const main = el('div', 'history-main')
+      const title = historyEventLabel(event.kind) + (event.kind === 'reset' || event.kind === 'archive' || event.kind === 'remove' || event.kind === 'restore' ? ' · 管理台' : ' · ' + historyDeviceLabel(event.deviceId))
+      main.append(el('div', 'history-title', title))
+      const detail = historyEventDetail(event)
+      if (detail !== '') main.append(el('div', 'history-detail', detail))
+      const className = event.kind === 'remove' || event.kind === 'reset' || event.kind === 'device-delete' ? 'history-item gone' : event.kind === 'archive' || event.kind === 'restore' ? 'history-item admin' : 'history-item'
+      const rail = el('div', 'history-rail')
+      const dot = el('i', 'history-dot')
+      if (event.kind === 'create' || event.kind === 'append') dot.style.setProperty('--dot-color', event.deviceColor || historyDeviceColor(event.deviceId))
+      rail.append(dot)
+      const item = el('div', className)
+      item.append(timeCell, rail, main)
+      return item
+    }))
+  } catch (error) {
+    $('historyError').textContent = error.message
+  }
+}
+
 async function confirmSessionAction() {
   const pending = state.sessionAction
   if (pending === null) return
@@ -999,6 +1221,7 @@ function sessionRow(session) {
     if (!purged) actionBox.append(sessionActionButton(session, '移除', 'remove', true))
     actionBox.append(sessionActionButton(session, '重置', 'reset'))
   }
+  actionBox.append(sessionHistoryButton(session))
   actions.append(actionBox)
   row.append(status, actions)
   return row
@@ -1011,6 +1234,14 @@ function sessionRow(session) {
  * @param {'archive'|'restore'|'remove'|'reset'|'clear-reset'} action - 动作。
  * @param {boolean} danger - 是否危险色。
  */
+function sessionHistoryButton(session) {
+  const button = el('button', 'btn tiny secondary')
+  button.type = 'button'
+  button.textContent = '详情'
+  button.onclick = () => openHistory(session)
+  return button
+}
+
 function sessionActionButton(session, label, action, danger) {
   const button = el('button', 'btn tiny' + (danger ? ' danger' : ' secondary'))
   button.type = 'button'
@@ -1446,6 +1677,8 @@ $('savePassword').onclick = savePassword
 $('cancelSessionAction').onclick = closeSessionAction
 $('sessionDialog').addEventListener('click', (event) => { if (event.target === $('sessionDialog')) closeSessionAction() })
 $('confirmSessionAction').onclick = confirmSessionAction
+$('closeHistory').onclick = closeHistory
+$('historyDialog').addEventListener('click', (event) => { if (event.target === $('historyDialog')) closeHistory() })
 for (const id of ['currentPassword', 'newPassword', 'confirmPassword']) {
   $(id).addEventListener('keydown', (event) => { if (event.key === 'Enter') savePassword() })
 }
@@ -1473,6 +1706,7 @@ document.addEventListener('keydown', (event) => {
   if (!$('revokeDialog').hidden) closeRevoke()
   if (!$('passwordDialog').hidden) closePassword()
   if (!$('sessionDialog').hidden) closeSessionAction()
+  if (!$('historyDialog').hidden) closeHistory()
 })
 $('sessionSearch').addEventListener('input', renderSessions)
 $('sessionFilter').addEventListener('change', renderSessions)

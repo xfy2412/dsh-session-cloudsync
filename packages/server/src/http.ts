@@ -30,6 +30,7 @@ import {
   blobRecord,
   isAdminInitialized,
   markAdminInitialized,
+  nextDeviceColor,
   readMaxBytes,
   readMeta,
   recordBlob,
@@ -53,6 +54,7 @@ import { acquireLease, releaseLease, SYNC_RESOURCE, vaultResource } from './leas
 import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
 import { listAudit, recordAudit } from './audit.ts'
 import { archiveSession, removeSession, resetSession, restoreSession } from './session-admin.ts'
+import { listSessionHistory } from './session-history.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 
 /** `/health` 报告的服务端版本；从 package.json 读取，避免手写漂移。 */
@@ -125,6 +127,7 @@ interface DeviceRow {
   readonly created_at: number
   readonly last_seen_at: number | null
   readonly revoked_at: number | null
+  readonly color: string | null
 }
 
 /** 路由处理函数。 */
@@ -215,7 +218,7 @@ function authenticate(db: ServerDb, req: IncomingMessage): { role: 'admin' } | {
   const setupToken = readMeta(db, 'setup_token')
   if (setupToken !== undefined && token === setupToken) return { role: 'admin' }
   const row = db.handle
-    .prepare('SELECT device_id, label, created_at, last_seen_at, revoked_at FROM devices WHERE dataset = ? AND token_hash = ?')
+    .prepare('SELECT device_id, label, created_at, last_seen_at, revoked_at, color FROM devices WHERE dataset = ? AND token_hash = ?')
     .get(DEFAULT_DATASET, hashToken(token)) as DeviceRow | undefined
   if (row === undefined || row.revoked_at !== null) return undefined
   // 设备每次鉴权都是一次“在线”；60s 内不重复写库，避免同步请求放大写入。
@@ -237,6 +240,7 @@ function authenticate(db: ServerDb, req: IncomingMessage): { role: 'admin' } | {
       label: row.label,
       createdAt: row.created_at,
       ...lastSeenAt === null ? {} : { lastSeenAt },
+      ...row.color === null ? {} : { color: row.color },
     },
   }
 }
@@ -468,6 +472,7 @@ const VAULT_CURSOR_PATH = /^\/v2\/vault\/cursor$/u
 const VAULT_STREAM_PATH = /^\/v2\/vault\/stream\/([^/]+)$/u
 const ADMIN_DEVICE_PATH = /^\/admin\/devices\/([0-9a-f]+)$/u
 const ADMIN_SESSION_ACTION_PATH = /^\/admin\/sessions\/([^/]+)\/(archive|remove|reset|restore|clear-reset)$/u
+const ADMIN_SESSION_HISTORY_PATH = /^\/admin\/sessions\/([^/]+)\/history$/u
 
 /**
  * 把 manifest 的内部 `frames` 输出成唯一的 `batches`。
@@ -598,10 +603,11 @@ export function createDevice(db: ServerDb, label: string): { device: DeviceRef; 
   const deviceId = randomBytes(8).toString('hex')
   const token = mintToken()
   const now = Date.now()
+  const color = nextDeviceColor(db)
   db.handle
-    .prepare('INSERT INTO devices (dataset, device_id, label, token_hash, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(DEFAULT_DATASET, deviceId, label, hashToken(token), now)
-  return { device: { deviceId, label, createdAt: now }, token }
+    .prepare('INSERT INTO devices (dataset, device_id, label, token_hash, created_at, color) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(DEFAULT_DATASET, deviceId, label, hashToken(token), now, color)
+  return { device: { deviceId, label, createdAt: now, color }, token }
 }
 
 /**
@@ -611,13 +617,14 @@ export function createDevice(db: ServerDb, label: string): { device: DeviceRef; 
  */
 export function listDevices(db: ServerDb): DeviceRef[] {
   const rows = db.handle
-    .prepare('SELECT device_id, label, created_at, last_seen_at FROM devices WHERE dataset = ? AND revoked_at IS NULL ORDER BY created_at')
+    .prepare('SELECT device_id, label, created_at, last_seen_at, color FROM devices WHERE dataset = ? AND revoked_at IS NULL ORDER BY created_at')
     .all(DEFAULT_DATASET) as unknown as DeviceRow[]
   return rows.map((row) => ({
     deviceId: row.device_id,
     label: row.label,
     createdAt: row.created_at,
     ...row.last_seen_at === null ? {} : { lastSeenAt: row.last_seen_at },
+    ...row.color === null ? {} : { color: row.color },
   }))
 }
 
@@ -647,14 +654,15 @@ export function renameDevice(db: ServerDb, deviceId: string, label: string): Dev
     .run(label, DEFAULT_DATASET, deviceId)
   if (Number(result.changes) === 0) return undefined
   const row = db.handle
-    .prepare('SELECT device_id, label, created_at, last_seen_at FROM devices WHERE dataset = ? AND device_id = ?')
-    .get(DEFAULT_DATASET, deviceId) as { device_id: string; label: string; created_at: number; last_seen_at: number | null } | undefined
+    .prepare('SELECT device_id, label, created_at, last_seen_at, color FROM devices WHERE dataset = ? AND device_id = ?')
+    .get(DEFAULT_DATASET, deviceId) as { device_id: string; label: string; created_at: number; last_seen_at: number | null; color: string | null } | undefined
   if (row === undefined) return undefined
   return {
     deviceId: row.device_id,
     label: row.label,
     createdAt: row.created_at,
     ...row.last_seen_at === null ? {} : { lastSeenAt: row.last_seen_at },
+    ...row.color === null ? {} : { color: row.color },
   }
 }
 
@@ -1432,6 +1440,21 @@ export function createHttpServer(options: ServerOptions): Server {
       handler: async (req, res) => {
         requireAdmin(req)
         return json(res, 200, { ok: true, value: adminSessions(db) })
+      },
+    },
+    {
+      method: 'GET',
+      path: ADMIN_SESSION_HISTORY_PATH,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const match = ADMIN_SESSION_HISTORY_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
+        if (match === null) return json(res, 404, errorBody('not-found', '没有这个会话'))
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const limit = intParam(url.searchParams.get('limit'), 100, 1, 200)
+        const beforeRaw = url.searchParams.get('before')
+        const before = beforeRaw === null ? undefined : intParam(beforeRaw, 0, 0, Number.MAX_SAFE_INTEGER)
+        const sessionId = decodeURIComponent(match[1]!)
+        return json(res, 200, { ok: true, value: listSessionHistory(db, sessionId, { limit, ...before === undefined ? {} : { before } }) })
       },
     },
     {

@@ -27,6 +27,8 @@ export interface DeviceRef {
   readonly label: string
   readonly createdAt: number
   readonly lastSeenAt?: number
+  /** 管理台/历史/热力图共用的设备颜色。 */
+  readonly color?: string
 }
 
 /** 会话日志链上的一帧（不可变）。 */

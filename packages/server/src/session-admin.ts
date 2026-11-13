@@ -10,6 +10,7 @@ import { rmSync } from 'node:fs'
 import { blobPath } from './blobs.ts'
 import { bumpRevision, DEFAULT_DATASET, withTransaction, type ServerDb } from './db.ts'
 import { SyncError } from '../../shared/src/wire.ts'
+import { recordSessionEvent } from './session-history.ts'
 
 /** 重置闸门的默认有效期。 */
 export const SESSION_RESET_TTL_MS = 24 * 60 * 60 * 1000
@@ -20,6 +21,7 @@ interface TargetRow {
   readonly deleted_at: number | null
   readonly purged_at: number | null
   readonly stored_bytes: number
+  readonly last_seq: number
   readonly manifest_json: string
 }
 
@@ -38,7 +40,7 @@ export interface PurgeResult {
  */
 function targetRow(db: ServerDb, sessionId: string, createdAt: number): TargetRow | undefined {
   return db.handle
-    .prepare('SELECT session_id, created_at, deleted_at, purged_at, stored_bytes, manifest_json FROM sessions WHERE dataset = ? AND session_id = ?')
+    .prepare('SELECT session_id, created_at, deleted_at, purged_at, stored_bytes, last_seq, manifest_json FROM sessions WHERE dataset = ? AND session_id = ?')
     .get(DEFAULT_DATASET, sessionId) as TargetRow | undefined
 }
 
@@ -142,6 +144,10 @@ export function archiveSession(db: ServerDb, sessionId: string, createdAt: numbe
                        VALUES (?, ?, ?, ?, ?)`)
       .run(DEFAULT_DATASET, sessionId, createdAt, now, 'admin:archive')
     db.handle.prepare('DELETE FROM append_requests WHERE dataset = ? AND session_id = ?').run(DEFAULT_DATASET, sessionId)
+    recordSessionEvent(db, {
+      sessionId, at: now, kind: 'archive', actorKind: 'admin', actorId: 'admin',
+      lastSeq: row.last_seq ?? null, storedBytes: row.stored_bytes ?? null, detail: { createdAt },
+    })
   })
 }
 
@@ -177,6 +183,11 @@ export function removeSession(db: ServerDb, dataDir: string, sessionId: string, 
                        VALUES (?, ?, ?, ?, ?)`)
       .run(DEFAULT_DATASET, sessionId, createdAt, now, 'admin:remove')
     db.handle.prepare('DELETE FROM append_requests WHERE dataset = ? AND session_id = ?').run(DEFAULT_DATASET, sessionId)
+    recordSessionEvent(db, {
+      sessionId, at: now, kind: 'remove', actorKind: 'admin', actorId: 'admin',
+      bytes: purged?.bytes ?? 0, lastSeq: null, storedBytes: 0,
+      detail: { createdAt, purgedBytes: purged?.bytes ?? 0 },
+    })
   })
   const result = purged ?? { bytes: 0, files: [] }
   removeFiles(result.files)
@@ -220,6 +231,10 @@ export function resetSession(
                        (dataset, session_id, created_at, reset_at, expires_at, device_id, workspace_key)
                        VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .run(DEFAULT_DATASET, sessionId, createdAt, now, now + SESSION_RESET_TTL_MS, deviceId, workspaceKey)
+    recordSessionEvent(db, {
+      sessionId, at: now, kind: 'reset', actorKind: 'admin', actorId: 'admin',
+      bytes: purged?.bytes ?? 0, detail: { createdAt, deviceId, purgedBytes: purged?.bytes ?? 0 },
+    })
   })
   const result = purged ?? { bytes: 0, files: [] }
   removeFiles(result.files)
@@ -243,5 +258,9 @@ export function restoreSession(db: ServerDb, sessionId: string, createdAt: numbe
       .run(revision, now, DEFAULT_DATASET, sessionId)
     db.handle.prepare('DELETE FROM tombstones WHERE dataset = ? AND session_id = ? AND created_at = ?')
       .run(DEFAULT_DATASET, sessionId, createdAt)
+    recordSessionEvent(db, {
+      sessionId, at: now, kind: 'restore', actorKind: 'admin', actorId: 'admin',
+      lastSeq: null, storedBytes: row.stored_bytes ?? null, detail: { createdAt },
+    })
   })
 }

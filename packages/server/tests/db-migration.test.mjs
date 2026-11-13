@@ -45,7 +45,7 @@ function createV2Database(dir) {
   raw.close()
 }
 
-test('数据库迁移：v2 → v5 保留会话/墓碑并新增 Vault、幂等表与删除列，重建瞬时租约', () => {
+test('数据库迁移：v2 → v6 保留会话/墓碑并新增 Vault、幂等表、删除列与历史表，重建瞬时租约', () => {
   const dir = tempDir()
   try {
     createV2Database(dir)
@@ -102,7 +102,7 @@ test('数据库迁移：回填混合压缩状态与密文字节数', () => {
   }
 })
 
-test('数据库迁移：v3 → v4 只新增幂等表，不动旧数据', () => {
+test('数据库迁移：v3 → v6 只新增幂等/历史表，不动旧数据', () => {
   const dir = tempDir()
   try {
     const first = openDatabase(dir)
@@ -126,7 +126,7 @@ test('数据库迁移：v3 → v4 只新增幂等表，不动旧数据', () => {
   }
 })
 
-test('数据库迁移：新库直接创建 v4', () => {
+test('数据库迁移：新库直接创建 v6', () => {
   const dir = tempDir()
   try {
     const db = openDatabase(dir)
@@ -188,5 +188,39 @@ test('数据库迁移：旧帧结构拒绝自动迁移，不删表', () => {
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v5 → v6 从 append_requests 回填会话历史', () => {
+  const dir = tempDir()
+  try {
+    const first = openDatabase(dir)
+    first.handle.exec("DELETE FROM meta WHERE key = 'session_events_backfill'")
+    first.handle.exec('DELETE FROM session_events')
+    const insert = first.handle.prepare(`INSERT INTO append_requests
+      (dataset, device_id, session_id, idempotency_key, request_hash, result_json, created_at)
+      VALUES ('default', 'device-a', 'session-backfill', ?, 'hash', ?, ?)`)
+    insert.run('key-1', JSON.stringify({ lastSeq: 100, storedBytes: 1000, batchCount: 2 }), 1000)
+    insert.run('key-2', JSON.stringify({ lastSeq: 150, storedBytes: 1500, batchCount: 3 }), 2000)
+    first.handle.exec('PRAGMA user_version = 5')
+    first.close()
+
+    const db = openDatabase(dir)
+    try {
+      const events = db.handle.prepare('SELECT kind, events, bytes, device_id FROM session_events ORDER BY id').all()
+      assert.equal(events.length, 2)
+      assert.equal(events[0].kind, 'create')
+      assert.equal(events[0].events, 100)
+      assert.equal(events[0].bytes, 1000)
+      assert.equal(events[0].device_id, 'device-a')
+      assert.equal(events[1].kind, 'append')
+      assert.equal(events[1].events, 50)
+      assert.equal(events[1].bytes, 500)
+      assert.equal(db.handle.prepare('PRAGMA user_version').get().user_version, SERVER_SCHEMA_VERSION)
+    } finally {
+      db.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
   }
 })

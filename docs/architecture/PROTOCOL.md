@@ -80,6 +80,8 @@ GET /health
 | GET | `/v2/blobs/:sha256` | 下载单个密文 blob |
 | POST | `/v2/blobs/batch` | 批量上传密文 blob |
 | POST | `/v2/blobs/batch/read` | 批量下载密文 blob |
+
+设备对象含可选 `color`（`#rrggbb`），由服务端在创建时分配并持久化；改名不变，管理台历史与热力图共用。
 | POST | `/v2/sync/lease` | 申请/续租全局单写者租约 |
 | DELETE | `/v2/sync/lease` | 释放全局租约 |
 | GET | `/v2/sessions` | 全量会话快照（keyset 分页） |
@@ -91,6 +93,8 @@ GET /health
 | POST/DELETE | `/v2/vault/lease` | Vault writer 租约 |
 | POST | `/v2/vault/append` | 追加 Vault 记录索引 |
 | GET | `/v2/vault/cursor` | Vault 记录 cursor |
+设备对象含可选 `color`（`#rrggbb`），由服务端在创建时分配并持久化；改名不变，管理台历史与热力图共用。
+
 | GET | `/v2/vault/stream/:writer` | 某 writer 的 Vault 记录索引 |
 
 ## 会话快照
@@ -336,7 +340,8 @@ HTTP 映射：
 `/admin`、`/admin/login`、`/admin/logout`、`/admin/overview`、`/admin/quota`、
 `/admin/devices`、`/admin/sessions` 保持不变；另增 `PATCH /admin/devices/:id`（`{label}`）改名、
 `GET /admin/audit`、`POST /admin/password`，以及会话生命周期
-`POST /admin/sessions/:id/archive|remove|reset|restore|clear-reset`（body `{createdAt, deviceId?}`）。
+`POST /admin/sessions/:id/archive|remove|reset|restore|clear-reset`（body `{createdAt, deviceId?}`），
+以及 `GET /admin/sessions/:id/history`（元数据时间线，`limit`/`before` 分页）。
 管理台不接受设备 bearer token。
 
 初始化向导的 cookie 会话接口是 `/setup/state`、`/setup/verify`、`/setup/password`、`/setup/quota`、

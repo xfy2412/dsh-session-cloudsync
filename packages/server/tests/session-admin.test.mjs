@@ -84,6 +84,11 @@ test('会话三档：存档/恢复/移除/重置、includeDeleted 与重置闸�
       const adminCookie = cookieOf(login.headers, 'dsh_sync_admin')
       assert.ok(adminCookie !== undefined)
 
+      const devicesRes = await call(base, '/admin/devices', { cookie: adminCookie })
+      const colors = devicesRes.body.value.map((device) => device.color)
+      assert.ok(colors.every((color) => typeof color === 'string' && /^#[0-9a-f]{6}$/u.test(color)))
+      assert.notEqual(colors[0], colors[1])
+
       const sessionId = 'session-admin-modes'
       const createdAt = 1000
       const key = sessionKeyOf(Buffer.alloc(32, 7), sessionId)
@@ -180,6 +185,16 @@ test('会话三档：存档/恢复/移除/重置、includeDeleted 与重置闸�
       for (const action of ['session.archive', 'session.restore', 'session.remove', 'session.reset']) {
         assert.ok(actions.includes(action), `缺少审计动作 ${action}`)
       }
+      const history = await call(base, `/admin/sessions/${sessionId}/history`, { cookie: adminCookie })
+      assert.equal(history.status, 200)
+      const kinds = history.body.value.events.map((event) => event.kind)
+      for (const kind of ['create', 'archive', 'restore', 'remove', 'reset']) {
+        assert.ok(kinds.includes(kind), `缺少历史事件 ${kind}`)
+      }
+      assert.ok(history.body.value.summary.events > 0)
+      assert.match(history.body.value.events.find((event) => event.kind === 'create').deviceColor, /^#[0-9a-f]{6}$/u)
+      assert.equal(history.body.value.summary.devices, 1)
+      assert.equal(history.body.value.summary.firstAt > 0, true)
     } finally {
       await close()
       db.close()
