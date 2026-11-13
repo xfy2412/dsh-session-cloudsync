@@ -341,7 +341,9 @@ HTTP 映射：
 `/admin/devices`、`/admin/sessions` 保持不变；另增 `PATCH /admin/devices/:id`（`{label?, color?}`）改名/改色、
 `GET /admin/audit`、`POST /admin/password`，以及会话生命周期
 `POST /admin/sessions/:id/archive|remove|reset|restore|clear-reset`（body `{createdAt, deviceId?}`），
-以及 `GET /admin/sessions/:id/history`（元数据时间线，`limit`/`before` 分页）。
+以及 `GET /admin/sessions/:id/history`（元数据时间线，`limit`/`before` 分页）、
+`GET /admin/activity`（按天聚合，`from`/`to`/`tzOffset`/`deviceId`/`sessionId`）、
+`GET /admin/activity/sessions`（某天有活动的会话）。
 管理台不接受设备 bearer token。
 
 初始化向导的 cookie 会话接口是 `/setup/state`、`/setup/verify`、`/setup/password`、`/setup/quota`、

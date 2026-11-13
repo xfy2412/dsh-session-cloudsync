@@ -204,6 +204,14 @@ test('会话三档：存档/恢复/移除/重置、includeDeleted 与重置闸�
       assert.match(history.body.value.events.find((event) => event.kind === 'create').deviceColor, /^#[0-9a-f]{6}$/u)
       assert.equal(history.body.value.summary.devices, 1)
       assert.equal(history.body.value.summary.firstAt > 0, true)
+      const activity = await call(base, `/admin/activity?from=${Date.now() - 86400000}&to=${Date.now() + 86400000}&tzOffset=0&deviceId=${deviceA.device.deviceId}`, { cookie: adminCookie })
+      assert.equal(activity.status, 200)
+      assert.ok(activity.body.value.days.length >= 1)
+      assert.ok(activity.body.value.days.some((day) => day.events > 0))
+      const activityDay = activity.body.value.days[0].day
+      const daySessions = await call(base, `/admin/activity/sessions?day=${activityDay}&tzOffset=0`, { cookie: adminCookie })
+      assert.equal(daySessions.status, 200)
+      assert.ok(daySessions.body.value.sessions.some((session) => session.sessionId === sessionId))
     } finally {
       await close()
       db.close()

@@ -187,6 +187,120 @@ export function listSessionHistory(
   }
 }
 
+/** 一天的聚合活动。 */
+export interface ActivityDay {
+  readonly day: string
+  readonly events: number
+  readonly bytes: number
+  readonly appends: number
+  readonly sessions: number
+  readonly devices: number
+}
+
+/**
+ * 按天聚合 append/create 事件；结果按 day 升序，只包含有活动的天。
+ * @param db - 已打开的数据库。
+ * @param query - 时间范围、时区偏移与过滤。
+ * @returns 按天聚合。
+ */
+export function listActivity(
+  db: ServerDb,
+  query: {
+    readonly from: number
+    readonly to: number
+    readonly tzOffset?: number
+    readonly deviceId?: string
+    readonly sessionId?: string
+  },
+): { days: ActivityDay[] } {
+  const offsetMs = Math.max(-14 * 60, Math.min(14 * 60, Math.trunc(query.tzOffset ?? 0))) * 60_000
+  const where = [
+    'e.dataset = ?',
+    "e.kind IN ('create', 'append')",
+    'e.at >= ?',
+    'e.at < ?',
+  ]
+  const params: Array<string | number> = [DEFAULT_DATASET, Math.trunc(query.from), Math.trunc(query.to)]
+  if (query.deviceId !== undefined && query.deviceId !== '') {
+    where.push('e.device_id = ?')
+    params.push(query.deviceId)
+  }
+  if (query.sessionId !== undefined && query.sessionId !== '') {
+    where.push('e.session_id = ?')
+    params.push(query.sessionId)
+  }
+  const rows = db.handle
+    .prepare(`SELECT date((e.at + ?) / 1000, 'unixepoch') AS day,
+                     COALESCE(SUM(e.events), 0) AS events,
+                     COALESCE(SUM(e.bytes), 0) AS bytes,
+                     COUNT(*) AS appends,
+                     COUNT(DISTINCT e.session_id) AS sessions,
+                     COUNT(DISTINCT e.device_id) AS devices
+              FROM session_events e
+              WHERE ${where.join(' AND ')}
+              GROUP BY day ORDER BY day ASC`)
+    .all(offsetMs, ...params) as unknown as Array<{
+      day: string
+      events: number
+      bytes: number
+      appends: number
+      sessions: number
+      devices: number
+    }>
+  return {
+    days: rows.map((row) => ({
+      day: row.day,
+      events: Number(row.events ?? 0),
+      bytes: Number(row.bytes ?? 0),
+      appends: Number(row.appends ?? 0),
+      sessions: Number(row.sessions ?? 0),
+      devices: Number(row.devices ?? 0),
+    })),
+  }
+}
+
+/** 某一天参与同步的会话。 */
+export interface ActivitySession {
+  readonly sessionId: string
+  readonly events: number
+  readonly bytes: number
+  readonly appends: number
+}
+
+/**
+ * 列出某一天有 append/create 活动的会话。
+ * @param db - 已打开的数据库。
+ * @param query - 本地日期与浏览器时区偏移。
+ * @returns 会话聚合。
+ */
+export function listActivitySessions(
+  db: ServerDb,
+  query: { readonly day: string; readonly tzOffset?: number },
+): { sessions: ActivitySession[] } {
+  const offsetMs = Math.max(-14 * 60, Math.min(14 * 60, Math.trunc(query.tzOffset ?? 0))) * 60_000
+  const rows = db.handle
+    .prepare(`SELECT e.session_id, COALESCE(SUM(e.events), 0) AS events,
+                     COALESCE(SUM(e.bytes), 0) AS bytes, COUNT(*) AS appends
+              FROM session_events e
+              WHERE e.dataset = ? AND e.kind IN ('create', 'append')
+                AND date((e.at + ?) / 1000, 'unixepoch') = ?
+              GROUP BY e.session_id ORDER BY events DESC`)
+    .all(DEFAULT_DATASET, offsetMs, query.day) as unknown as Array<{
+      session_id: string
+      events: number
+      bytes: number
+      appends: number
+    }>
+  return {
+    sessions: rows.map((row) => ({
+      sessionId: row.session_id,
+      events: Number(row.events ?? 0),
+      bytes: Number(row.bytes ?? 0),
+      appends: Number(row.appends ?? 0),
+    })),
+  }
+}
+
 /**
  * 解析 detail JSON；损坏时保留原文。
  * @param raw - 原始文本。

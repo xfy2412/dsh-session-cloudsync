@@ -145,6 +145,33 @@
   .metric .bar { height: 4px; margin-top: 8px; border-radius: 2px; background: rgba(255,255,255,.07); overflow: hidden; }
   .metric .bar i { display: block; height: 100%; background: var(--accent); }
 
+  .activity-panel { margin-bottom: 12px; }
+  .activity-range { position: relative; }
+  .range-popover { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; width: 280px; padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+  .range-presets { display: flex; gap: 6px; margin-bottom: 12px; }
+  .range-presets button { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 7px; min-height: 26px; padding: 0 9px; font-size: 11px; cursor: pointer; }
+  .range-presets button:hover { color: var(--text); border-color: var(--line-strong); }
+  .range-fields { display: grid; gap: 9px; }
+  .range-fields label { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11.5px; }
+  .range-fields input { width: 160px; min-height: 32px; }
+  .range-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 13px; }
+  .activity-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 11px; }
+  .activity-device { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; white-space: nowrap; }
+  .activity-device:hover { color: var(--text); border-color: var(--line-strong); }
+  .activity-device.on { color: var(--text); border-color: rgba(91,136,255,.55); background: var(--accent-soft); }
+  .activity-device i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .activity-grid-wrap { overflow-x: auto; padding: 2px 0 4px; }
+  .activity-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 15px); grid-auto-columns: 15px; gap: 4px; width: max-content; }
+  .heat-cell { width: 15px; height: 15px; border-radius: 3px; background: rgba(255,255,255,.045); cursor: pointer; }
+  .heat-cell:hover { outline: 1px solid rgba(255,255,255,.65); }
+  .heat-blank { background: transparent; }
+  .heat-level-1 { background: rgba(94,211,146,.22); }
+  .heat-level-2 { background: rgba(94,211,146,.4); }
+  .heat-level-3 { background: rgba(94,211,146,.65); }
+  .heat-level-4 { background: rgba(94,211,146,.92); }
+  .activity-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; color: var(--faint); font-size: 11px; flex-wrap: wrap; }
+  .heat-legend { display: inline-flex; align-items: center; gap: 4px; }
+  .heat-legend .heat-cell { width: 10px; height: 10px; }
   .layout { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); grid-template-areas: "sessions sessions" "storage devices"; gap: 12px; align-items: stretch; }
   .sessions-panel { grid-area: sessions; }
   .audit-panel { margin-top: 12px; }
@@ -281,7 +308,20 @@
   .history-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
   .history-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; white-space: nowrap; }
   .history-chip i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .history-tabs { display: flex; gap: 6px; margin: 12px 0 8px; }
+  .history-tab { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 7px; min-height: 26px; padding: 0 9px; font-size: 11px; cursor: pointer; }
+  .history-tab:hover { color: var(--text); border-color: var(--line-strong); }
+  .history-tab.on { color: var(--text); border-color: rgba(91,136,255,.5); background: var(--accent-soft); }
+  .history-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   .history-list { flex: 1 1 auto; min-height: 80px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: rgba(0,0,0,.12); }
+  .history-gantt { flex: 1 1 auto; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: rgba(0,0,0,.12); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .history-gantt-row { display: grid; grid-template-columns: 110px minmax(0,1fr); gap: 10px; align-items: center; }
+  .history-gantt-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .history-gantt-label i { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  .history-gantt-track { height: 12px; border-radius: 6px; background: rgba(255,255,255,.04); position: relative; }
+  .history-gantt-bar { position: absolute; top: 2px; height: 8px; min-width: 3px; border-radius: 4px; }
+  .history-heatmap { flex: 1 1 auto; display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 11px); grid-auto-columns: 11px; gap: 3px; width: max-content; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(0,0,0,.12); }
+  .history-heatmap .heat-cell { width: 11px; height: 11px; cursor: default; }
   .history-item { display: grid; grid-template-columns: 82px 16px minmax(0, 1fr); gap: 9px; padding: 9px 11px; border-top: 1px solid rgba(255,255,255,.055); }
   .history-item:first-child { border-top: 0; }
   .history-time { color: var(--faint); font-size: 11px; padding-top: 1px; white-space: nowrap; }
@@ -383,6 +423,43 @@
 
     <section id="metrics" class="metrics" aria-label="概览指标"></section>
 
+    <section class="panel activity-panel">
+      <div class="panel-head">
+        <span class="panel-icon" id="activityIcon"></span>
+        <div class="panel-title">
+          <b>工作强度</b>
+          <span>按天统计新增事件；只反映同步活动，不代表内容。</span>
+        </div>
+        <span class="spacer"></span>
+        <div class="activity-range">
+          <button id="activityRangeButton" class="btn small secondary" type="button">最近 90 天</button>
+          <div id="activityRangePopover" class="range-popover" hidden>
+            <div class="range-presets" id="activityPresets">
+              <button type="button" data-days="30">30 天</button>
+              <button type="button" data-days="90">90 天</button>
+              <button type="button" data-days="365">365 天</button>
+            </div>
+            <div class="range-fields">
+              <label>开始日期<input id="activityFrom" type="date"></label>
+              <label>结束日期<input id="activityTo" type="date"></label>
+            </div>
+            <div class="range-actions">
+              <button id="activityCancel" class="btn small ghost" type="button">取消</button>
+              <button id="activityApply" class="btn small" type="button">应用</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div id="activityDevices" class="activity-legend"></div>
+        <div class="activity-grid-wrap"><div id="activityGrid" class="activity-grid"></div></div>
+        <div class="activity-foot">
+          <span id="activityNote" class="faint">正在读取活动…</span>
+          <span class="heat-legend"><span>少</span><i class="heat-cell heat-level-1"></i><i class="heat-cell heat-level-2"></i><i class="heat-cell heat-level-3"></i><i class="heat-cell heat-level-4"></i><span>多</span></span>
+        </div>
+      </div>
+    </section>
+
     <div class="layout">
       <section class="panel sessions-panel">
         <div class="panel-head">
@@ -402,6 +479,7 @@
               <option value="active">正常</option>
               <option value="deleted">已删除</option>
             </select>
+            <button id="sessionDayChip" class="badge accent" type="button" hidden></button>
             <span class="spacer"></span>
             <label class="switch"><input id="autoRefresh" type="checkbox" checked><i></i>自动刷新 10s</label>
           </div>
@@ -579,7 +657,21 @@
     <h2 id="historyTitle">会话历史</h2>
     <p id="historySession"></p>
     <div id="historySummary" class="history-summary"></div>
-    <div id="historyList" class="history-list"></div>
+    <div class="history-tabs">
+      <button class="history-tab on" type="button" data-pane="timeline">时间线</button>
+      <button class="history-tab" type="button" data-pane="devices">设备</button>
+      <button class="history-tab" type="button" data-pane="heatmap">热力图</button>
+    </div>
+    <div id="historyTimelinePane" class="history-pane">
+      <div id="historyList" class="history-list"></div>
+    </div>
+    <div id="historyDevicesPane" class="history-pane" hidden>
+      <div id="historyGantt" class="history-gantt"></div>
+    </div>
+    <div id="historyHeatmapPane" class="history-pane" hidden>
+      <div id="historyHeatmap" class="history-heatmap"></div>
+      <div class="faint" style="margin-top:8px;font-size:11px">最近 90 天 · 按新增事件</div>
+    </div>
     <div id="historyError" class="inline-result bad" role="alert"></div>
     <div class="modal-actions">
       <button id="closeHistory" class="btn secondary" type="button">关闭</button>
@@ -615,10 +707,17 @@ const state = {
   revokeTarget: null,
   sessionAction: null,
   colorTarget: null,
-  collapsed: new Set(),
+  collapsed: new Set(['__unmapped__']),
   audit: [],
   auditBefore: null,
   auditHasMore: false,
+  activityStart: null,
+  activityEnd: null,
+  activityPresetDays: 90,
+  activityDeviceId: null,
+  activityDays: [],
+  sessionDayFilter: null,
+  activityDaySessionIds: null,
 }
 let toastTimer = null
 let updatedAt = 0
@@ -633,6 +732,7 @@ const ICONS = {
   pencil: ['M11 2.5l2.5 2.5-8 8H3v-2.5z'],
   chevron: ['M4 6l4 4 4-4'],
   audit: ['M3 2.5h10v11H3z', 'M5.5 5.5h5', 'M5.5 8h5', 'M5.5 10.5h3'],
+  activity: ['M2.5 13.5h11', 'M3.5 11.5l3-4 2 2 3-5 2 2.5'],
 }
 
 function icon(name, size = 16) {
@@ -809,6 +909,191 @@ function renderMetrics(overview) {
   for (const button of $('quotaPresets').querySelectorAll('.preset')) {
     const gb = Number(button.dataset.gb)
     button.classList.toggle('on', gb === quotaGb)
+  }
+}
+
+function dateKey(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return year + '-' + month + '-' + day
+}
+
+function parseDateInput(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(String(value || ''))
+  if (match === null) return null
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function defaultActivityRange(days) {
+  const end = new Date()
+  end.setHours(0, 0, 0, 0)
+  const start = new Date(end)
+  start.setDate(start.getDate() - (days - 1))
+  return { start, end }
+}
+
+function activityThresholds(days) {
+  const counts = days.map((day) => day.events).filter((events) => events > 0).sort((left, right) => left - right)
+  if (counts.length === 0) return []
+  const pick = (quantile) => counts[Math.min(counts.length - 1, Math.floor(quantile * (counts.length - 1)))]
+  return [...new Set([pick(0.25), pick(0.5), pick(0.75)])]
+}
+
+function activityLevel(events, thresholds, maxEvents) {
+  if (events <= 0) return 0
+  if (maxEvents !== undefined && events >= maxEvents) return 4
+  let level = 1
+  for (const threshold of thresholds || []) {
+    if (events > threshold) level += 1
+  }
+  return Math.min(4, level)
+}
+
+function setActivityRange(start, end, presetDays) {
+  state.activityStart = start
+  state.activityEnd = end
+  state.activityPresetDays = presetDays
+  $('activityRangeButton').textContent = presetDays === null
+    ? dateKey(start) + ' → ' + dateKey(end)
+    : '最近 ' + presetDays + ' 天'
+}
+
+function openActivityRange() {
+  $('activityFrom').value = dateKey(state.activityStart)
+  $('activityTo').value = dateKey(state.activityEnd)
+  $('activityRangePopover').hidden = false
+}
+
+function closeActivityRange() {
+  $('activityRangePopover').hidden = true
+}
+
+function applyActivityRange() {
+  const start = parseDateInput($('activityFrom').value)
+  const end = parseDateInput($('activityTo').value)
+  if (start === null || end === null) { showToast('请选择有效的开始和结束日期', true); return }
+  if (start > end) { showToast('开始日期不能晚于结束日期', true); return }
+  setActivityRange(start, end, null)
+  closeActivityRange()
+  void loadActivity()
+}
+
+function renderActivityDevices() {
+  const wrap = $('activityDevices')
+  const options = [{ id: null, label: '全部设备', color: '#94a3b8' }]
+  for (const device of state.devices) {
+    options.push({ id: device.deviceId, label: device.label || device.deviceId, color: device.color || historyDeviceColor(device.deviceId) })
+  }
+  wrap.replaceChildren(...options.map((option) => {
+    const button = el('button', 'activity-device' + (state.activityDeviceId === option.id ? ' on' : ''))
+    button.type = 'button'
+    const dot = el('i')
+    dot.style.background = option.color
+    button.append(dot, el('span', null, option.label))
+    button.onclick = () => {
+      state.activityDeviceId = state.activityDeviceId === option.id ? null : option.id
+      void loadActivity()
+    }
+    return button
+  }))
+}
+
+function renderActivity() {
+  renderActivityDevices()
+  const grid = $('activityGrid')
+  if (state.activityStart === null || state.activityEnd === null) {
+    grid.replaceChildren()
+    return
+  }
+  const byDay = new Map(state.activityDays.map((day) => [day.day, day]))
+  const thresholds = activityThresholds(state.activityDays)
+  const maxEvents = state.activityDays.reduce((max, day) => Math.max(max, day.events), 0)
+  const cells = []
+  const startWeekday = (state.activityStart.getDay() + 6) % 7
+  for (let index = 0; index < startWeekday; index += 1) cells.push(el('div', 'heat-cell heat-blank'))
+  let totalEvents = 0
+  let activeDays = 0
+  for (let cursor = new Date(state.activityStart); cursor <= state.activityEnd; cursor.setDate(cursor.getDate() + 1)) {
+    const key = dateKey(cursor)
+    const data = byDay.get(key)
+    const events = data === undefined ? 0 : data.events
+    totalEvents += events
+    if (events > 0) activeDays += 1
+    const cell = el('div', 'heat-cell heat-level-' + activityLevel(events, thresholds, maxEvents))
+    cell.setAttribute('aria-label', key + '：' + events + ' 事件')
+    cell.title = data === undefined
+      ? key + ' · 没有同步活动'
+      : key + ' · ' + data.events + ' 事件 · ' + formatBytes(data.bytes) + ' · ' + data.appends + ' 次 · ' + data.sessions + ' 会话 · ' + data.devices + ' 设备'
+    cell.dataset.day = key
+    cell.onclick = () => { void toggleSessionDayFilter(key) }
+    cells.push(cell)
+  }
+  grid.replaceChildren(...cells)
+  const scope = state.activityDeviceId === null ? '全部设备' : historyDeviceLabel(state.activityDeviceId)
+  $('activityNote').textContent = activeDays === 0
+    ? scope + ' · 这个范围还没有同步活动'
+    : scope + ' · ' + totalEvents + ' 事件 · ' + activeDays + ' 个活跃日 · 颜色按当前范围分档'
+  const legend = document.querySelector('.heat-legend')
+  if (legend !== null) {
+    legend.title = thresholds.length === 0
+      ? '没有活动时不分档'
+      : '事件分档阈值：' + thresholds.join(' / ')
+  }
+}
+
+async function loadActivity() {
+  if (state.activityStart === null || state.activityEnd === null) return
+  const params = new URLSearchParams({
+    from: String(state.activityStart.getTime()),
+    to: String(state.activityEnd.getTime() + 24 * 60 * 60 * 1000),
+    tzOffset: String(-new Date().getTimezoneOffset()),
+  })
+  if (state.activityDeviceId !== null) params.set('deviceId', state.activityDeviceId)
+  try {
+    const data = await api('/admin/activity?' + params.toString())
+    state.activityDays = data.days
+    renderActivity()
+  } catch (error) {
+    if (error.message !== 'unauthorized') {
+      $('activityNote').textContent = '活动读取失败：' + error.message
+    }
+  }
+}
+
+function updateSessionDayChip() {
+  const chip = $('sessionDayChip')
+  if (state.sessionDayFilter === null) {
+    chip.hidden = true
+    chip.textContent = ''
+    return
+  }
+  chip.hidden = false
+  chip.textContent = '活动日 ' + state.sessionDayFilter + ' ×'
+  chip.title = '清除日期筛选'
+}
+
+async function toggleSessionDayFilter(day) {
+  if (state.sessionDayFilter === day) {
+    state.sessionDayFilter = null
+    state.activityDaySessionIds = null
+    updateSessionDayChip()
+    renderSessions()
+    return
+  }
+  try {
+    const params = new URLSearchParams({
+      day,
+      tzOffset: String(-new Date().getTimezoneOffset()),
+    })
+    const data = await api('/admin/activity/sessions?' + params.toString())
+    state.sessionDayFilter = day
+    state.activityDaySessionIds = new Set(data.sessions.map((session) => session.sessionId))
+    updateSessionDayChip()
+    renderSessions()
+  } catch (error) {
+    if (error.message !== 'unauthorized') showToast(error.message, true)
   }
 }
 
@@ -1110,11 +1395,103 @@ async function saveDeviceColor() {
   }
 }
 
+function switchHistoryPane(name) {
+  for (const tab of document.querySelectorAll('.history-tab')) {
+    tab.classList.toggle('on', tab.dataset.pane === name)
+  }
+  for (const pane of ['timeline', 'devices', 'heatmap']) {
+    const node = $('history' + pane[0].toUpperCase() + pane.slice(1) + 'Pane')
+    if (node !== null) node.hidden = pane !== name
+  }
+}
+
+function renderHistoryGantt(events) {
+  const wrap = $('historyGantt')
+  const byDevice = new Map()
+  for (const event of events) {
+    if ((event.kind !== 'create' && event.kind !== 'append') || !event.deviceId) continue
+    const entry = byDevice.get(event.deviceId) || {
+      deviceId: event.deviceId,
+      label: event.deviceLabel || historyDeviceLabel(event.deviceId),
+      color: event.deviceColor || historyDeviceColor(event.deviceId),
+      firstAt: event.at,
+      lastAt: event.at,
+      events: 0,
+      bytes: 0,
+    }
+    entry.firstAt = Math.min(entry.firstAt, event.at)
+    entry.lastAt = Math.max(entry.lastAt, event.at)
+    entry.events += event.events
+    entry.bytes += event.bytes
+    byDevice.set(event.deviceId, entry)
+  }
+  if (byDevice.size === 0) {
+    wrap.replaceChildren(el('div', 'history-empty', '还没有设备活动。'))
+    return
+  }
+  const entries = [...byDevice.values()]
+  const minAt = Math.min(...entries.map((entry) => entry.firstAt))
+  const maxAt = Math.max(...entries.map((entry) => entry.lastAt))
+  const span = Math.max(1, maxAt - minAt)
+  wrap.replaceChildren(...entries.map((entry) => {
+    const row = el('div', 'history-gantt-row')
+    const label = el('div', 'history-gantt-label')
+    const dot = el('i')
+    dot.style.background = entry.color
+    label.append(dot, el('span', null, entry.label))
+    const track = el('div', 'history-gantt-track')
+    const bar = el('div', 'history-gantt-bar')
+    bar.style.background = entry.color
+    bar.style.left = ((entry.firstAt - minAt) / span * 100) + '%'
+    bar.style.width = Math.max(2, (entry.lastAt - entry.firstAt) / span * 100) + '%'
+    bar.title = entry.label + ' · ' + formatAgo(entry.firstAt) + ' → ' + formatAgo(entry.lastAt) + ' · ' + entry.events + ' 事件'
+    track.append(bar)
+    row.append(label, track)
+    return row
+  }))
+}
+
+async function renderHistoryHeatmap(session) {
+  const grid = $('historyHeatmap')
+  grid.replaceChildren(el('div', 'history-empty', '正在读取…'))
+  const end = new Date()
+  end.setHours(0, 0, 0, 0)
+  const start = new Date(end)
+  start.setDate(start.getDate() - 89)
+  const params = new URLSearchParams({
+    from: String(start.getTime()),
+    to: String(end.getTime() + 24 * 60 * 60 * 1000),
+    tzOffset: String(-new Date().getTimezoneOffset()),
+    sessionId: session.sessionId,
+  })
+  try {
+    const data = await api('/admin/activity?' + params.toString())
+    const byDay = new Map(data.days.map((day) => [day.day, day]))
+    const thresholds = activityThresholds(data.days)
+    const maxEvents = data.days.reduce((max, day) => Math.max(max, day.events), 0)
+    const cells = []
+    const startWeekday = (start.getDay() + 6) % 7
+    for (let index = 0; index < startWeekday; index += 1) cells.push(el('div', 'heat-cell heat-blank'))
+    for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+      const key = dateKey(cursor)
+      const day = byDay.get(key)
+      const events = day === undefined ? 0 : day.events
+      const cell = el('div', 'heat-cell heat-level-' + activityLevel(events, thresholds, maxEvents))
+      cell.title = key + ' · ' + events + ' 事件' + (day === undefined ? '' : ' · ' + formatBytes(day.bytes))
+      cells.push(cell)
+    }
+    grid.replaceChildren(...cells)
+  } catch (error) {
+    if (error.message !== 'unauthorized') grid.replaceChildren(el('div', 'history-empty', '热力图读取失败：' + error.message))
+  }
+}
+
 function openHistory(session) {
   $('historySession').textContent = shortDisplayId(session.sessionId) + (session.workspaceKey ? ' · 工作区 ' + session.workspaceKey.slice(0, 12) + '…' : '')
   $('historySummary').replaceChildren()
   $('historyList').replaceChildren(el('div', 'history-empty', '正在读取历史…'))
   $('historyError').textContent = ''
+  switchHistoryPane('timeline')
   $('historyDialog').classList.remove('closing')
   $('historyDialog').hidden = false
   document.body.classList.add('modal-open')
@@ -1222,6 +1599,8 @@ async function loadHistory(session) {
     const list = $('historyList')
     if (data.events.length === 0) {
       list.replaceChildren(el('div', 'history-empty', '还没有这个会话的历史记录。'))
+      renderHistoryGantt([])
+      void renderHistoryHeatmap(session)
       return
     }
     const ordered = [...data.events].reverse()
@@ -1290,6 +1669,8 @@ async function loadHistory(session) {
       item.append(timeCell, rail, main)
       return item
     }))
+    renderHistoryGantt(data.events)
+    void renderHistoryHeatmap(session)
   } catch (error) {
     $('historyError').textContent = error.message
   }
@@ -1358,6 +1739,7 @@ function filteredSessions() {
   const query = $('sessionSearch').value.trim().toLowerCase()
   const mode = $('sessionFilter').value
   return state.sessions.filter((session) => {
+    if (state.activityDaySessionIds !== null && !state.activityDaySessionIds.has(session.sessionId)) return false
     if (query && !session.sessionId.toLowerCase().includes(query) && !(session.workspaceKey || '').toLowerCase().includes(query)) return false
     if (mode === 'active' && session.deletedAt !== null) return false
     if (mode === 'deleted' && session.deletedAt === null) return false
@@ -1694,6 +2076,7 @@ async function refresh(silent) {
     $('healthText').textContent = '服务正常'
     $('health').classList.remove('bad')
     $('updatedBadge').textContent = '更新于 ' + formatAgo(updatedAt)
+    void loadActivity()
   } catch (error) {
     if (isUninitialized(error)) {
       location.replace('/setup')
@@ -1724,6 +2107,7 @@ $('refresh').append(icon('refresh', 14), el('span', null, '刷新'))
 $('sessionsIcon').append(icon('sessions', 15))
 $('storageIcon').append(icon('storage', 15))
 $('devicesIcon').append(icon('devices', 15))
+$('activityIcon').append(icon('activity', 15))
 $('auditIcon').append(icon('audit', 15))
 for (const [action, label] of Object.entries(AUDIT_ACTIONS)) {
   const option = el('option', null, label)
@@ -1855,6 +2239,9 @@ $('cancelSessionAction').onclick = closeSessionAction
 $('sessionDialog').addEventListener('click', (event) => { if (event.target === $('sessionDialog')) closeSessionAction() })
 $('confirmSessionAction').onclick = confirmSessionAction
 $('closeHistory').onclick = closeHistory
+for (const tab of document.querySelectorAll('.history-tab')) {
+  tab.addEventListener('click', () => switchHistoryPane(tab.dataset.pane))
+}
 $('historyDialog').addEventListener('click', (event) => { if (event.target === $('historyDialog')) closeHistory() })
 $('cancelColor').onclick = closeColorDialog
 $('colorDialog').addEventListener('click', (event) => { if (event.target === $('colorDialog')) closeColorDialog() })
@@ -1899,14 +2286,48 @@ document.addEventListener('keydown', (event) => {
   if (!$('sessionDialog').hidden) closeSessionAction()
   if (!$('historyDialog').hidden) closeHistory()
   if (!$('colorDialog').hidden) closeColorDialog()
+  if (!$('activityRangePopover').hidden) closeActivityRange()
 })
 $('sessionSearch').addEventListener('input', renderSessions)
 $('sessionFilter').addEventListener('change', renderSessions)
+$('sessionDayChip').addEventListener('click', () => {
+  state.sessionDayFilter = null
+  state.activityDaySessionIds = null
+  updateSessionDayChip()
+  renderSessions()
+})
 $('auditSearch').addEventListener('input', renderAudit)
 $('auditFilter').addEventListener('change', () => loadAudit(true))
 $('auditRefresh').addEventListener('click', () => loadAudit(true))
 $('auditMore').addEventListener('click', () => loadAudit(false))
+$('activityRangeButton').addEventListener('click', (event) => {
+  event.stopPropagation()
+  if ($('activityRangePopover').hidden) openActivityRange()
+  else closeActivityRange()
+})
+$('activityCancel').addEventListener('click', closeActivityRange)
+$('activityApply').addEventListener('click', applyActivityRange)
+$('activityPresets').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-days]')
+  if (!button) return
+  const days = Number(button.dataset.days)
+  const range = defaultActivityRange(days)
+  setActivityRange(range.start, range.end, days)
+  closeActivityRange()
+  void loadActivity()
+})
+for (const id of ['activityFrom', 'activityTo']) {
+  $(id).addEventListener('keydown', (event) => { if (event.key === 'Enter') applyActivityRange() })
+}
+document.addEventListener('click', (event) => {
+  if ($('activityRangePopover').hidden) return
+  const wrap = document.querySelector('.activity-range')
+  if (wrap !== null && !wrap.contains(event.target)) closeActivityRange()
+})
 
+const initialDays = window.matchMedia('(max-width: 900px)').matches ? 90 : 365
+const initialActivity = defaultActivityRange(initialDays)
+setActivityRange(initialActivity.start, initialActivity.end, initialDays)
 refresh(false)
 loadAudit(true)
 startPolling()

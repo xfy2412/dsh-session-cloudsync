@@ -54,7 +54,7 @@ import { acquireLease, releaseLease, SYNC_RESOURCE, vaultResource } from './leas
 import { appendVaultRecord, readVaultCursor, readVaultStream, validVaultWriter } from './vault.ts'
 import { listAudit, recordAudit } from './audit.ts'
 import { archiveSession, removeSession, resetSession, restoreSession } from './session-admin.ts'
-import { listSessionHistory } from './session-history.ts'
+import { listActivity, listActivitySessions, listSessionHistory } from './session-history.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 
 /** `/health` 报告的服务端版本；从 package.json 读取，避免手写漂移。 */
@@ -1454,6 +1454,41 @@ export function createHttpServer(options: ServerOptions): Server {
           recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'device.rename', target: match[1]!, detail: { from: before?.label, to: label } }, req)
         }
         return json(res, 200, { ok: true, value: { device } })
+      },
+    },
+    {
+      method: 'GET',
+      path: /^\/admin\/activity$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const now = Date.now()
+        const to = intParam(url.searchParams.get('to'), now, 1, Number.MAX_SAFE_INTEGER)
+        const from = intParam(url.searchParams.get('from'), to - 90 * 24 * 60 * 60 * 1000, 0, Number.MAX_SAFE_INTEGER)
+        if (to <= from) throw new SyncError('bad-request', 'to 必须大于 from')
+        const tzOffset = intParam(url.searchParams.get('tzOffset'), 0, -14 * 60, 14 * 60)
+        const deviceId = url.searchParams.get('deviceId') ?? undefined
+        const sessionId = url.searchParams.get('sessionId') ?? undefined
+        return json(res, 200, {
+          ok: true,
+          value: listActivity(db, {
+            from, to, tzOffset,
+            ...deviceId === undefined ? {} : { deviceId },
+            ...sessionId === undefined ? {} : { sessionId },
+          }),
+        })
+      },
+    },
+    {
+      method: 'GET',
+      path: /^\/admin\/activity\/sessions$/u,
+      handler: async (req, res) => {
+        requireAdmin(req)
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const day = url.searchParams.get('day') ?? ''
+        if (!/^\d{4}-\d{2}-\d{2}$/u.test(day)) throw new SyncError('bad-request', 'day 必须是 YYYY-MM-DD')
+        const tzOffset = intParam(url.searchParams.get('tzOffset'), 0, -14 * 60, 14 * 60)
+        return json(res, 200, { ok: true, value: listActivitySessions(db, { day, tzOffset }) })
       },
     },
     {
