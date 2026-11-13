@@ -642,20 +642,25 @@ export function revokeDevice(db: ServerDb, deviceId: string): boolean {
 }
 
 /**
- * 给设备改名。
+ * 直接修改设备的可选字段（名称/颜色）。
  * @param db - 已打开的数据库。
- * @param deviceId - 要改名的设备。
- * @param label - 新名字（已校验）。
- * @returns 改名后的设备；设备不存在或已吊销时 undefined。
+ * @param deviceId - 设备 id。
+ * @param changes - 要改的字段。
+ * @returns 修改后的设备；不存在或已吊销时 undefined。
  */
-export function renameDevice(db: ServerDb, deviceId: string, label: string): DeviceRef | undefined {
+export function updateDevice(
+  db: ServerDb,
+  deviceId: string,
+  changes: { readonly label?: string; readonly color?: string },
+): DeviceRef | undefined {
   const result = db.handle
-    .prepare('UPDATE devices SET label = ? WHERE dataset = ? AND device_id = ? AND revoked_at IS NULL')
-    .run(label, DEFAULT_DATASET, deviceId)
+    .prepare(`UPDATE devices SET label = COALESCE(?, label), color = COALESCE(?, color)
+              WHERE dataset = ? AND device_id = ? AND revoked_at IS NULL`)
+    .run(changes.label ?? null, changes.color ?? null, DEFAULT_DATASET, deviceId)
   if (Number(result.changes) === 0) return undefined
   const row = db.handle
     .prepare('SELECT device_id, label, created_at, last_seen_at, color FROM devices WHERE dataset = ? AND device_id = ?')
-    .get(DEFAULT_DATASET, deviceId) as { device_id: string; label: string; created_at: number; last_seen_at: number | null; color: string | null } | undefined
+    .get(DEFAULT_DATASET, deviceId) as DeviceRow | undefined
   if (row === undefined) return undefined
   return {
     deviceId: row.device_id,
@@ -664,6 +669,29 @@ export function renameDevice(db: ServerDb, deviceId: string, label: string): Dev
     ...row.last_seen_at === null ? {} : { lastSeenAt: row.last_seen_at },
     ...row.color === null ? {} : { color: row.color },
   }
+}
+
+/**
+ * 给设备改名。
+ * @param db - 已打开的数据库。
+ * @param deviceId - 要改名的设备。
+ * @param label - 新名字（已校验）。
+ * @returns 改名后的设备；设备不存在或已吊销时 undefined。
+ */
+export function renameDevice(db: ServerDb, deviceId: string, label: string): DeviceRef | undefined {
+  return updateDevice(db, deviceId, { label })
+}
+
+/**
+ * 校验设备颜色。
+ * @param value - 请求体里的 color。
+ * @returns 小写 #rrggbb。
+ * @throws 非字符串或格式非法。
+ */
+function requireDeviceColor(value: unknown): string {
+  const color = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (!/^#[0-9a-f]{6}$/u.test(color)) throw new SyncError('bad-request', '颜色必须是 #rrggbb')
+  return color
 }
 
 /**
@@ -1413,11 +1441,18 @@ export function createHttpServer(options: ServerOptions): Server {
         const match = ADMIN_DEVICE_PATH.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
         if (match === null) return json(res, 404, errorBody('not-found', '没有这个设备'))
         const body = await readJson(req)
-        const label = requireDeviceLabel(body.label)
+        const label = body.label === undefined ? undefined : requireDeviceLabel(body.label)
+        const color = body.color === undefined ? undefined : requireDeviceColor(body.color)
+        if (label === undefined && color === undefined) throw new SyncError('bad-request', '需要 label 或 color')
         const before = listDevices(db).find((device) => device.deviceId === match[1])
-        const device = renameDevice(db, match[1]!, label)
+        const device = updateDevice(db, match[1]!, {
+          ...label === undefined ? {} : { label },
+          ...color === undefined ? {} : { color },
+        })
         if (device === undefined) return json(res, 404, errorBody('not-found', '没有这个设备'))
-        recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'device.rename', target: match[1]!, detail: { from: before?.label, to: label } }, req)
+        if (label !== undefined) {
+          recordAudit(db, { actorKind: 'admin', actorId: 'admin', action: 'device.rename', target: match[1]!, detail: { from: before?.label, to: label } }, req)
+        }
         return json(res, 200, { ok: true, value: { device } })
       },
     },

@@ -88,6 +88,15 @@ test('会话三档：存档/恢复/移除/重置、includeDeleted 与重置闸�
       const colors = devicesRes.body.value.map((device) => device.color)
       assert.ok(colors.every((color) => typeof color === 'string' && /^#[0-9a-f]{6}$/u.test(color)))
       assert.notEqual(colors[0], colors[1])
+      const colored = await call(base, '/admin/devices/' + devicesRes.body.value[1].deviceId, {
+        method: 'PATCH', cookie: adminCookie, json: { color: '#123abc' },
+      })
+      assert.equal(colored.status, 200)
+      assert.equal(colored.body.value.device.color, '#123abc')
+      const badColor = await call(base, '/admin/devices/' + devicesRes.body.value[1].deviceId, {
+        method: 'PATCH', cookie: adminCookie, json: { color: '#zzzzzz' },
+      })
+      assert.equal(badColor.status, 400)
 
       const sessionId = 'session-admin-modes'
       const createdAt = 1000

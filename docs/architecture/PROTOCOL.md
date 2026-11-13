@@ -338,7 +338,7 @@ HTTP 映射：
 ## 管理台端点
 
 `/admin`、`/admin/login`、`/admin/logout`、`/admin/overview`、`/admin/quota`、
-`/admin/devices`、`/admin/sessions` 保持不变；另增 `PATCH /admin/devices/:id`（`{label}`）改名、
+`/admin/devices`、`/admin/sessions` 保持不变；另增 `PATCH /admin/devices/:id`（`{label?, color?}`）改名/改色、
 `GET /admin/audit`、`POST /admin/password`，以及会话生命周期
 `POST /admin/sessions/:id/archive|remove|reset|restore|clear-reset`（body `{createdAt, deviceId?}`），
 以及 `GET /admin/sessions/:id/history`（元数据时间线，`limit`/`before` 分页）。
