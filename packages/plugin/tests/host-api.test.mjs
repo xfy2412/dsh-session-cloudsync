@@ -76,6 +76,9 @@ function control(overrides = {}) {
     test: overrides.test ?? (async () => ({ ok: true })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
     cwdDecision: overrides.cwdDecision ?? (async () => ({ ok: true, status: 'corrected' })),
+    repairAttachments: overrides.repairAttachments ?? (async (sessionId) => ({
+      sessionId, scanned: 0, missing: 0, downloaded: 0, failed: [],
+    })),
     resolveBlocked: overrides.resolveBlocked ?? (async () => ({ ok: true })),
     prepareReplace: overrides.prepareReplace ?? (async (sessionId) => ({
       sessionId,
@@ -142,6 +145,7 @@ test('宿主 API：注册全部精确路由', () => {
     ['/api/session-cloudsync/directory/pick', ['POST'], 'buffered'],
     ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
     ['/api/session-cloudsync/session-scope', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/attachments/repair', ['POST'], 'buffered'],
     ['/api/session-cloudsync/cwd', ['POST'], 'buffered'],
     ['/api/session-cloudsync/blocked', ['POST'], 'buffered'],
     ['/api/session-cloudsync/replace', ['POST'], 'buffered'],
@@ -368,6 +372,37 @@ test('宿主 API：replace 按 sessionId 生成覆盖计划', async () => {
   assert.equal(response.status, 200)
   assert.equal(seen, 'session-replace')
   assert.equal((await bodyOf(response)).value.scriptPath, '/tmp/replace.mjs')
+})
+
+test('宿主 API：attachments/repair 调用控制面并校验 sessionId', async () => {
+  let seen = ''
+  const routes = createHostApi(control({
+    repairAttachments: async (sessionId) => {
+      seen = sessionId
+      return { sessionId, scanned: 2, missing: 1, downloaded: 1, failed: [] }
+    },
+  }))
+  const ok = await route(routes, '/api/session-cloudsync/attachments/repair').fetch(
+    new Request('http://host/api/session-cloudsync/attachments/repair', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-repair' }),
+    }),
+  )
+  assert.equal(ok.status, 200)
+  assert.equal(seen, 'session-repair')
+  const body = await bodyOf(ok)
+  assert.equal(body.value.scanned, 2)
+  assert.equal(body.value.downloaded, 1)
+
+  const bad = await route(routes, '/api/session-cloudsync/attachments/repair').fetch(
+    new Request('http://host/api/session-cloudsync/attachments/repair', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    }),
+  )
+  assert.equal(bad.status, 400)
 })
 
 test('宿主 API：cwd 决策缺少 action 时返回 400', async () => {

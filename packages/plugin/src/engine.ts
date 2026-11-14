@@ -33,7 +33,22 @@ import {
   encodeBlobBatch,
   MAX_BATCH_BLOBS,
   MAX_BATCH_BODY_BYTES,
+  MAX_BLOB_BYTES,
+  type BlobKind,
 } from '../../shared/src/blob-batch.ts'
+import {
+  ATTACHMENT_OVERHEAD_BYTES,
+  collectAttachmentRefs,
+  openAttachment,
+  openAttachmentIndex,
+  sealAttachment,
+  sealAttachmentIndex,
+  type AttachmentEntry,
+  type AttachmentIndex,
+  type AttachmentRef,
+} from '../../shared/src/attachment.ts'
+
+export type { AttachmentEntry, AttachmentIndex, AttachmentRef } from '../../shared/src/attachment.ts'
 import { markerEquivalent, stableStringify } from '../../shared/src/chain.ts'
 import { PROTOCOL_VERSION } from '../../shared/src/protocol.ts'
 import { deriveMasterKeyAsync, sha256 } from '../../shared/src/crypto.ts'
@@ -43,6 +58,57 @@ import {
   type SealedFrameRef,
 } from '../../shared/src/sealed-frame.ts'
 import { planSessionClosure } from './closure.ts'
+
+/**
+ * 本地附件读写的宿主桥。
+ *
+ * 实现由宿主用 `ctx.get('attachments')` 包出来：读要返回**校验过的明文**，
+ * 写必须保证落盘对象的 `attachmentId` 与 ref 一致（图片归一化策略不同就报错，
+ * 不要落一个 id 不同的对象）。
+ */
+export interface AttachmentBridge {
+  /** 读本地附件正文；本地没有时返回 undefined。 */
+  read(ref: AttachmentRef): Promise<Uint8Array | undefined>
+  /** 本地是否已有该附件对象（不读正文）。 */
+  exists(ref: AttachmentRef): Promise<boolean>
+  /** 写入附件对象；实现必须校验写后 id 与 ref 一致。 */
+  write(ref: AttachmentRef, data: Uint8Array): Promise<void>
+}
+
+/** 服务端能力缓存时长；服务端升级后一分钟内生效。 */
+const CAPABILITY_TTL_MS = 60 * 1000
+
+/** 服务端能力缓存：`base|token` → 能力集合与采集时间。 */
+const capabilityCache = new Map<string, { readonly at: number; readonly capabilities: readonly string[] }>()
+
+/**
+ * 读服务端 `/health` 的能力集合；带短缓存，供附件门控使用。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @returns 能力集合；请求失败时为空数组。
+ */
+async function healthCapabilities(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+): Promise<readonly string[]> {
+  const key = `${base}|${token}`
+  const cached = capabilityCache.get(key)
+  if (cached !== undefined && Date.now() - cached.at < CAPABILITY_TTL_MS) return cached.capabilities
+  try {
+    const { status, body } = await requestJson(fetchImpl, base, '/health', token)
+    if (status !== 200 || body === null || typeof body !== 'object') return []
+    const server = (body as Record<string, unknown>)['server']
+    if (server === null || typeof server !== 'object') return []
+    const raw = (server as Record<string, unknown>)['capabilities']
+    const capabilities = Array.isArray(raw) ? raw.filter((value): value is string => typeof value === 'string') : []
+    capabilityCache.set(key, { at: Date.now(), capabilities })
+    return capabilities
+  } catch {
+    return []
+  }
+}
 
 /** 服务端会话头/快照里本引擎需要的字段。 */
 export interface SnapshotLike {
@@ -231,6 +297,8 @@ export interface SyncDeps<Session> {
   readonly logger?: SyncLogger
   /** 测试可替换；默认全局 fetch。 */
   readonly fetch?: typeof fetch
+  /** 本地附件读写桥；缺省表示宿主没提供附件服务，附件通道整体跳过。 */
+  readonly attachments?: AttachmentBridge
   /**
    * 判断事件尾巴是否还有未闭合的 turn；DSH 宿主传
    * `interruptedTurnClosers(events).length > 0`。缺省按闭合处理。
@@ -316,6 +384,8 @@ export interface PullDeps<Session> {
   readonly takeHeldHandle?: (id: string) => WriteHandleLike | undefined
   readonly logger?: SyncLogger
   readonly fetch?: typeof fetch
+  /** 本地附件读写桥；缺省表示宿主没提供附件服务，附件通道整体跳过。 */
+  readonly attachments?: AttachmentBridge
   /** 在第一次本地写入之前落盘 pending 记录。 */
   readonly beforeApply?: (sessionId: string, targetSeq: number) => Promise<void>
   /**
@@ -517,6 +587,7 @@ export type SyncErrorKind =
   | 'crypto'
   | 'format'
   | 'config'
+  | 'attachment'
   | 'unknown'
 
 /** 分类后的错误。 */
@@ -533,6 +604,7 @@ export interface ClassifiedSyncError {
  */
 export function classifySyncError(error: unknown): ClassifiedSyncError {
   const message = error instanceof Error ? error.message : String(error)
+  if (error instanceof AttachmentSyncError) return { kind: 'attachment', message, retryable: true }
   if (error instanceof SyncHttpError) {
     switch (error.status) {
       case 401: return { kind: 'auth', message, retryable: false }
@@ -687,25 +759,27 @@ async function readManifest(
 }
 
 /**
- * 上传一个封好的 blob。
+ * 上传一个 blob。
  * @param fetchImpl - fetch 实现。
  * @param base - 服务端地址。
  * @param token - 设备 token。
- * @param sealed - 封好的条目。
+ * @param bytes - 密文字节。
+ * @param kind - blob 类别，默认 `frame`。
  */
 async function uploadBlob(
   fetchImpl: typeof fetch,
   base: string,
   token: string,
-  sealed: SealedFrame,
+  bytes: Uint8Array,
+  kind: BlobKind = 'frame',
 ): Promise<void> {
-  const response = await fetchImpl(`${base}/v2/blobs?kind=frame`, {
+  const response = await fetchImpl(`${base}/v2/blobs?kind=${kind}`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token}`,
       'content-type': 'application/octet-stream',
     },
-    body: sealed.bytes,
+    body: bytes,
   })
   const text = await response.text()
   if (response.status !== 200 && response.status !== 201) {
@@ -715,8 +789,66 @@ async function uploadBlob(
   }
 }
 
+/** 待上传的一个 blob。 */
+interface BlobUploadEntry {
+  readonly kind: BlobKind
+  readonly bytes: Buffer
+}
+
 /**
- * 批量上传一帧或少量帧；单个超大帧回退单 blob 接口。
+ * 按服务端限制分批上传 blob：批量请求 8 MiB / 64 条，单条超过批量容量时
+ * 回退单 blob 接口。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param entries - 待上传条目。
+ */
+async function uploadEntries(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  entries: readonly BlobUploadEntry[],
+): Promise<void> {
+  const flush = async (group: readonly BlobUploadEntry[]): Promise<void> => {
+    if (group.length === 0) return
+    const response = await fetchImpl(`${base}/v2/blobs/batch`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': BLOB_BATCH_CONTENT_TYPE,
+      },
+      body: encodeBlobBatch(group.map((entry) => ({ kind: entry.kind, data: entry.bytes }))),
+    })
+    const text = await response.text()
+    if (response.status !== 200 && response.status !== 201) {
+      const body = text === '' ? undefined : JSON.parse(text) as unknown
+      const error = errorOf(body)
+      throw new SyncHttpError(error.message, response.status, error.code)
+    }
+  }
+  let group: BlobUploadEntry[] = []
+  let groupBytes = BLOB_BATCH_HEADER_BYTES
+  for (const entry of entries) {
+    if (entry.bytes.length + BLOB_BATCH_ENTRY_HEADER_BYTES > MAX_BATCH_BODY_BYTES) {
+      await flush(group)
+      group = []
+      groupBytes = BLOB_BATCH_HEADER_BYTES
+      await uploadBlob(fetchImpl, base, token, entry.bytes, entry.kind)
+      continue
+    }
+    if (group.length >= MAX_BATCH_BLOBS || groupBytes + entry.bytes.length + BLOB_BATCH_ENTRY_HEADER_BYTES > MAX_BATCH_BODY_BYTES) {
+      await flush(group)
+      group = []
+      groupBytes = BLOB_BATCH_HEADER_BYTES
+    }
+    group.push(entry)
+    groupBytes += entry.bytes.length + BLOB_BATCH_ENTRY_HEADER_BYTES
+  }
+  await flush(group)
+}
+
+/**
+ * 批量上传封帧。
  * @param fetchImpl - fetch 实现。
  * @param base - 服务端地址。
  * @param token - 设备 token。
@@ -728,24 +860,321 @@ async function uploadBlobs(
   token: string,
   sealed: readonly SealedFrame[],
 ): Promise<void> {
-  if (sealed.length === 0) return
-  if (sealed.length === 1) {
-    await uploadBlob(fetchImpl, base, token, sealed[0]!)
-    return
+  await uploadEntries(fetchImpl, base, token, sealed.map((entry) => ({ kind: 'frame', bytes: entry.bytes })))
+}
+
+/** 附件同步失败：拉取/修复在 apply 之前中止。 */
+export class AttachmentSyncError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AttachmentSyncError'
   }
-  const response = await fetchImpl(`${base}/v2/blobs/batch`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': BLOB_BATCH_CONTENT_TYPE,
-    },
-    body: encodeBlobBatch(sealed.map((entry) => ({ kind: 'frame', data: entry.bytes }))),
-  })
-  const text = await response.text()
-  if (response.status !== 200 && response.status !== 201) {
-    const body = text === '' ? undefined : JSON.parse(text) as unknown
-    const error = errorOf(body)
-    throw new SyncHttpError(error.message, response.status, error.code)
+}
+
+/** 一次推送里某个附件的处理结果；同一附件跨批次只读/只加密一次。 */
+type AttachmentRunEntry =
+  | { readonly state: 'uploaded'; readonly blobSha256: string; readonly bytes: number }
+  | { readonly state: 'tooLarge'; readonly bytes: number }
+  | { readonly state: 'missing' }
+
+/** 一个批次附件处理完后的帧字段。 */
+interface FrameAttachmentFields {
+  readonly attachmentIndexSha256: string
+  readonly attachmentBlobs?: readonly string[]
+}
+
+/**
+ * 收集一个批次事件引用的附件，加密上传并封出该批次的索引。
+ *
+ * 顺序要求：附件密文与索引都先上传，append 才可能通过；超过单 blob 上限的
+ * 附件不上传，只在索引的 `tooLarge` 里留记号，供另一端提示“文件过大”。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param sessionId - 会话 id。
+ * @param sessionKey - 会话密钥。
+ * @param bridge - 本地附件桥。
+ * @param refs - 本批次引用的附件。
+ * @param run - 本轮已处理附件的缓存。
+ * @param frameIndex - 批次下标。
+ * @param seqFrom - 批次首个事件 seq。
+ * @param seqTo - 批次末个事件 seq。
+ * @param logger - 可选日志。
+ * @returns 帧上的附件字段；本批没有可同步附件时返回 undefined。
+ */
+async function pushBatchAttachments(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  sessionId: string,
+  sessionKey: Buffer,
+  bridge: AttachmentBridge,
+  refs: readonly AttachmentRef[],
+  run: Map<string, AttachmentRunEntry>,
+  frameIndex: number,
+  seqFrom: number,
+  seqTo: number,
+  logger?: SyncLogger,
+): Promise<FrameAttachmentFields | undefined> {
+  if (refs.length === 0) return undefined
+  const uploads: BlobUploadEntry[] = []
+  const entries: Record<string, { readonly blobSha256: string; readonly bytes: number }> = {}
+  const tooLarge: Array<{ readonly attachmentId: string; readonly bytes: number; readonly tooLarge: true }> = []
+  for (const ref of refs) {
+    let state = run.get(ref.attachmentId)
+    if (state === undefined) {
+      const data = await bridge.read(ref)
+      if (data === undefined) {
+        state = { state: 'missing' }
+        logger?.warn(`附件 ${ref.attachmentId} 在本地缺失，跳过上传`)
+      } else if (data.length + ATTACHMENT_OVERHEAD_BYTES > MAX_BLOB_BYTES) {
+        state = { state: 'tooLarge', bytes: data.length }
+      } else {
+        const sealed = sealAttachment({ sessionKey, sessionId, attachmentId: ref.attachmentId, data })
+        state = { state: 'uploaded', blobSha256: sha256(sealed), bytes: sealed.length }
+        uploads.push({ kind: 'attachment', bytes: sealed })
+      }
+      run.set(ref.attachmentId, state)
+    }
+    if (state.state === 'uploaded') {
+      entries[ref.attachmentId] = { blobSha256: state.blobSha256, bytes: state.bytes }
+    } else if (state.state === 'tooLarge') {
+      tooLarge.push({ attachmentId: ref.attachmentId, bytes: state.bytes, tooLarge: true })
+    }
+  }
+  if (Object.keys(entries).length === 0 && tooLarge.length === 0) return undefined
+  if (uploads.length > 0) await uploadEntries(fetchImpl, base, token, uploads)
+  const index: AttachmentIndex = {
+    v: 1,
+    sessionId,
+    frameIndex,
+    seqFrom,
+    seqTo,
+    entries,
+    ...tooLarge.length === 0 ? {} : { tooLarge },
+  }
+  const sealedIndex = sealAttachmentIndex({ sessionKey, index })
+  await uploadEntries(fetchImpl, base, token, [{ kind: 'attachment-index', bytes: sealedIndex }])
+  const blobs = [...new Set(Object.values(entries).map((entry) => entry.blobSha256))]
+  return {
+    attachmentIndexSha256: sha256(sealedIndex),
+    ...blobs.length === 0 ? {} : { attachmentBlobs: blobs },
+  }
+}
+
+/**
+ * 指定会话的附件自检/修复结果。
+ */
+export interface AttachmentRepairFailure {
+  readonly attachmentId: string
+  /** 机器可读原因：`no-index` / `too-large` / `decrypt-failed` / `write-failed` 等。 */
+  readonly reason: string
+}
+
+/** 附件修复报告。 */
+export interface AttachmentRepairReport {
+  readonly sessionId: string
+  /** 本地事件里引用到的附件数。 */
+  readonly scanned: number
+  /** 本地缺失的附件数。 */
+  readonly missing: number
+  /** 本次补齐成功的附件数。 */
+  readonly downloaded: number
+  readonly failed: readonly AttachmentRepairFailure[]
+}
+
+/** 附件修复依赖。 */
+export interface AttachmentRepairDeps {
+  readonly config: EngineConfig
+  readonly fetch?: typeof fetch
+  readonly attachments?: AttachmentBridge
+  readonly persistence: {
+    open(id: string, access: 'read'): Promise<{
+      read(): Promise<{ readonly events: readonly SyncEvent[] }>
+      close(): Promise<void>
+    }>
+  }
+}
+
+/**
+ * 扫描一个本地会话的附件引用，把缺失的从服务端补齐。
+ *
+ * 与拉取共用同一套索引/解密/校验逻辑；修复只补附件，不 apply 事件，因此
+ * 可以随时重跑（幂等）。单个附件失败只记进报告，不中断其它附件。
+ * @param deps - 修复依赖。
+ * @param sessionId - 本地会话 id。
+ * @returns 修复报告。
+ * @throws 会话本地缺失或远端不存在时抛出。
+ */
+export async function repairSessionAttachments(
+  deps: AttachmentRepairDeps,
+  sessionId: string,
+): Promise<AttachmentRepairReport> {
+  const bridge = deps.attachments
+  if (bridge === undefined) throw new AttachmentSyncError('宿主没有附件服务，无法修复附件')
+  const handle = await deps.persistence.open(sessionId, 'read')
+  let events: readonly SyncEvent[]
+  try {
+    events = (await handle.read()).events
+  } finally {
+    await handle.close()
+  }
+  const refs = collectAttachmentRefs(events)
+  const missing: AttachmentRef[] = []
+  for (const ref of refs) {
+    if (!(await bridge.exists(ref))) missing.push(ref)
+  }
+  const empty = { sessionId, scanned: refs.length, missing: missing.length, downloaded: 0, failed: [] }
+  if (missing.length === 0) return empty
+
+  const base = normalizeBase(deps.config.serverUrl)
+  if (base === '') throw new Error('serverUrl 非法')
+  const master = await deriveMasterKeyCached(deps.config.passphrase, resolveSalt(deps.config, base))
+  const sessionKey = sessionKeyOf(master, sessionId)
+  const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
+  const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
+  if (remote === undefined) throw new Error(`远端没有会话 ${sessionId}`)
+
+  const entriesById = new Map<string, AttachmentEntry>()
+  const tooLargeIds = new Set<string>()
+  const indexFrames = remote.frames.filter((frame) => frame.attachmentIndexSha256 !== undefined)
+  for (const frame of indexFrames) {
+    const sealed = await downloadBlob(fetchImpl, base, deps.config.token, frame.attachmentIndexSha256!)
+    const index = openAttachmentIndex({
+      sessionKey,
+      bytes: sealed,
+      sessionId,
+      frameIndex: frame.index,
+      seqFrom: frame.seqFrom,
+      seqTo: frame.seqTo,
+    })
+    for (const [attachmentId, entry] of Object.entries(index.entries)) entriesById.set(attachmentId, entry)
+    for (const item of index.tooLarge ?? []) tooLargeIds.add(item.attachmentId)
+  }
+
+  const failed: AttachmentRepairFailure[] = []
+  let downloaded = 0
+  for (const ref of missing) {
+    const attachmentId = ref.attachmentId
+    if (tooLargeIds.has(attachmentId)) {
+      failed.push({ attachmentId, reason: 'too-large' })
+      continue
+    }
+    const entry = entriesById.get(attachmentId)
+    if (entry === undefined) {
+      failed.push({ attachmentId, reason: 'no-index' })
+      continue
+    }
+    try {
+      const sealed = await downloadBlob(fetchImpl, base, deps.config.token, entry.blobSha256)
+      const plain = openAttachment({ sessionKey, sessionId, attachmentId, bytes: sealed })
+      if (`sha256:${sha256(Buffer.from(plain))}` !== attachmentId) {
+        failed.push({ attachmentId, reason: 'digest-mismatch' })
+        continue
+      }
+      await bridge.write(ref, plain)
+      downloaded += 1
+    } catch (error: unknown) {
+      failed.push({ attachmentId, reason: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return { sessionId, scanned: refs.length, missing: missing.length, downloaded, failed }
+}
+
+/**
+ * 拉取前把本批事件引用的附件补齐到本地。
+ * @param deps - 拉取依赖（含附件桥）。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端地址。
+ * @param token - 设备 token。
+ * @param sessionId - 会话 id。
+ * @param sessionKey - 会话密钥。
+ * @param frames - 本次实际解开的批次。
+ * @param events - 本次要 apply 的事件。
+ */
+async function fetchFrameAttachments(
+  deps: PullDeps<unknown>,
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  sessionId: string,
+  sessionKey: Buffer,
+  frames: readonly SealedFrameRef[],
+  events: readonly SyncEvent[],
+): Promise<void> {
+  const bridge = deps.attachments
+  if (bridge === undefined) return
+  const withIndex = frames.filter((frame) => frame.attachmentIndexSha256 !== undefined)
+  if (withIndex.length === 0) return
+  const capabilities = await healthCapabilities(fetchImpl, base, token)
+  if (!capabilities.includes('attachment-index')) {
+    throw new AttachmentSyncError('服务端不支持附件索引（需要服务端 0.1.5+）')
+  }
+
+  const indexes: AttachmentIndex[] = []
+  for (let offset = 0; offset < withIndex.length; offset += MAX_BATCH_BLOBS) {
+    const group = withIndex.slice(offset, offset + MAX_BATCH_BLOBS)
+    const blobs = await downloadBlobs(fetchImpl, base, token, group.map((frame) => frame.attachmentIndexSha256!))
+    for (const frame of group) {
+      const sealed = blobs.get(frame.attachmentIndexSha256!)
+      if (sealed === undefined) throw new AttachmentSyncError(`批次 ${frame.index} 的附件索引缺失`)
+      indexes.push(openAttachmentIndex({
+        sessionKey,
+        bytes: sealed,
+        sessionId,
+        frameIndex: frame.index,
+        seqFrom: frame.seqFrom,
+        seqTo: frame.seqTo,
+      }))
+    }
+  }
+
+  const byId = new Map(collectAttachmentRefs(events).map((ref) => [ref.attachmentId, ref]))
+  const missing = new Map<string, AttachmentEntry & { readonly ref: AttachmentRef }>()
+  const blocked: string[] = []
+  for (const index of indexes) {
+    for (const item of index.tooLarge ?? []) {
+      blocked.push(`${item.attachmentId}（${item.bytes} 字节，超过单附件上限）`)
+    }
+    for (const [attachmentId, entry] of Object.entries(index.entries)) {
+      const ref = byId.get(attachmentId)
+      if (ref === undefined) continue
+      if (missing.has(attachmentId)) continue
+      if (await bridge.exists(ref)) continue
+      missing.set(attachmentId, { ...entry, ref })
+    }
+  }
+  if (blocked.length > 0) throw new AttachmentSyncError(`附件未同步完成：${blocked.length} 个附件过大`)
+  if (missing.size === 0) return
+
+  const ops = [...missing.values()]
+  const small = ops.filter((op) => op.bytes + BLOB_BATCH_ENTRY_HEADER_BYTES <= MAX_BATCH_BODY_BYTES)
+  const large = ops.filter((op) => op.bytes + BLOB_BATCH_ENTRY_HEADER_BYTES > MAX_BATCH_BODY_BYTES)
+  const ciphertexts = new Map<string, Buffer>()
+  for (let offset = 0; offset < small.length; offset += MAX_BATCH_BLOBS) {
+    const group = small.slice(offset, offset + MAX_BATCH_BLOBS)
+    const blobs = await downloadBlobs(fetchImpl, base, token, group.map((op) => op.blobSha256))
+    for (const [sha, data] of blobs) ciphertexts.set(sha, data)
+  }
+  for (const op of large) ciphertexts.set(op.blobSha256, await downloadBlob(fetchImpl, base, token, op.blobSha256))
+
+  for (const op of ops) {
+    const sealed = ciphertexts.get(op.blobSha256)
+    if (sealed === undefined) throw new AttachmentSyncError(`附件 ${op.ref.attachmentId} 的密文缺失`)
+    let plain: Uint8Array
+    try {
+      plain = openAttachment({ sessionKey, sessionId, attachmentId: op.ref.attachmentId, bytes: sealed })
+    } catch (error: unknown) {
+      throw new AttachmentSyncError(`附件 ${op.ref.attachmentId} 解密失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (`sha256:${sha256(Buffer.from(plain))}` !== op.ref.attachmentId) {
+      throw new AttachmentSyncError(`附件 ${op.ref.attachmentId} 内容哈希不符`)
+    }
+    try {
+      await bridge.write(op.ref, plain)
+    } catch (error: unknown) {
+      throw new AttachmentSyncError(`附件 ${op.ref.attachmentId} 写入本地失败：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 }
 
@@ -1343,6 +1772,14 @@ async function syncSession<Session>(
     await upload(headerEntry, 0)
   }
 
+  // 附件通道按服务端能力门控：旧服务端不认识 attachment-index，整条链路跳过，
+  // 事件同步保持原样。
+  const attachmentBridge = deps.attachments
+  const attachmentsEnabled = attachmentBridge !== undefined
+    && (await healthCapabilities(fetchImpl, base, deps.config.token)).includes('attachment-index')
+  const attachmentRun = new Map<string, AttachmentRunEntry>()
+  const frameAttachments = new Map<number, FrameAttachmentFields>()
+
   let lastYieldAt = Date.now()
   for (const batch of iterateEventBatches(events, startAfterSeq, batchOptions(deps.config))) {
     const sealStarted = performance.now()
@@ -1356,6 +1793,14 @@ async function syncSession<Session>(
       bytes: entry.ref.bytes,
       blocking: true,
     })
+    if (attachmentsEnabled && attachmentBridge !== undefined) {
+      const refs = collectAttachmentRefs(batch.events)
+      const fields = await pushBatchAttachments(
+        fetchImpl, base, deps.config.token, sessionId, sessionKey, attachmentBridge, refs,
+        attachmentRun, entry.ref.index, batch.seqFrom, batch.seqTo, deps.logger,
+      )
+      if (fields !== undefined) frameAttachments.set(entry.ref.index, fields)
+    }
     await upload(entry, batch.events.length)
     index += 1
     pushedBatches += 1
@@ -1390,7 +1835,10 @@ async function syncSession<Session>(
     baseChainHash,
     createdAt: meta.createdAt,
     formatVersion: meta.formatVersion,
-    frames,
+    frames: frames.map((ref) => {
+      const attachment = frameAttachments.get(ref.index)
+      return attachment === undefined ? ref : { ...ref, ...attachment }
+    }),
     ...workspaceKey === undefined ? {} : { workspaceKey },
     ...meta.parentSession === undefined ? {} : { parentSession: meta.parentSession },
     ...meta.origin === undefined ? {} : { origin: meta.origin },
@@ -2072,7 +2520,7 @@ async function downloadSafeEvents(
   safe: number,
   sessionKey: Buffer,
   onProgress?: (doneEvents: number, totalEvents: number) => void,
-): Promise<SyncEvent[]> {
+): Promise<{ readonly events: SyncEvent[]; readonly frames: SealedFrameRef[] }> {
   const events: SyncEvent[] = []
   const totalEvents = safe - localLast
   const selected = frames.slice(1).filter((frame) => frame.seqFrom <= safe && frame.seqTo > localLast)
@@ -2092,7 +2540,7 @@ async function downloadSafeEvents(
   events.forEach((event, offset) => {
     if (event.seq !== localLast + offset + 1) throw new Error(`拉取到的事件 seq 不连续：期望 ${localLast + offset + 1}，实际 ${event.seq}`)
   })
-  return events
+  return { events, frames: selected }
 }
 
 /**
@@ -2373,10 +2821,11 @@ async function pullSession<Session>(
       notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0 })
       const downloadStarted = performance.now()
       notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'download' })
-      const events = await downloadSafeEvents(
+      const downloaded = await downloadSafeEvents(
         fetchImpl, base, deps.config.token, sessionId, remote.frames, observed.last, safe, sessionKey,
         (doneEvents) => { notifyDownload(doneEvents) },
       )
+      const events = downloaded.events
       notifyPerf(deps, {
         direction: 'pull',
         sessionId,
@@ -2385,6 +2834,7 @@ async function pullSession<Session>(
       })
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
       notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'verifying', progress: 0.9 })
+      await fetchFrameAttachments(deps, fetchImpl, base, deps.config.token, sessionId, sessionKey, downloaded.frames, events)
       const applyStarted = performance.now()
       notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'apply' })
       await deps.beforeApply?.(sessionId, safe)
@@ -2441,16 +2891,18 @@ async function pullSession<Session>(
   notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'downloading', progress: 0 })
   const downloadStarted = performance.now()
   notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'download' })
-  const events = await downloadSafeEvents(
+  const downloaded = await downloadSafeEvents(
     fetchImpl, base, deps.config.token, sessionId, remote.frames, -1, safe, sessionKey,
     (doneEvents) => { notifyDownload(doneEvents) },
   )
+  const events = downloaded.events
   notifyPerf(deps, {
     direction: 'pull',
     sessionId,
     stage: 'download',
     ms: performance.now() - downloadStarted,
   })
+  await fetchFrameAttachments(deps, fetchImpl, base, deps.config.token, sessionId, sessionKey, downloaded.frames, events)
   const header: CreateHeaderLike = {
     version: meta.formatVersion,
     id: sessionId,
@@ -2584,7 +3036,7 @@ export async function correctCwd<Session>(
     await handle.flush()
 
     const sealed = sealEventBatch([correction], sessionId, current.frames.length, sessionKeyOf(master, sessionId), 'zstd')
-    await uploadBlob(fetchImpl, base, deps.config.token, sealed)
+    await uploadBlob(fetchImpl, base, deps.config.token, sealed.bytes)
     const baseFrame = current.frames[current.frames.length - 1]
     if (baseFrame === undefined) throw new Error('manifest 缺少最后一个批次')
     await appendFrames(fetchImpl, base, deps.config.token, sessionId, clientIdOf(deps.config), {

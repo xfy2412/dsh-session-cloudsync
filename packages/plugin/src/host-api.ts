@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { classifySyncError } from './engine.ts'
-import type { CwdCorrectionResult, PassphraseCheck, ServerProbeResult, SyncTestResult } from './engine.ts'
+import type { AttachmentRepairReport, CwdCorrectionResult, PassphraseCheck, ServerProbeResult, SyncTestResult } from './engine.ts'
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { PerfSnapshot } from './perf.ts'
@@ -39,6 +39,8 @@ export interface SyncControl {
   syncSession(sessionId: string, direction: 'push' | 'pull'): Promise<SyncRunResult>
   /** 单会话上传开关：等价于设置页白名单；未绑定工作区时返回候选。 */
   sessionScope(sessionId: string, enabled: boolean, choice?: 'create' | string): Promise<SessionScopeResult>
+  /** 检查并补齐指定会话缺失的附件；幂等，可重复调用。 */
+  repairAttachments(sessionId: string): Promise<AttachmentRepairReport>
   /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
   cwdDecision(sessionId: string, action: 'fix' | 'skip'): Promise<CwdCorrectionResult>
   /** 分叉会话的人工决定：ignore 不再自动提示；force 解除写入拦截；restore 恢复阻塞。 */
@@ -428,6 +430,27 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             ? 'create'
             : typeof body.choice === 'string' && body.choice.trim() !== '' ? body.choice.trim() : undefined
           return json({ ok: true, value: await control.sessionScope(sessionId, body.enabled, choice) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/attachments/repair',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as { readonly sessionId?: unknown }
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+          if (sessionId === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId' } }, 400)
+          }
+          return json({ ok: true, value: await control.repairAttachments(sessionId) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({

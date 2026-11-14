@@ -12,7 +12,7 @@ import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { randomBytes } from 'node:crypto'
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, statSync } from 'node:fs'
+import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, parse } from 'node:path'
 import { SyncController, type SyncRunResult, type TaskRunner } from './controller.ts'
 import { buildSessionTree, pathKeyOf } from './closure.ts'
@@ -24,8 +24,12 @@ import {
   pushSessionTask,
   readRemoteSessionMeta,
   probeServer,
+  repairSessionAttachments,
   verifyPassphrase as verifyRemotePassphrase,
   testConnection,
+  type AttachmentBridge,
+  type AttachmentRef,
+  type AttachmentRepairReport,
   type CreateHeaderLike,
   type CreateOptions,
   type EngineConfig,
@@ -55,6 +59,75 @@ export const name = 'dsh-session-cloudsync'
 
 /** 本插件读取的服务；缺任何一个都由加载器在装载期报错，而不是运行期。 */
 export const inject = ['sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry', 'credentials']
+
+/** 宿主附件服务里本插件用到的最小接口（`ctx.get('attachments')`）。 */
+interface AttachmentStoreLike {
+  readImage(ref: AttachmentRef & { readonly kind: 'image' }): Promise<{ readonly data: Uint8Array }>
+  saveImage(input: {
+    readonly data: Uint8Array
+    readonly mediaType: string
+    readonly name?: string
+  }): Promise<{ readonly attachmentId: string }>
+  readFileStream(ref: AttachmentRef & { readonly kind: 'file' }): AsyncIterable<Uint8Array>
+  saveFile(input: { readonly data: Uint8Array; readonly name?: string }): Promise<{ readonly attachmentId: string }>
+  imageHostPath(ref: AttachmentRef & { readonly kind: 'image' }): string
+  fileHostPath(ref: AttachmentRef & { readonly kind: 'file' }): string
+}
+
+/**
+ * 把宿主的附件服务包成引擎要的读写桥。
+ * @param store - `ctx.get('attachments')`；缺失时返回 undefined，附件同步整体跳过。
+ * @returns 附件桥，或 undefined。
+ */
+function attachmentBridgeOf(store: unknown): AttachmentBridge | undefined {
+  if (store === null || typeof store !== 'object') return undefined
+  const attachments = store as Partial<AttachmentStoreLike>
+  if (typeof attachments.readImage !== 'function' || typeof attachments.saveImage !== 'function'
+    || typeof attachments.readFileStream !== 'function' || typeof attachments.saveFile !== 'function'
+    || typeof attachments.imageHostPath !== 'function' || typeof attachments.fileHostPath !== 'function') {
+    return undefined
+  }
+  const typed = attachments as AttachmentStoreLike
+  return {
+    async read(ref) {
+      if (ref.kind === 'image') return (await typed.readImage(ref)).data
+      const chunks: Uint8Array[] = []
+      for await (const chunk of typed.readFileStream(ref)) chunks.push(chunk)
+      return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))
+    },
+    async exists(ref) {
+      try {
+        const path = ref.kind === 'image' ? typed.imageHostPath(ref) : typed.fileHostPath(ref)
+        return typeof path === 'string' && existsSync(path)
+      } catch {
+        return false
+      }
+    },
+    async write(ref, data) {
+      if (ref.kind === 'file') {
+        const saved = await typed.saveFile({ data, name: ref.name })
+        if (saved.attachmentId !== ref.attachmentId) throw new Error(`文件落盘 id 不符：${saved.attachmentId}`)
+        return
+      }
+      const saved = await typed.saveImage({
+        data,
+        mediaType: ref.mediaType,
+        ...ref.name === undefined ? {} : { name: ref.name },
+      })
+      if (saved.attachmentId === ref.attachmentId) return
+      // 图片归一化策略不同会换 id；回退为按 digest 直写对象，再读回校验。
+      const path = typed.imageHostPath(ref)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, data)
+      try {
+        chmodSync(path, 0o444)
+      } catch {
+        // Windows 可能不支持改 mode。
+      }
+      await typed.readImage(ref)
+    },
+  }
+}
 
 /** token / passphrase 在 DSH 凭据库里的引用名。 */
 const CREDENTIAL_REFS = {
@@ -382,6 +455,7 @@ export function apply(ctx: Context, config: Config): void {
       refreshingSecrets = undefined
     }
   }
+  const attachmentsBridge = attachmentBridgeOf(ctx.get('attachments'))
   const deps = {
     persistence: {
       list: () => ctx.sessionPersistence.list(),
@@ -394,6 +468,7 @@ export function apply(ctx: Context, config: Config): void {
     openWrite: (id: string) => ctx.sessionPersistence.open(id as SessionId, 'write'),
     config: engineConfig,
     logger,
+    ...attachmentsBridge === undefined ? {} : { attachments: attachmentsBridge },
     isTailOpen: (events: readonly { readonly seq: number }[]) =>
       interruptedTurnClosers(events as readonly SessionEvent[]).length > 0,
   }
@@ -840,6 +915,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     sessions: deps.sessions,
     config: engineConfig,
+    ...attachmentsBridge === undefined ? {} : { attachments: attachmentsBridge },
     takeHeldHandle: (id: string) => {
       const handle = pullHolds.get(id)
       if (handle === undefined) return undefined
@@ -1857,6 +1933,11 @@ export function apply(ctx: Context, config: Config): void {
     sessionStatus,
     syncSession,
     sessionScope,
+    repairAttachments: (sessionId: string): Promise<AttachmentRepairReport> => repairSessionAttachments({
+      config: engineConfig,
+      ...attachmentsBridge === undefined ? {} : { attachments: attachmentsBridge },
+      persistence: { open: (id: string, access: 'read') => ctx.sessionPersistence.open(id as SessionId, access) },
+    }, sessionId),
     perf: () => perf.snapshot(),
     config: async (): Promise<SyncConfigSnapshot> => {
       const setupInfo = await setup()

@@ -4090,6 +4090,32 @@ window.__ModuleLoader__.load({
         })))
       }
 
+      /**
+       * 检查并补齐本会话缺失的附件；结果用底栏弹层展示。
+       */
+      function repairAttachments() {
+        if (busy) return
+        setBusy(true)
+        fetchJson('/attachments/repair', {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: sessionId }),
+        }).then(function (result) {
+          setBusy(false)
+          if (!result || typeof result.scanned !== 'number') {
+            setDialog({ status: 'error', message: '附件检查没有返回结果' })
+            return
+          }
+          var failed = Array.isArray(result.failed) ? result.failed.length : 0
+          var message = '附件扫描 ' + result.scanned + ' 个，缺失 ' + result.missing
+            + ' 个，补齐 ' + result.downloaded + ' 个'
+          if (failed > 0) message += '；' + failed + ' 个失败'
+          setDialog({ status: failed > 0 ? 'error' : 'info', message: message })
+        }, function (error) {
+          setBusy(false)
+          setDialog({ status: 'error', message: error && error.message ? String(error.message) : '附件检查失败' })
+        })
+      }
+
       // 官方 SSE（/status）是实时的：本轮任务的 doneEvents 直接覆盖轮询结果。
       // 起点在任务首次出现时记一次，避免把上一次轮询的滞后值当成真实起点。
       var runView = state.status && state.status.run ? state.status.run : null
@@ -4277,6 +4303,13 @@ window.__ModuleLoader__.load({
           style: Object.assign({}, SYNC_BAR_STYLE.button, pushStyle),
         }, pushLabel),
         scopeSwitch(view.upload === true),
+        h('button', {
+          type: 'button',
+          disabled: busy,
+          onClick: repairAttachments,
+          title: '检查本会话缺失的附件并从服务器补齐',
+          style: Object.assign({}, SYNC_BAR_STYLE.button, { border: '1px solid rgba(127,127,127,.3)', background: 'transparent', color: 'inherit' }),
+        }, '检查附件'),
         h('button', {
           type: 'button',
           onClick: function () { setShowDetail(!showDetail) },

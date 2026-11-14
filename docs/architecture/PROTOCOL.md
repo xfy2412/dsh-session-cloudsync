@@ -243,6 +243,18 @@ Idempotency-Key: <clientId:sessionId:groupIndex>
 - 存档保留附件；移除/重置会一并清理，仍被其它会话或 Vault 引用的 blob 保留；
 - 功能以 `/health` 的 `attachment-index` capability 为准；0.1.4 及更早的服务端会拒绝 `kind=attachment-index`。
 
+附件密文与索引都由客户端加密（服务端不解密）：
+
+```text
+附件容器：magic "DSCA"(4) | version(1) | flags(1) | reserved(2) | 密文 | GCM tag(16)
+```
+
+- 每条附件用 `HKDF(attachmentKey, "v1|attachment:<attachmentId>")` 派生密钥，nonce 固定，
+  因此同一附件重推得到同一密文与同一 blob 地址（前提：`attachmentId` 是明文内容哈希）；
+- AAD 绑定 `sessionId + attachmentId + 明文字节数`；
+- 索引容器同格式，AAD 绑定 `sessionId + frameIndex + seqFrom + seqTo`，防止索引错位；
+- 拉取时先补齐附件再 apply；任一附件缺失/解密失败/哈希不符都把会话标成阻塞。
+
 ## 压缩
 
 封帧有两种版本：
@@ -396,6 +408,7 @@ HTTP 映射：
 | `POST /api/session-cloudsync/sync` | 无 body 或 `{}` 时跑整轮；`{sessionId, direction:"push"\|"pull"}` 时只跑一个会话（推送需全局写租约，未持有时返回 `code:"lease-held"`；不在同步范围返回 `not-in-scope`；上一轮未结束返回 `already-running`、退避中返回 `backoff`） |
 | `POST /api/session-cloudsync/session-scope` | `{sessionId, enabled, choice?}` 改上传白名单（等价于设置页 `syncSessionIds`）；工作区未绑定时返回 `{status:"needs-binding", key, path, candidates, willCreateNew}`，带 `choice:"create"` 或远端 `workspaceKey` 再调一次才写入；另可能返回 `done`/`unmapped`/`error` |
 | `GET /api/session-cloudsync/events` | 状态 SSE；首帧全量快照，之后按状态版本合并 |
+| `POST /api/session-cloudsync/attachments/repair` | `{sessionId}`：扫描本地事件引用的附件，把缺失的从服务端索引补齐；返回 `{scanned, missing, downloaded, failed:[{attachmentId, reason}]}`，幂等 |
 | `POST /api/session-cloudsync/cwd` | `{sessionId, action:"fix"\|"skip"}`：`fix` 在持全局租约时追加修正并推送（否则 `status:"lease-held"`），`skip` 直接按远端 cwd 挂载并清 pending |
 | `POST /api/session-cloudsync/blocked` | `{sessionId, action:"ignore"\|"force"\|"restore", createdAt, formatVersion}`：分叉会话的人工决定，缺生命周期字段返回 `400` |
 | `POST /api/session-cloudsync/replace` | 生成"远端覆盖本地"的停机脚本（只生成不执行） |
