@@ -820,7 +820,7 @@ export function createHttpServer(options: ServerOptions): Server {
             apiVersions: [2],
             protocols: [PROTOCOL_VERSION],
             schemaVersion: SERVER_SCHEMA_VERSION,
-            capabilities: ['session-summary', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame', 'me-device-info', 'me-counts', 'device-rename'],
+            capabilities: ['session-summary', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame', 'me-device-info', 'me-counts', 'device-rename', 'attachment-index'],
             limits: {
               batchBytes: MAX_BATCH_BODY_BYTES,
               batchBlobs: MAX_BATCH_BLOBS,
@@ -1033,7 +1033,8 @@ export function createHttpServer(options: ServerOptions): Server {
           if (!(await hasBlob(options.dataDir, sha256))) return json(res, 404, errorBody('not-found', `没有这个 blob：${sha256}`))
           const record = blobRecord(db, sha256)
           if (record === undefined) return json(res, 404, errorBody('not-found', `没有这个 blob：${sha256}`))
-          if (record.kind !== 'frame' && record.kind !== 'attachment' && record.kind !== 'vault') {
+          if (record.kind !== 'frame' && record.kind !== 'attachment'
+            && record.kind !== 'attachment-index' && record.kind !== 'vault') {
             throw new SyncError('bad-request', `blob 类别非法：${record.kind}`)
           }
           kinds.push(record.kind)
@@ -1063,8 +1064,8 @@ export function createHttpServer(options: ServerOptions): Server {
         if (auth === undefined) return json(res, 401, errorBody('unauthorized', '需要设备或 setup token'))
         const url = new URL(req.url ?? '/', 'http://localhost')
         const kind = url.searchParams.get('kind') ?? 'frame'
-        if (kind !== 'frame' && kind !== 'attachment' && kind !== 'vault') {
-          return json(res, 400, errorBody('bad-request', 'kind 只能是 frame、attachment 或 vault'))
+        if (kind !== 'frame' && kind !== 'attachment' && kind !== 'attachment-index' && kind !== 'vault') {
+          return json(res, 400, errorBody('bad-request', 'kind 只能是 frame、attachment、attachment-index 或 vault'))
         }
         const bytes = await readRaw(req, maxBlobBytes)
         if (bytes.length === 0) return json(res, 400, errorBody('bad-request', 'blob 不能为空'))

@@ -33,8 +33,8 @@ export const MAX_BATCH_BODY_BYTES = 8 * 1024 * 1024
 /** 单个 blob 的绝对上限；批量请求本身仍受 {@link MAX_BATCH_BODY_BYTES} 限制。 */
 export const MAX_BLOB_BYTES = 32 * 1024 * 1024
 
-/** blob 类别。 */
-export type BlobKind = 'frame' | 'attachment' | 'vault'
+/** blob 类别；`attachment-index` 是按批次加密的附件索引。 */
+export type BlobKind = 'frame' | 'attachment' | 'attachment-index' | 'vault'
 
 const MAGIC = Buffer.from('DSHB', 'ascii')
 const VERSION = 1
@@ -43,12 +43,14 @@ const KIND_TO_CODE: Record<BlobKind, number> = {
   frame: 1,
   attachment: 2,
   vault: 3,
+  'attachment-index': 4,
 }
 
 const CODE_TO_KIND: Record<number, BlobKind> = {
   1: 'frame',
   2: 'attachment',
   3: 'vault',
+  4: 'attachment-index',
 }
 
 /** 一个批量条目。 */

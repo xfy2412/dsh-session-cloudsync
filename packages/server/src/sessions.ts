@@ -14,7 +14,7 @@ import type { SessionManifest } from '../../shared/src/protocol.ts'
 import type { SealedFrameRef } from '../../shared/src/sealed-frame.ts'
 import { SyncError } from '../../shared/src/wire.ts'
 import { blobPath } from './blobs.ts'
-import { DEFAULT_DATASET, bumpRevision, readAppendRequest, withTransaction, writeAppendRequest, type ServerDb } from './db.ts'
+import { DEFAULT_DATASET, blobRecord, bumpRevision, readAppendRequest, withTransaction, writeAppendRequest, type ServerDb } from './db.ts'
 import { requireLease as requireResourceLease, SYNC_RESOURCE } from './leases.ts'
 import { recordSessionEvent } from './session-history.ts'
 
@@ -81,6 +81,9 @@ export interface SessionSummary {
 const HASH = /^[0-9a-f]{64}$/u
 const KEY_ID = /^[0-9a-f]{16}$/u
 
+/** 单个批次最多引用的附件密文数；客户端按消息分批，留足合并多个事件的余量。 */
+export const MAX_FRAME_ATTACHMENT_BLOBS = 256
+
 /**
  * 校验一个封帧条目。
  * @param frame - 待检查的条目。
@@ -106,6 +109,43 @@ function assertRef(frame: SealedFrameRef, expectedIndex: number): void {
     }
   }
   if (!Number.isSafeInteger(frame.seqFrom) || !Number.isSafeInteger(frame.seqTo)) throw new SyncError('bad-request', `帧 ${expectedIndex} 的 seq 非法`)
+  if (frame.attachmentIndexSha256 !== undefined && !HASH.test(frame.attachmentIndexSha256)) {
+    throw new SyncError('bad-request', `帧 ${expectedIndex} 的附件索引哈希非法`)
+  }
+  const attachments = frame.attachmentBlobs
+  if (attachments !== undefined) {
+    if (!Array.isArray(attachments) || attachments.length < 1 || attachments.length > MAX_FRAME_ATTACHMENT_BLOBS) {
+      throw new SyncError('bad-request', `帧 ${expectedIndex} 的附件列表必须是 1–${MAX_FRAME_ATTACHMENT_BLOBS} 个哈希`)
+    }
+    const seen = new Set<string>()
+    for (const sha of attachments) {
+      if (typeof sha !== 'string' || !HASH.test(sha)) throw new SyncError('bad-request', `帧 ${expectedIndex} 的附件哈希非法`)
+      if (seen.has(sha)) throw new SyncError('bad-request', `帧 ${expectedIndex} 的附件列表重复：${sha}`)
+      seen.add(sha)
+    }
+  }
+}
+
+/**
+ * 校验一个被引用的 blob 已上传且类别匹配。
+ * @param db - 已打开的数据库。
+ * @param dataDir - 数据目录。
+ * @param sha256 - 内容地址。
+ * @param kind - 期望的 blob 类别。
+ * @param label - 报错时指向的引用。
+ * @throws blob 不存在、未登记或类别不符时抛出 `bad-request`。
+ */
+function requireStoredBlob(
+  db: ServerDb,
+  dataDir: string,
+  sha256: string,
+  kind: 'attachment' | 'attachment-index',
+  label: string,
+): void {
+  if (!existsSync(blobPath(dataDir, sha256))) throw new SyncError('bad-request', `${label} ${sha256} 尚未上传`)
+  const record = blobRecord(db, sha256)
+  if (record === undefined) throw new SyncError('bad-request', `${label} ${sha256} 没有登记`)
+  if (record.kind !== kind) throw new SyncError('bad-request', `${label} ${sha256} 的类别是 ${record.kind}，应为 ${kind}`)
 }
 
 /**
@@ -336,6 +376,16 @@ export function appendFrames(db: ServerDb, dataDir: string, input: AppendInput, 
       if (!existsSync(blobPath(dataDir, frame.blobSha256))) throw new SyncError('bad-request', `帧 ${frame.index} 的 blob 尚未上传`)
     }
     input.frames.forEach((frame, offset) => assertRef(frame, (row === undefined || replacingLifecycle ? 0 : input.baseIndex + 1) + offset))
+
+    // 附件与索引同样是“先上传、再引用”：缺 blob 或类别不符都不能落库。
+    for (const frame of input.frames) {
+      if (frame.attachmentIndexSha256 !== undefined) {
+        requireStoredBlob(db, dataDir, frame.attachmentIndexSha256, 'attachment-index', `帧 ${frame.index} 的附件索引`)
+      }
+      for (const sha of frame.attachmentBlobs ?? []) {
+        requireStoredBlob(db, dataDir, sha, 'attachment', `帧 ${frame.index} 的附件`)
+      }
+    }
 
     const { manifest, digest, headChainHash } = manifestOf(
       input.sessionId,

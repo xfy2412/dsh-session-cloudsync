@@ -14,14 +14,21 @@ test('批量 blob 编解码保持顺序、类别、哈希与字节', () => {
     { kind: 'frame' as const, data: Buffer.from('sealed-frame') },
     { kind: 'vault' as const, data: Buffer.from('vault-record') },
     { kind: 'attachment' as const, data: Buffer.from('attachment') },
+    { kind: 'attachment-index' as const, data: Buffer.from('attachment-index') },
   ]
   const encoded = encodeBlobBatch(entries)
   const decoded = decodeBlobBatch(encoded)
-  assert.equal(decoded.length, 3)
-  assert.deepEqual(decoded.map((entry) => entry.kind), ['frame', 'vault', 'attachment'])
+  assert.equal(decoded.length, 4)
+  assert.deepEqual(decoded.map((entry) => entry.kind), ['frame', 'vault', 'attachment', 'attachment-index'])
   assert.deepEqual(decoded.map((entry) => entry.data), entries.map((entry) => entry.data))
   assert.deepEqual(decoded.map((entry) => entry.sha256), entries.map((entry) => sha256(entry.data)))
-  assert.equal(encoded.readUInt32BE(8), 3)
+  assert.equal(encoded.readUInt32BE(8), 4)
+})
+
+test('附件索引类别使用独立的 wire code', () => {
+  const encoded = encodeBlobBatch([{ kind: 'attachment-index' as const, data: Buffer.from('index') }])
+  assert.equal(encoded.readUInt8(BLOB_BATCH_HEADER_BYTES), 4)
+  assert.equal(decodeBlobBatch(encoded)[0]?.kind, 'attachment-index')
 })
 
 test('同样内容编码得到同样字节', () => {

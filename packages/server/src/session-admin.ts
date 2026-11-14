@@ -60,7 +60,31 @@ function requireTarget(db: ServerDb, sessionId: string, createdAt: number): Targ
 }
 
 /**
- * 删除一个会话独占的帧 blob；被其它会话或 Vault 引用的 blob 保留。
+ * 收集一份 manifest 引用的全部 blob：封帧、附件索引与附件密文。
+ * @param manifest - 已解析的 manifest 形状。
+ * @returns blob 地址列表（可能重复）。
+ */
+function manifestBlobRefs(manifest: { frames?: unknown }): string[] {
+  const frames = Array.isArray(manifest.frames) ? manifest.frames : []
+  const hashes: string[] = []
+  for (const frame of frames) {
+    if (frame === null || typeof frame !== 'object') continue
+    const record = frame as { blobSha256?: unknown; attachmentIndexSha256?: unknown; attachmentBlobs?: unknown }
+    if (typeof record.blobSha256 === 'string' && record.blobSha256 !== '') hashes.push(record.blobSha256)
+    if (typeof record.attachmentIndexSha256 === 'string' && record.attachmentIndexSha256 !== '') {
+      hashes.push(record.attachmentIndexSha256)
+    }
+    if (Array.isArray(record.attachmentBlobs)) {
+      for (const sha of record.attachmentBlobs) {
+        if (typeof sha === 'string' && sha !== '') hashes.push(sha)
+      }
+    }
+  }
+  return hashes
+}
+
+/**
+ * 删除一个会话独占的 blob（封帧、附件索引、附件密文）；被其它会话或 Vault 引用的保留。
  * @param db - 已打开的数据库。
  * @param dataDir - 数据目录。
  * @param sessionId - 目标会话。
@@ -70,10 +94,7 @@ function requireTarget(db: ServerDb, sessionId: string, createdAt: number): Targ
 function purgeSessionBlobs(db: ServerDb, dataDir: string, sessionId: string, manifestJson: string): PurgeResult {
   let hashes: string[]
   try {
-    const manifest = JSON.parse(manifestJson) as { frames?: Array<{ blobSha256?: unknown }> }
-    hashes = (Array.isArray(manifest.frames) ? manifest.frames : [])
-      .map((frame) => frame !== null && typeof frame === 'object' ? frame.blobSha256 : undefined)
-      .filter((hash): hash is string => typeof hash === 'string' && hash !== '')
+    hashes = manifestBlobRefs(JSON.parse(manifestJson) as { frames?: unknown })
   } catch {
     throw new SyncError('conflict', '会话 manifest 损坏，拒绝清理')
   }
@@ -86,10 +107,7 @@ function purgeSessionBlobs(db: ServerDb, dataDir: string, sessionId: string, man
     .all(DEFAULT_DATASET, sessionId) as unknown as Array<{ manifest_json: string }>
   for (const row of otherRows) {
     try {
-      const manifest = JSON.parse(row.manifest_json) as { frames?: Array<{ blobSha256?: unknown }> }
-      for (const frame of Array.isArray(manifest.frames) ? manifest.frames : []) {
-        if (frame !== null && typeof frame === 'object' && typeof frame.blobSha256 === 'string') otherHashes.add(frame.blobSha256)
-      }
+      for (const hash of manifestBlobRefs(JSON.parse(row.manifest_json) as { frames?: unknown })) otherHashes.add(hash)
     } catch {
       // 损坏的其它 manifest 只能保守处理：不据此删除任何 blob。
       for (const hash of unique) otherHashes.add(hash)

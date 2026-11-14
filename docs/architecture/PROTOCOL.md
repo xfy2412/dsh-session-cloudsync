@@ -35,10 +35,10 @@ GET /health
 {
   "ok": true,
   "server": {
-    "version": "0.1.2",
+    "version": "0.1.5",
     "apiVersions": [2],
     "protocols": [3],
-    "schemaVersion": 4,
+    "schemaVersion": 6,
     "capabilities": [
       "session-summary",
       "conditional-get",
@@ -47,7 +47,11 @@ GET /health
       "batches",
       "batch-upload",
       "batch-download",
-      "zstd-frame"
+      "zstd-frame",
+      "me-device-info",
+      "me-counts",
+      "device-rename",
+      "attachment-index"
     ],
     "limits": {
       "batchBytes": 8388608,
@@ -75,7 +79,7 @@ GET /health
 | DELETE | `/v2/devices/:id` | setup token 吊销设备 |
 | GET | `/v2/me` | 当前 token 的角色；设备 token 另带服务端版本/配额/远端统计 |
 | PATCH | `/v2/me` | 设备 token 给自己改名（`{label}`，1–64 字符） |
-| POST | `/v2/blobs?kind=frame\|attachment\|vault` | 上传单个密文 blob |
+| POST | `/v2/blobs?kind=frame\|attachment\|attachment-index\|vault` | 上传单个密文 blob |
 | HEAD | `/v2/blobs/:sha256` | 判断 blob 是否存在 |
 | GET | `/v2/blobs/:sha256` | 下载单个密文 blob |
 | POST | `/v2/blobs/batch` | 批量上传密文 blob |
@@ -196,6 +200,7 @@ GET /v2/sessions/:id/batches?from=<index>&limit=<n>&expectedManifestDigest=<dige
 - 尾批替换：`baseIndex = 当前批次链倒数第二个下标`（`batches.length-2`），新批次从该下标 +1 开始。
 - 服务端校验链的前缀延续，不解析明文；请求体上限 8 MiB（`MAX_APPEND_BODY_BYTES`，`packages/server/src/sessions.ts:21`）。
 - `workspaceKey`/`parentSession`/`origin`/`delegationDepth` 可选；一旦写过就不能在后续 append 里改（`sessions.ts:272-292`）。
+- 批次条目可选带附件引用（见下节「附件索引」）；服务端要求对应 blob **先上传**，否则整次 append `400 bad-request`，不落库。
 - append 必须带（形状 `[A-Za-z0-9._:-]{1,255}`；插件实际填 `${clientId}:${sessionId}:${baseIndex + 1}`，
   即新批次的起始下标，见 `packages/plugin/src/engine.ts:785`）：
 
@@ -208,6 +213,35 @@ Idempotency-Key: <clientId:sessionId:groupIndex>
 - 幂等记录按 `deviceId + sessionId + key` 隔离；
 - append / delete 返回的摘要也带 `compression` 与 `storedBytes`，插件可立即更新 UI。
 - `POST /v2/sessions/:id/delete` 同样要求持有 `sync` 租约（`sessions.ts:374-379`）。
+
+## 附件索引
+
+附件（图片/文件）的正文和索引都按密文上传；服务端不解析，只按 blob 地址登记。批次条目多两个可选字段：
+
+```json
+{
+  "index": 1509,
+  "chainHash": "…",
+  "blobSha256": "…",
+  "bytes": 12345,
+  "sealedVersion": 2,
+  "keyId": "…",
+  "seqFrom": 69580,
+  "seqTo": 69586,
+  "compression": "zstd",
+  "compressedHash": "…",
+  "attachmentIndexSha256": "该批次附件索引密文的 sha256",
+  "attachmentBlobs": ["该批次引用的附件密文 sha256", "…"]
+}
+```
+
+- `attachmentIndexSha256`：索引密文 blob，`kind=attachment-index`；服务端既不解析、也不校验内容；
+- `attachmentBlobs`：该批次引用的附件密文 blob，`kind=attachment`；1–256 条，元素必须是 64 位小写十六进制且不重复；
+- 只记录**密文**地址，不记录明文 `attachmentId`；服务端用它在会话移除/重置时释放空间；
+- 两个字段都可选；旧客户端不带时行为完全不变；
+- 引用顺序：先上传附件与索引 blob，再 append；缺 blob、类别不符（例如把附件传成 `frame`）或没有登记行都返回 `400 bad-request`；
+- 存档保留附件；移除/重置会一并清理，仍被其它会话或 Vault 引用的 blob 保留；
+- 功能以 `/health` 的 `attachment-index` capability 为准；0.1.4 及更早的服务端会拒绝 `kind=attachment-index`。
 
 ## 压缩
 
@@ -251,7 +285,7 @@ Content-Type: application/x-dsh-blob-batch
 count × [ kind(1) | reserved(3) | bytes(u32 BE) | sha256(32) | data ]
 ```
 
-- `kind`：1=frame，2=attachment，3=vault；
+- `kind`：1=frame，2=attachment，3=vault，4=attachment-index；
 - 上限：整个请求 **8 MiB**、最多 **64 条**；单条 blob 的编解码上限是 **32 MiB**（`shared/src/blob-batch.ts:28-34`）；
 - 上传条目的 `sha256` 是客户端声明的期望值，服务端必须重算并校验；
 - 响应按请求顺序放在 `value.blobs` 里，每条 `{sha256, bytes, dedup}`；
@@ -273,13 +307,13 @@ Content-Type: application/json
 ### 单条 blob
 
 ```http
-POST /v2/blobs?kind=frame|attachment|vault
+POST /v2/blobs?kind=frame|attachment|attachment-index|vault
 HEAD /v2/blobs/:sha256
 GET  /v2/blobs/:sha256
 ```
 
 - 上传：新写入返回 `201`、内容已存在返回 `200`（`dedup: true`），`value` 为 `{sha256, bytes, dedup}`；
-- `kind` 缺省 `frame`，其他值返回 `400`；空 body 返回 `400`；
+- `kind` 缺省 `frame`；取值非法时返回 `400`；空 body 返回 `400`；
 - `HEAD` 只回状态码（存在 `200` / 不存在 `404` / 鉴权失败 `401`，无 body）；
 - `GET` 返回 `application/octet-stream` 密文（`packages/server/src/http.ts:1044-1075`）。
 

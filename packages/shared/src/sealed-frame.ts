@@ -66,6 +66,18 @@ export interface SealedFrameRef {
   readonly compression?: 'zstd'
   /** v2 压缩后明文的 SHA-256；用于派生帧密钥并校验压缩结果。 */
   readonly compressedHash?: string
+  /**
+   * 该批次附件索引密文的 SHA-256（小写十六进制）；没有附件时省略。
+   *
+   * 服务端只把它当作不透明 blob 地址，不解析索引内容。
+   */
+  readonly attachmentIndexSha256?: string
+  /**
+   * 该批次引用的附件密文 SHA-256 列表（小写十六进制，已去重）；没有附件时省略。
+   *
+   * 只记录密文摘要，不记录明文 `attachmentId`；服务端用它在会话删除时释放空间。
+   */
+  readonly attachmentBlobs?: readonly string[]
 }
 
 /** 一次封帧的产物。 */
