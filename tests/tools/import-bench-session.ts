@@ -5,10 +5,11 @@
  *
  * @module dsh-session-cloudsync/tests/import-bench-session
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { generateSession } from './make-bench-session.ts'
+import type { BenchImageRef } from './make-bench-session.ts'
 import type { SessionShapeTrace } from './session-trace.ts'
 
 /** 导入输入。 */
@@ -21,6 +22,14 @@ export interface ImportBenchOptions {
   readonly cwd: string
   /** 会话 id；默认 `session-bench-shape`。 */
   readonly id?: string
+  /** 注入到会话里的图片；只支持 PNG。 */
+  readonly attachments?: readonly BenchAttachment[]
+}
+
+/** 一张待注入的图片。 */
+export interface BenchAttachment {
+  readonly name: string
+  readonly data: Uint8Array
 }
 
 /** 导入结果（不含正文）。 */
@@ -29,6 +38,22 @@ export interface ImportBenchResult {
   readonly workspaceId: string
   readonly path: string
   readonly bytes: number
+  /** 注入并写入附件的图片数量。 */
+  readonly attachments: number
+}
+
+/**
+ * 读 PNG 的宽高，顺便校验文件头。
+ * @param data - PNG 字节。
+ * @returns 像素宽高。
+ * @throws 不是合法 PNG 时抛出。
+ */
+function pngDimensions(data: Uint8Array): { readonly width: number; readonly height: number } {
+  const bytes = Buffer.from(data)
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(signature)) throw new Error('附件不是合法 PNG')
+  if (bytes.subarray(12, 16).toString('ascii') !== 'IHDR') throw new Error('PNG 缺少 IHDR')
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }
 }
 
 /** 与 DSH JSONL 后端一致的会话目录分段编码。 */
@@ -141,12 +166,28 @@ export function importBenchSession(options: ImportBenchOptions): ImportBenchResu
   if (!existsSync(options.home)) throw new Error(`DSH_HOME 不存在：${options.home}`)
   const sessionId = options.id ?? 'session-bench-shape'
   mkdirSync(options.cwd, { recursive: true })
-  const generated = generateSession(options.trace, { cwd: options.cwd, id: sessionId })
+  const objectRoot = join(options.home, 'attachments', 'v1', 'objects')
+  const images: BenchImageRef[] = (options.attachments ?? []).map((attachment) => {
+    const data = Buffer.from(attachment.data)
+    const digest = createHash('sha256').update(data).digest('hex')
+    const dimensions = pngDimensions(data)
+    mkdirSync(join(objectRoot, digest.slice(0, 2)), { recursive: true })
+    writeFileSync(join(objectRoot, digest.slice(0, 2), digest), data)
+    return {
+      attachmentId: `sha256:${digest}`,
+      mediaType: 'image/png',
+      bytes: data.length,
+      width: dimensions.width,
+      height: dimensions.height,
+      name: attachment.name,
+    }
+  })
+  const generated = generateSession(options.trace, { cwd: options.cwd, id: sessionId, images })
   const directory = join(options.home, 'sessions', projectKey(options.cwd), encodeSegment(sessionId))
   mkdirSync(directory, { recursive: true })
   const path = join(directory, 'session.v4.jsonl.zstd')
   const bytes = Buffer.concat(generated.frames)
   writeFileSync(path, bytes)
   const workspaceId = attachToWorkspace(options.home, options.cwd, sessionId)
-  return { sessionId, workspaceId, path, bytes: bytes.length }
+  return { sessionId, workspaceId, path, bytes: bytes.length, attachments: images.length }
 }

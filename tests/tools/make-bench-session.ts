@@ -333,6 +333,39 @@ export interface GenerateOptions {
   readonly id?: string
   /** 会话 createdAt；默认固定基准时间。 */
   readonly createdAt?: number
+  /** 注入到用户消息里的图片引用；字节由调用方写进 DSH 附件存储。 */
+  readonly images?: readonly BenchImageRef[]
+}
+
+/** 注入大会话的图片引用；形状与 DSH 的 `ImageAttachmentRef` 一致。 */
+export interface BenchImageRef {
+  readonly attachmentId: string
+  readonly mediaType: string
+  readonly bytes: number
+  readonly width: number
+  readonly height: number
+  readonly name?: string
+}
+
+/**
+ * 把图片引用注入到**最后一条** user/message 事件的 content 里。
+ * @param events - 已生成的事件。
+ * @param images - 待注入的图片引用。
+ * @throws 轨迹里没有可注入的 user/message 时抛出。
+ */
+function injectImages(events: readonly Record<string, unknown>[], images: readonly BenchImageRef[]): void {
+  if (images.length === 0) return
+  let target: Record<string, unknown> | undefined
+  for (const event of events) {
+    if (event['type'] !== 'user/message') continue
+    const data = event['data']
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) continue
+    if (!Array.isArray((data as Record<string, unknown>)['content'])) continue
+    target = data as Record<string, unknown>
+  }
+  if (target === undefined) throw new Error('轨迹里没有可注入图片的 user/message 事件')
+  const content = target['content'] as unknown[]
+  for (const image of images) content.push({ type: 'image', attachment: image })
 }
 
 /**
@@ -347,7 +380,6 @@ export function generateSession(trace: SessionShapeTrace, options: GenerateOptio
   const ids: IdState = { firstUserSeq: -1, lastCommandId: '' }
   const sessionId = options.id ?? 'session-bench-shape'
   const events: Record<string, unknown>[] = []
-  const lines: string[] = []
   let canonicalBytes = 0
   let mismatchedBytes = 0
   for (const [seq, [typeIndex, bytes, flags, nodes, turn, step]] of trace.events.entries()) {
@@ -359,8 +391,9 @@ export function generateSession(trace: SessionShapeTrace, options: GenerateOptio
     canonicalBytes += actual
     if (mismatched || actual !== bytes) mismatchedBytes += Math.abs(actual - bytes)
     events.push(event)
-    lines.push(text)
   }
+  injectImages(events, options.images ?? [])
+  const lines = events.map((event) => stableStringify(event))
   const header = {
     type: 'session',
     version: trace.source.formatVersion,

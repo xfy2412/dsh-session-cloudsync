@@ -638,6 +638,16 @@ async function restorePreconfigured(restart = true) {
   return { sync: state().sync, restarted }
 }
 
+/** 导入大会话时注入的图片：渲染好的 logo PNG（`DEV_CONSOLE_BENCH_IMAGES` 控制张数，默认 2）。 */
+function benchAttachments() {
+  const count = Number(process.env.DEV_CONSOLE_BENCH_IMAGES ?? '2')
+  if (!Number.isSafeInteger(count) || count < 0) throw new Error('DEV_CONSOLE_BENCH_IMAGES 必须是非负整数')
+  return ['logo.png', 'logo-dark.png'].slice(0, Math.min(count, 2)).map((name) => ({
+    name,
+    data: readFileSync(join(repoRoot, 'tests', 'fixtures', 'attachments', name)),
+  }))
+}
+
 /** 把形状轨迹生成的大会话导入选中的临时实例。 */
 async function importLargeSession(request) {
   if (!existsSync(benchTracePath)) {
@@ -663,14 +673,22 @@ async function importLargeSession(request) {
         home: side.home,
         cwd,
         id: 'session-bench-shape',
+        attachments: benchAttachments(),
       })
       appendLog(
         side,
         'info',
-        `已导入大会话 ${result.sessionId}（${(result.bytes / 1_048_576).toFixed(1)} MB）到 ${cwd}`,
+        `已导入大会话 ${result.sessionId}（${(result.bytes / 1_048_576).toFixed(1)} MB`
+          + `${result.attachments > 0 ? `，${result.attachments} 张图片` : ''}）到 ${cwd}`,
         'bench',
       )
-      imported.push({ side: id, sessionId: result.sessionId, bytes: result.bytes, restarted: wasRunning })
+      imported.push({
+        side: id,
+        sessionId: result.sessionId,
+        bytes: result.bytes,
+        attachments: result.attachments,
+        restarted: wasRunning,
+      })
       if (wasRunning) await startSide(side)
     } catch (error) {
       if (wasRunning) await startSide(side).catch(() => {})
