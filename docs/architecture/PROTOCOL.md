@@ -241,7 +241,9 @@ Idempotency-Key: <clientId:sessionId:groupIndex>
 - 两个字段都可选；旧客户端不带时行为完全不变；
 - 引用顺序：先上传附件与索引 blob，再 append；缺 blob、类别不符（例如把附件传成 `frame`）或没有登记行都返回 `400 bad-request`；
 - 存档保留附件；移除/重置会一并清理，仍被其它会话或 Vault 引用的 blob 保留；
-- 功能以 `/health` 的 `attachment-index` capability 为准；0.1.4 及更早的服务端会拒绝 `kind=attachment-index`。
+- 功能以 `/health` 的 `attachment-index` capability 为准；0.1.4 及更早的服务端会拒绝 `kind=attachment-index`；
+- 单附件密文上限 32 MiB（明文上限 32 MiB − 24 字节容器开销）：图片经本地归一化后 ≤4 MiB，
+  不会触及；文件超过上限时上传端只在索引里记 `tooLarge`、不上传该附件。
 
 附件密文与索引都由客户端加密（服务端不解密）：
 

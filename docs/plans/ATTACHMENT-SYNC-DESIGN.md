@@ -1,6 +1,8 @@
 # 附件同步设计
 
-> 状态：设计稿（2026-11-14）。附件同步涉及插件与服务端双端，先定协议，不进入实现。开工前已按 DSH 0.2.2-rc.1 复核 API，结论见 §15。
+> 状态：**基本完成**（2026-11-15）。服务端 0.1.5（`attachment` / `attachment-index` blob、批次附件引用）
+> 与插件 0.1.5（推送、拉取前补齐、指定会话修复）已实现并实测：A 推送 → B 拉取 → 删除对象后修复，
+> 恢复的字节与夹具一致。实测数据见 §16，剩余待做见 §17。
 
 ## 1. 目标
 
@@ -45,19 +47,27 @@ DSH 本地附件是内容寻址对象（`<xx>` 是 digest 前两位）：
 
 ```json
 {
+  "v": 1,
   "sessionId": "session-…",
+  "frameIndex": 1509,
+  "seqFrom": 69550,
+  "seqTo": 69590,
   "entries": {
     "sha256:<attachmentId>": {
       "blobSha256": "<ciphertext sha256>",
       "bytes": 12345
     }
-  }
+  },
+  "tooLarge": [
+    { "attachmentId": "sha256:…", "bytes": 40000000, "tooLarge": true }
+  ]
 }
 ```
 
-- 索引用会话派生密钥加密；
+- 索引用会话派生密钥加密，AAD 绑定 `sessionId + frameIndex + seqFrom + seqTo`，防止索引错位；
 - 服务端只存索引 blob，不解析 `entries`；
 - 文件名、媒体类型、尺寸等元数据已经在加密事件里，索引只负责 `attachmentId → 密文地址`；
+- `tooLarge` 记录超过单 blob 上限、没有上传的附件，供另一端提示；
 - 不存明文文件名，避免泄露。
 
 ### 4.3 批次关联
@@ -159,45 +169,47 @@ POST /api/session-cloudsync/attachments/repair
    - `assistant/message`：`data.message.content`，以及 `data.stream` 里 `block-end` 的 `block`；
    - `assistant/attempt` 刻意不收。
    图片按 `attachmentId` 去重，文件按 `(attachmentId, name)` 去重。
-3. 检查本地对象是否存在：图片看 `attachments/v1/objects/<xx>/<sha256>`，文件看 `file-objects/<xx>/<sha256>`；需要确认完整性时再走 `readImage` / `readFileStream`；
+3. 检查本地对象是否存在：图片看 `attachments/v1/objects/<xx>/<sha256>`，文件看 `file-objects/<xx>/<sha256>`；
+   当前**只看存在性、不读内容**，内容损坏的处理见 §17；
 4. 对缺失/损坏的附件，取该会话全部批次索引，解密合并成 map；
 5. 下载、解密、校验；
 6. 恢复：文件用 `saveFile`，`name` 必须用引用里已净化的名字；图片先 `saveImage`，再比对返回的 `attachmentId`，与引用不符即视为恢复失败（目的端归一化策略更严时会发生）；
 7. 再扫一遍确认缺失归零。
 
-失败项要区分：
+失败项要区分（实现返回的 `reason`）：
 
 - `no-index`：索引没有该 attachmentId；
-- `blob-missing`：索引指向的密文不存在；
-- `decrypt-failed`；
-- `digest-mismatch`；
-- `policy-mismatch`：目的端归一化策略比源端严，图片无法还原成同一 `attachmentId`；
-- `local-write-failed`。
+- `too-large`：上传端因超过单 blob 上限跳过了该附件；
+- `digest-mismatch`：解密后内容哈希与 attachmentId 不符；
+- 其余（解密失败、写本地失败）带具体错误消息，不中断同一会话的其它附件。
 
-UI 放在会话详情或上传范围附近：「检查附件」「补齐缺失附件」。
+UI 在会话底栏的快捷操作栏：「检查附件」；结果用底栏弹层展示（扫描/缺失/补齐/失败数）。
 第一版只做指定会话；之后可扩展为扫描全部同步范围。
 
 ## 8. 密钥
 
-- 附件子密钥：`HKDF(sessionKey, "attachment")`；
-- 图片/文件可以共用同一子密钥，密文 nonce 随机；
+- 附件子密钥：`HKDF(sessionKey, 'dsh-sync/attachment/v1')`；
+- 每条附件用 `HKDF(attachmentKey, 'v1|attachment:<attachmentId>')` 派生独立子密钥，nonce 固定为 0：
+  同一附件重推得到同一密文与同一 blob 地址（`attachmentId` 是明文内容哈希，保证内容不变）；
+- 图片与文件共用同一附件子密钥；
 - 更换主密钥/口令时需要重新派生并重加密附件，或保留旧密钥代际；
 - 因为不做跨会话去重，同一图片出现在两个会话会各存一份密文，这是接受的成本。
 
 ## 9. 大小与分片
 
-当前服务端限制：
+服务端限制：单 blob 32 MiB（密文，明文上限 = 32 MiB − 24 字节容器开销）；批量请求 8 MiB / 64 条，
+所以 8–32 MiB 的单附件走单 blob 接口。
 
-- 单 blob 32 MiB；
-- 批量请求 8 MiB / 64 条；因此 8–32 MiB 的单附件必须走单 blob 接口，不能塞进批量请求。
+图片到不了这个上限：DSH 本地归一化默认 ≤4 MiB（`normalizedImageMaxBytes`）；DeepSeek 侧单图上限
+32 MiB（base64 / 外部 URL）、请求体 48 MiB、单请求最多 600 张、图片总大小 64 MiB（不含 `file_id`），
+见 [图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision)。
 
-第一版建议：
+因此**不做分片**（2026-11-15 决定）：
 
-- 只支持单 blob 上限以内的附件；
-- 超过上限的文件明确提示“附件过大，暂不支持”；
-- 后续再设计分片格式（chunk index + blob 列表 + 总 digest）。
-
-是否第一版就做分片，待定。
+- 图片：归一化后 ≤4 MiB，远低于 32 MiB；
+- 文件：DSH 不设准入上限，确实可能超过 32 MiB，但使用极少；超过时上传端记 `tooLarge` 跳过，
+  另一端修复提示「附件过大」，会话其余内容照常同步；
+- 真出现必须同步的大文件，再单独设计分片（chunk index + blob 列表 + 总 digest）。
 
 ## 10. 生命周期
 
@@ -229,26 +241,32 @@ UI 放在会话详情或上传范围附近：「检查附件」「补齐缺失�
 - 缺索引、缺 blob、坏密文、digest 不符分别报明确错误，且不 apply；
 - 修复接口能补齐指定会话的附件，重复调用幂等；
 - 删除/移除会话后附件被清理，不影响其它会话；
-- 大文件超过上限时返回明确错误；
+- 超过单 blob 上限的附件记 `tooLarge` 并跳过，拉取端在 apply 前阻塞；
 - 索引本身被篡改或解密失败时阻止 apply。
 
-## 13. 待定
+## 13. 已拍板 / 待定
 
-1. 索引按 append 批次 vs 会话级：当前倾向批次级；
-2. 第一版是否支持分片/大于 32 MiB 的文件；
-3. 图片和文件是否共用同一附件子密钥；
-4. keybox 与附件密钥轮换的关系（本轮不做，但未来要兼容）；
-5. 是否需要服务端管理台展示附件数量/占用（当前只统计总字节）；
-6. 图片恢复走 `saveImage` + 校验 `attachmentId`，还是直接按 digest 写 `objects/<xx>/<digest>`（后者字节精确，但依赖 DSH 内部布局）。
+已拍板：
 
-## 14. 实施顺序
+1. 索引按批次，随 frame ref 走（不新增表与端点）；
+2. **不做分片**，理由见 §9；
+3. 图片与文件共用同一附件子密钥；
+4. 图片恢复：先 `saveImage` 并校验 `attachmentId`，不符时按 digest 直写对象再 `readImage` 校验；
+5. 管理台不展示附件分项占用（只统计总字节与附件密文占用的总和）。
 
-1. 服务端：新增 blob kind、append 索引字段、批次/索引读取 API、清理逻辑；
-2. 插件：附件加密、索引生成、上传队列；
-3. 插件：拉取任务中加入“索引 → 附件 → apply”依赖；
-4. 插件：指定会话自检/修复接口与 UI；
-5. 测试与文档；
-6. 再评估分片、GC 和 keybox。
+待定：
+
+- keybox 与附件密钥轮换：本轮不做，未来只需保证能派生出同一主密钥；
+- 内容损坏的修复：见 §17。
+
+## 14. 实施顺序（全部完成）
+
+1. ✅ 服务端：blob kind、append 索引字段、purge 清理；
+2. ✅ 插件：附件加密、索引生成、上传队列（>8 MiB 走单 blob）；
+3. ✅ 插件：拉取任务中的「索引 → 附件 → apply」依赖；
+4. ✅ 插件：指定会话自检/修复接口与底栏「检查附件」入口；
+5. ✅ 测试与文档；
+6. 分片不做（§9）；孤儿 GC 见 `GC-DESIGN.md`；keybox 另行设计。
 
 ## 15. 版本核实（DSH 0.2.2-rc.1，2026-11-14）
 
@@ -270,7 +288,30 @@ UI 放在会话详情或上传范围附近：「检查附件」「补齐缺失�
 ### 15.3 按 rc.1 落实的口径
 
 1. 图片对象带两位 digest 前缀目录；文件另有 `file-objects` 规范化对象。
-2. 图片恢复不能无条件 `saveImage`：它会按**目的端**归一化策略重算，只有 `canPassThroughNormalization` 成立才字节不变（默认策略下成立）；策略更严时得到不同 `attachmentId`。恢复后必须比对返回的 id，不符即 `policy-mismatch`，不 apply。
+2. 图片恢复不能无条件 `saveImage`：它会按**目的端**归一化策略重算，只有 `canPassThroughNormalization` 成立才字节不变（默认策略下成立）；策略更严时得到不同 `attachmentId`，恢复失败且不 apply。
 3. 文件恢复用引用里的 `name`（已净化）；返回 id 应等于引用 id，否则 `digest-mismatch`。
 4. 收集引用照 DSH 自己的载体清单（§7 第 2 步），不做泛化递归扫描。
 5. 图片 `bytes` 是归一化后长度（默认策略上限 4 MiB）；文件没有准入上限，服务端 32 MiB 限制实际主要卡文件。
+
+## 16. 实测记录（2026-11-15）
+
+`dev:panel` 双实例 + 本仓库服务端；大会话 69,588 事件（约 52.7 MB），注入 2 张 logo PNG（256×256），
+图片挂在最后一条 `user/message`（seq 69575），随最后一帧（index 1509，seq 69550–69590）上传。
+
+- **推送**：服务端 `frame` 1510 个、`attachment` 2 个（合计 6413 B）、`attachment-index` 1 个（463 B）；
+  索引用会话密钥解开后有 2 条记录，`attachmentBlobs` 与索引条目一致，`tooLarge` 为空；
+  两条附件密文解密后与测试 PNG 逐字节一致；
+- **拉取**：B 侧附件对象先落盘（15:41:15），会话文件后写（15:41:41），receipt 显示
+  `localLastSeq = remoteLastSeq = 69590`；
+- **修复**：删掉 B 侧两个对象后点「检查附件」，两个对象被重建且与夹具逐字节一致；再点一次
+  `missing 0 / downloaded 0`（幂等）。
+
+## 17. 待做：内容损坏的修复
+
+当前修复的判据是**对象是否存在**（`imageHostPath` / `fileHostPath` + 存在性检查），不读内容：
+
+- 对象缺失 → 重新下载并写入；
+- 对象存在但内容损坏（截断、篡改）→ 视为存在，修复不处理；DSH 读取时仍会报 `ATTACHMENT_CORRUPT`。
+
+以后有需要时改成完整性校验：图片走 `readImage`、文件走 `readFileStream`，校验失败按缺失处理；
+代价是修复要把该会话引用的附件读一遍。修复报告的 `reason` 也可以据此新增 `corrupt` 一类。
