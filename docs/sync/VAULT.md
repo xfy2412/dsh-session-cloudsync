@@ -26,8 +26,9 @@ L3 笔记、会话生产者戳、工具链与版本匹配仍是 V3+/V4 设计。
 不做：
 
 - 会话事件本身（仍走现有 manifest + 批次 + 租约）；
-- 工作区项目文件、附件正文（**附件同步未实现**：插件只同步会话事件；服务端虽预留
-  `kind=attachment` 的 blob，客户端不写也不读）；
+- 附件正文：已由会话同步通道实现（附件密文走 `kind=attachment` blob，按批次的索引与补齐见
+  [ATTACHMENT-SYNC-DESIGN.md](../plans/ATTACHMENT-SYNC-DESIGN.md)），不放进 Vault；
+- 工作区项目文件；
 - 服务端读取明文。Vault 默认全量 E2E，服务端只做 append 校验、存储与 cursor。
 
 ### 已接受的决策

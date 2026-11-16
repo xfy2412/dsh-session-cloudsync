@@ -14,7 +14,7 @@
 
 | 层 | 内容 | 体量量级 | 冲突性 |
 |---|---|---|---|
-| L1 会话数据 | 只同步会话事件：`sessions/**` 的事件（每会话只取最高格式代际）→ 封好的 header + 事件批次链。**未实现**：附件（`attachments/v1/**`）、`storages/workspace.json`、`profiles/*/cordis.patch.yml` + `package.json` 都不同步 | 百 MB 级（取决于历史） | 会话要全局写租约 |
+| L1 会话数据 | 同步会话事件与附件：`sessions/**` 的事件（每会话只取最高格式代际）→ 封好的 header + 事件批次链；附件（`attachments/v1/**`）用会话密钥派生密钥加密，索引随批次走。**未实现**：`storages/workspace.json`、`profiles/*/cordis.patch.yml` + `package.json` | 百 MB 级（取决于历史） | 会话要全局写租约 |
 | L2 设备台账 | 每设备一条 `device/profile`：设备名、OS、DSH 版本与 profile、Node、会话格式版本、`DSH_HOME`、工作区列表、最后在线；另有每工作区一条 `workspace/profile`。**未实现**：已加载插件清单、工具链版本/路径 | KB 级 | 按 deviceId 分槽，天然无冲突 |
 | L3 agent 笔记 | append-only 笔记：设备/会话/工作区/时间/作者/标签 | KB–MB 级 | 只追加，天然无冲突；**未实现**（VAULT.md 的 V4） |
 
