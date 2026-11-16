@@ -58,6 +58,7 @@ import {
   type SealedFrameRef,
 } from '../../shared/src/sealed-frame.ts'
 import { planSessionClosure } from './closure.ts'
+import type { ProjectionWarmInput } from './projection-warm.ts'
 
 /**
  * 本地附件读写的宿主桥。
@@ -382,6 +383,11 @@ export interface PullDeps<Session> {
   readonly onFirstPull?: (sessionId: string) => void
   /** 取启动时预占的写句柄（抢占成功时用它，避免再 open 撞所有权）；缺省时自行 open。 */
   readonly takeHeldHandle?: (id: string) => WriteHandleLike | undefined
+  /**
+   * 拉取后让宿主的投影缓存（标题、`sessionListMetadata`）追上本地日志。
+   * 缓存是派生数据：实现必须自己吞掉失败，不能改变拉取结果。
+   */
+  readonly warm?: (input: ProjectionWarmInput) => Promise<void>
   readonly logger?: SyncLogger
   readonly fetch?: typeof fetch
   /** 本地附件读写桥；缺省表示宿主没提供附件服务，附件通道整体跳过。 */
@@ -2231,8 +2237,9 @@ export async function verifyPassphrase(
 /**
  * 执行一个单向 pull 任务。
  *
- * 已存在的会话走 `attachMode=none`，不重复 attach/warm；只有本地不存在的新
- * 会话才走 `pull-new` 并允许挂载与标题预热。
+ * 已存在的会话走 `attachMode=none`，不重复挂载；只有本地不存在的新会话才
+ * 挂回工作区。两边都会在写盘/确认追平后用完整本地日志预热投影缓存，让会话
+ * 列表的标题和最后消息时间跟着这次拉取更新。
  * @param deps - 拉取依赖。
  * @param sessionId - 远端会话 id。
  * @param localExists - 本机是否已有该会话。
@@ -2282,6 +2289,34 @@ export async function pullSessionTask<Session>(
     await deps.afterApply?.(sessionId)
   }
   return report
+}
+
+/**
+ * 只补热一个本地会话的投影缓存：读本地日志 + `coldSnapshot`，不回源校验、不写日志。
+ *
+ * 给旧版本留下的“已追平但缓存落后”会话做一次性回填；是否需要补热由调用方
+ * 用缓存水位判断，这里不做远端比较。
+ * @param deps - 只读持久化与预热依赖。
+ * @param sessionId - 本地会话 id。
+ * @returns 拉取报告形状的结果；本地会话不存在时也返回 `up-to-date`。
+ */
+export async function warmSessionTask(
+  deps: WarmProjectionTaskDeps,
+  sessionId: string,
+): Promise<PullSessionReport> {
+  const snapshot = await deps.persistence.stat(sessionId)
+  if (snapshot === undefined) return { sessionId, status: 'up-to-date', totalEvents: 0 }
+  const handle = await deps.persistence.open(sessionId, 'read')
+  const header = handle.header
+  const inheritedEventCount = handle.inheritedEventCount ?? 0
+  let events: readonly SyncEvent[]
+  try {
+    events = (await handle.read()).events
+  } finally {
+    await handle.close()
+  }
+  await warmProjection(deps, sessionId, header, inheritedEventCount, events)
+  return { sessionId, status: 'up-to-date', totalEvents: 0 }
 }
 
 /** 连接测试结果。 */
@@ -2680,8 +2715,46 @@ async function appendPulledEvents(handle: WriteHandleLike, events: readonly Sync
   }
 }
 
-/** 新任务模式下的挂载策略：已存在会话不重复 attach/warm。 */
+/** 新任务模式下的挂载策略：已存在会话不重复 attach；缓存预热独立进行。 */
 type PullAttachMode = 'always' | 'new' | 'none'
+
+/** 只补热本地投影缓存所需的最小依赖。 */
+export interface WarmProjectionTaskDeps {
+  readonly persistence: Pick<PullPersistenceLike, 'stat' | 'open'>
+  readonly warm?: (input: ProjectionWarmInput) => Promise<void>
+  readonly logger?: SyncLogger
+  readonly onProgress?: (progress: SyncProgress) => void
+}
+
+/**
+ * 把本次拉取得到的完整日志交给宿主刷新投影缓存。
+ *
+ * 只在本地已有完整日志时调用（拉取本来就读过/写过一遍），不额外读盘。
+ * 预热失败只告警：列表里的旧标题/旧排序时间比拉取失败轻得多。
+ * @param deps - 预热依赖。
+ * @param sessionId - 会话 id。
+ * @param header - 本地持久化的会话头。
+ * @param inheritedEventCount - seeded 会话的继承前缀长度。
+ * @param events - 完整有序日志（seq 从 0 开始）。
+ */
+async function warmProjection(
+  deps: Pick<WarmProjectionTaskDeps, 'warm' | 'logger' | 'onProgress'>,
+  sessionId: string,
+  header: ReadHandleLike['header'],
+  inheritedEventCount: number,
+  events: readonly SyncEvent[],
+): Promise<void> {
+  if (deps.warm === undefined) return
+  notifyProgress(deps, {
+    sessionId, direction: 'pull', phase: 'progress', stage: 'projecting', progress: 1,
+  })
+  const lastSeq = events.length === 0 ? -1 : events[events.length - 1]!.seq
+  try {
+    await deps.warm({ sessionId, header, inheritedEventCount, events, lastSeq })
+  } catch (error: unknown) {
+    deps.logger?.warn(`dsh-session-cloudsync: 刷新 ${sessionId} 的投影缓存失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
 
 async function pullSession<Session>(
   deps: PullDeps<Session>,
@@ -2755,6 +2828,8 @@ async function pullSession<Session>(
     // 先读再判断是否需要写：read 不申请写所有权，可安全观察 live/官方
     // 正在写入的会话；只有确实落后时才去抢 write。
     const reader = await deps.persistence.open(sessionId, 'read')
+    const readerHeader = reader.header
+    const readerInherited = reader.inheritedEventCount ?? 0
     let observed: Awaited<ReturnType<typeof readLocal>>
     try {
       observed = await readLocal(reader)
@@ -2765,6 +2840,9 @@ async function pullSession<Session>(
       return { sessionId, status: 'local-ahead', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
     }
     if (observed.last === safe) {
+      // 已追平的会话也要补热：升级前拉过的会话缓存可能一直落后，
+      // 列表里的标题和排序时间会停在旧位置。
+      if (live === undefined) await warmProjection(deps, sessionId, readerHeader, readerInherited, observed.events)
       if (attachMode === 'always' && live === undefined && !observed.cwdNonPortable) {
         await deps.attach?.(sessionId, workspacePath)
       }
@@ -2803,6 +2881,7 @@ async function pullSession<Session>(
         return { sessionId, status: 'local-ahead', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
       }
       if (observed.last === safe) {
+        await warmProjection(deps, sessionId, handle.header, handle.inheritedEventCount ?? 0, observed.events)
         if (attachMode === 'always' && !observed.cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
         return { sessionId, status: 'up-to-date', totalEvents: 0, ...observed.cwdNonPortable ? { cwdNonPortable: true } : {} }
       }
@@ -2833,6 +2912,9 @@ async function pullSession<Session>(
         ms: performance.now() - downloadStarted,
       })
       if (events.length === 0) throw new Error(`远端承诺到 ${safe}，但没有拉到新事件`)
+      // 在 append 之前拍下完整日志：句柄 read() 返回的数组归调用方所有，
+      // 但测试/其他后端可能返回会随写入增长的视图，不能等 append 再拼。
+      const fullLog = [...observed.events, ...events]
       notifyProgress(deps, { sessionId, direction: 'pull', phase: 'progress', stage: 'verifying', progress: 0.9 })
       await fetchFrameAttachments(deps, fetchImpl, base, deps.config.token, sessionId, sessionKey, downloaded.frames, events)
       const applyStarted = performance.now()
@@ -2856,7 +2938,9 @@ async function pullSession<Session>(
         stage: 'flush',
         ms: performance.now() - flushStarted,
       })
-      const nextCwdNonPortable = cwdNonPortableOf([...observed.events, ...events], workspacePath)
+      const nextCwdNonPortable = cwdNonPortableOf(fullLog, workspacePath)
+      // 先补热再挂载：列表刷新时缓存里已经是新标题和新的最后消息时间。
+      await warmProjection(deps, sessionId, handle.header, handle.inheritedEventCount ?? 0, fullLog)
       if (attachMode === 'always' && !nextCwdNonPortable) await deps.attach?.(sessionId, workspacePath)
       return {
         sessionId,
@@ -2921,6 +3005,8 @@ async function pullSession<Session>(
   const applyStarted = performance.now()
   notifyPerfStart(deps, { direction: 'pull', sessionId, stage: 'apply' })
   const handle = await deps.persistence.create(header, options)
+  const warmHeader = handle.header
+  const warmInherited = handle.inheritedEventCount ?? 0
   try {
     if (events.length > 0) await appendPulledEvents(handle, events)
     notifyPerf(deps, {
@@ -2943,6 +3029,8 @@ async function pullSession<Session>(
     await handle.close()
   }
   const cwdNonPortable = cwdNonPortableOf(events, workspacePath)
+  // 写句柄已关闭再补热：等待缓存写回时不必占着这个会话的写所有权。
+  await warmProjection(deps, sessionId, warmHeader, warmInherited, events)
   if (attachMode !== 'none' && !cwdNonPortable) await deps.attach?.(sessionId, workspacePath)
   if (!cwdNonPortable && meta.parentSession === undefined && meta.delegationDepth === 0) deps.onFirstPull?.(sessionId)
   return {

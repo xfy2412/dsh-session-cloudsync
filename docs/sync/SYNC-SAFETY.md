@@ -99,10 +99,15 @@ DSH 的 `append` 不是多事件事务：崩溃可能留下半个 turn；持久�
 4. 按 500 事件切片 `append`（`appendPulledEvents`）；pending 只记目标边界，不记逐批进度；
 5. `flush()`；
 6. 清除 pending（事件已耐久）；
-7. **挂载**：任务模式下每个 pull 任务在 append+flush 后立即 `attachSession`
-   （新会话 `attachMode='new'`，已存在会话不重复挂载），新拉取的子代理按深度从深到浅
-   先建；旧 `pullOnce` 的“整轮 apply 完再统一 attach”仍保留，但正常轮次不走；
-8. 挂载失败时本轮不算成功、不记 receipt（旧 `pullOnce` 不推进游标）；下一轮会因本地已是最新而重试挂载。
+7. **预热**：append+flush 后（新会话在 `create`+flush 后）用本次拉取已经拿到的完整日志刷新
+   `sessionProjectionCache`，让列表的标题和最后消息时间跟上；已追平但缓存落后的会话也会补热，
+   缓存水位已到日志末端时跳过。升级前留下的旧缓存由 scan 发现（`cachedSnapshot` 水位低于本地末
+   seq），排一个 `warmSessionTask`（只读本地日志，不回源、不写会话）补一次。预热失败只告警，
+   不影响会话落地；
+8. **挂载**：任务模式下每个 pull 任务在预热后立即 `attachSession`（新会话 `attachMode='new'`，
+   已存在会话不重复挂载），新拉取的子代理按深度从深到浅先建；旧 `pullOnce` 的“整轮 apply 完
+   再统一 attach”仍保留，但正常轮次不走；
+9. 挂载失败时本轮不算成功、不记 receipt（旧 `pullOnce` 不推进游标）；下一轮会因本地已是最新而重试挂载。
 
 进程重启后的恢复（任务模式）：
 

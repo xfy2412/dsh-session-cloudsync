@@ -84,7 +84,7 @@ owner 为 `(deviceId, clientId)`）：只有持有者才能创建/append/删会�
 
 ## 拉取后如何生效
 
-优先走 DSH 原生接缝——`ctx.sessionPersistence.create` / `open(id, 'write')` + `append(events)` 写入，`ctx.workspaceRegistry.resolveByPath` + `Workspace.attachSession` 挂回工作区，避免重启宿主。M0 已验证写入后宿主能发现新会话；**客户端插件**在同步轮结束后（以及回填状态变化时）调用 `ctx.sessions.refresh()`（`packages/plugin/client/index.js:3737`），让已打开的窗口重新拉 `session/list`，更新冷会话、标题和工作区分组，不需要用户手动刷新页面。新拉取的冷会话还会先用 `sessionProjectionCache.coldSnapshot` 预热 title 投影再 attach（`packages/plugin/src/index.ts:802-821`）。
+优先走 DSH 原生接缝——`ctx.sessionPersistence.create` / `open(id, 'write')` + `append(events)` 写入，`ctx.workspaceRegistry.resolveByPath` + `Workspace.attachSession` 挂回工作区，避免重启宿主。M0 已验证写入后宿主能发现新会话；**客户端插件**在同步轮结束后（以及回填状态变化时）调用 `ctx.sessions.refresh()`（`packages/plugin/client/index.js:3737`），让已打开的窗口重新拉 `session/list`，更新冷会话、标题和工作区分组，不需要用户手动刷新页面。冷会话的标题和列表排序时间只来自 `sessionProjectionCache`：每次拉取（新会话、追加、已追平但缓存落后）都在写盘后把本次已经在内存里的完整日志交给 `coldSnapshot` 预热，同时刷新 `title` 与 `sessionListMetadata`（`blank`、最后一条用户消息时间 → `updatedAt`），等写回水位到日志末端再 attach/返回；缓存已到日志末端时跳过（不额外读盘）。升级前落后的旧缓存由 scan 用 `cachedSnapshot` 水位发现，排一次性补热任务（只读本地日志）。新会话仍会 `attachSession` 挂回工作区（`packages/plugin/src/projection-warm.ts`）。
 
 会话头（`formatVersion`/`createdAt`/`isSeeded`/`delegationDepth`/`agentPreset`，可选的 `parentSession`/`origin`，以及 seeded 会话的 `inheritedEventCount`，见 `packages/shared/src/batches.ts:30-47`）单独封成链上下标 0 的 **sealed header**，manifest 只记哈希；`cwd` 不进入 manifest 明文。拉取端按 `workspaceKey` 的工作区绑定决定落到哪个本地工作区；绑定/映射的加密存储见 [VAULT.md](../sync/VAULT.md)。这样同一会话在不同设备上的链身份不受本地路径影响。
 

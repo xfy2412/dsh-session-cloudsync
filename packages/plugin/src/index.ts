@@ -18,6 +18,7 @@ import { SyncController, type SyncRunResult, type TaskRunner } from './controlle
 import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { planSync, type LocalPlanSnapshot, type RemoteSessionSummary, type SyncPlanEntry, type SyncReceipt } from './sync-plan.ts'
 import { prepareReplaceScript } from './replace.ts'
+import { warmSessionProjection, projectionNeedsWarm, type ProjectionCacheLike, type ProjectionWarmInput } from './projection-warm.ts'
 import {
   correctCwd as correctSessionCwd,
   pullSessionTask,
@@ -27,6 +28,7 @@ import {
   repairSessionAttachments,
   verifyPassphrase as verifyRemotePassphrase,
   testConnection,
+  warmSessionTask,
   type AttachmentBridge,
   type AttachmentRef,
   type AttachmentRepairReport,
@@ -233,12 +235,6 @@ interface ConnectionLike {
 /** `ctx.credentials` 的最小结构（类型包不在本插件依赖里）。 */
 interface CredentialsLike {
   resolve(ref: string): Promise<{ readonly value: string; readonly source: string } | undefined>
-}
-
-/** `sessionProjectionCache` 的最小结构；未加载该可选服务时跳过。 */
-interface ProjectionCacheLike {
-  coldSnapshot(meta: unknown, inheritedEventCount: number, events: readonly unknown[]): unknown
-  cachedSnapshot(meta: unknown, keys?: readonly string[]): unknown
 }
 
 /** 运行期可被凭据刷新/配置引用改写的引擎配置。 */
@@ -875,30 +871,28 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   /**
-   * 新拉取的冷会话没有 projection cache；先做一次 cold snapshot 再 attach，
-   * 让 DSH 列表能从缓存读到标题等投影。失败时只告警，不影响会话落地。
-   * @param sessionId - 已写入本地的会话。
+   * 让宿主的投影缓存追上这次拉取的本地日志：冷会话的标题和
+   * `sessionListMetadata`（最后一条用户消息时间 → 列表排序）都只从缓存读，
+   * 所以每次拉取（新会话、追加、已追平但缓存落后）都要补一次。
+   *
+   * 日志由引擎在拉取时已经读过，这里不再读盘；缓存是派生数据，失败只告警。
+   * @param input - 本次拉取的完整日志。
    */
-  const warmProjectionCache = async (sessionId: string): Promise<void> => {
+  const warmCachedProjection = async (input: ProjectionWarmInput): Promise<void> => {
     const cache = ctx.get('sessionProjectionCache') as ProjectionCacheLike | undefined
-    if (cache === undefined || typeof cache.coldSnapshot !== 'function') return
-    const handle = await ctx.sessionPersistence.open(sessionId as SessionId, 'read')
-    try {
-      const read = await handle.read()
-      cache.coldSnapshot(handle.header, handle.inheritedEventCount ?? 0, read.events)
-      // coldSnapshot 的落盘是 fire-and-forget；等 title 行可见后再 attach，
-      // 避免列表恰好读到尚未写完的缓存。大会话的 projection checkpoint 可能
-      // 超过旧实现的 250ms 窗口，这里给 2s 并留下诊断。
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        if (typeof cache.cachedSnapshot !== 'function') return
-        if (cache.cachedSnapshot(handle.header, ['title']) !== undefined) return
-        await new Promise<void>((resolve) => setTimeout(resolve, 10))
-      }
-      logger.warn(`dsh-session-cloudsync: 会话 ${sessionId} 的标题投影在 2s 内未就绪，继续挂载`)
-    } finally {
-      await handle.close()
-    }
+    await warmSessionProjection(cache, input, { logger })
   }
+
+  /**
+   * 本地投影缓存是否落后于会话日志；没有缓存记录也算落后。
+   *
+   * 只在 scan 里对 up-to-date 会话做一次零 I/O 判定，用来决定是否补热。
+   * @param header - 本地会话头。
+   * @param lastSeq - 本地日志末 seq。
+   * @returns 是否需要补热；宿主没有缓存服务时恒为 false。
+   */
+  const projectionBehind = (header: unknown, lastSeq: number): boolean =>
+    projectionNeedsWarm(ctx.get('sessionProjectionCache') as ProjectionCacheLike | undefined, header, lastSeq)
 
   /** 启动/整轮前预占的写句柄：防前端在拉取前把会话"复活"。 */
   const pullHolds = new Map<string, WriteHandleLike>()
@@ -926,20 +920,13 @@ export function apply(ctx: Context, config: Config): void {
       if (workspaceRegistry === undefined) throw new Error('workspaceRegistry 不可用')
       if (mappedPath === undefined || mappedPath === '') throw new Error('会话没有可用的本地工作区落点')
       controller.updateProgress({
-        sessionId, direction: 'pull', phase: 'progress', stage: 'projecting', progress: 1,
-      })
-      try {
-        await warmProjectionCache(sessionId)
-      } catch (error: unknown) {
-        logger.warn(`dsh-session-cloudsync: 预热会话投影缓存失败：${error instanceof Error ? error.message : String(error)}`)
-      }
-      controller.updateProgress({
         sessionId, direction: 'pull', phase: 'progress', stage: 'attaching', progress: 1,
       })
       const workspace = (await workspaceRegistry.resolveByPath(mappedPath))
         ?? (await workspaceRegistry.create(mappedPath, 'Session Sync'))
       await workspace.attachSession(sessionId as SessionId)
     },
+    warm: warmCachedProjection,
     onFirstPull: (sessionId: string): void => {
       if (!syncSessionIds.includes(sessionId)) autoUploadRoots.add(sessionId)
     },
@@ -999,6 +986,16 @@ export function apply(ctx: Context, config: Config): void {
 
   const taskEntries = new Map<string, SyncPlanEntry>()
   /**
+   * 本轮要补热投影缓存的会话：已追平但缓存落后（升级前追加过的拉取）。
+   * 只读本地日志，不回源；scan 每轮重建，补热成功后自然不再出现。
+   */
+  const warmBackfill = new Set<string>()
+  /**
+   * 补热后水位仍没追平的会话：本进程内不再重试，避免每轮折叠一次大日志。
+   * 会话下次有远端新事件时会随拉取正常预热。
+   */
+  const warmStalled = new Set<string>()
+  /**
    * 把规划条目转成气泡任务。
    * @param entry - 规划结果。
    * @param state - 初始任务状态。
@@ -1041,6 +1038,21 @@ export function apply(ctx: Context, config: Config): void {
       ...state === 'blocked' ? { error: entry.error ?? '会话被阻塞' } : {},
     }
   }
+
+  /**
+   * 给补热会话生成拉取形状的任务：本地与远端已一致，`totalEvents` 为 0。
+   * @param entry - 规划条目。
+   * @param state - 初始任务状态。
+   * @param ordinal - 稳定顺序。
+   * @returns 任务视图。
+   */
+  const taskForEntry = (
+    entry: SyncPlanEntry,
+    state: SyncTaskView['state'],
+    ordinal: number,
+  ): SyncTaskView => warmBackfill.has(entry.sessionId) && entry.action === 'none'
+    ? taskOf({ ...entry, action: 'pull', reason: 'up-to-date' }, state, ordinal)
+    : taskOf(entry, state, ordinal)
 
   /**
    * 只读规划：拉远端摘要、本地快照和 receipt，算出每个会话的方向与差值。
@@ -1219,6 +1231,8 @@ export function apply(ctx: Context, config: Config): void {
       : Math.max(0, remoteLast - localLast)
     const task = { ...base, direction, totalEvents, doneEvents: 0, progress: 0 }
     taskEntries.set(sessionId, entry)
+    // 单会话手动同步走完整拉取（含前缀校验），不要被本轮补热集合改道。
+    warmBackfill.delete(sessionId)
     return controller.runTasks([task], { manual: true })
   }
   /**
@@ -1333,7 +1347,20 @@ export function apply(ctx: Context, config: Config): void {
       }
       taskEntries.clear()
       for (const entry of entries) taskEntries.set(entry.sessionId, entry)
-      const autoEntries = entries.filter((entry) => entry.action !== 'none' || entry.reason === 'blocked')
+      // 已追平但缓存落后：升级前“只有新会话才预热”留下的旧行，补一次就够。
+      // 活跃会话不碰（缓存由 DSH 自己的检查点维护）；没有缓存服务时整体跳过。
+      warmBackfill.clear()
+      for (const entry of entries) {
+        if (entry.action !== 'none' || entry.reason !== 'up-to-date') continue
+        if (entry.local === undefined || entry.localLastSeq === undefined) continue
+        if (entry.localLastSeq < 0) continue
+        if (warmStalled.has(entry.sessionId)) continue
+        if (ctx.sessions.get(entry.sessionId as SessionId) !== undefined) continue
+        if (!projectionBehind(entry.local.header, entry.localLastSeq)) continue
+        warmBackfill.add(entry.sessionId)
+      }
+      const autoEntries = entries.filter((entry) =>
+        entry.action !== 'none' || entry.reason === 'blocked' || warmBackfill.has(entry.sessionId))
       const total = mode === 'manual' ? entries.length : autoEntries.length
       const leaseHeld = deviceLease.snapshot().state === 'held'
       const withLease = (tasks: readonly SyncTaskView[]): SyncTaskView[] => tasks.map((task) =>
@@ -1342,7 +1369,7 @@ export function apply(ctx: Context, config: Config): void {
           : task)
       if (mode === 'auto') {
         const tasks = withLease(autoEntries.map((entry, index) =>
-          taskOf(entry, entry.reason === 'blocked' ? 'blocked' : 'queued', index)))
+          taskForEntry(entry, entry.reason === 'blocked' ? 'blocked' : 'queued', index)))
         hooks.setTasks(tasks)
         hooks.setScan(tasks.length, tasks.length)
         return { tasks }
@@ -1359,8 +1386,8 @@ export function apply(ctx: Context, config: Config): void {
         const entry = entries[index]!
         if (entry.reason === 'blocked') {
           remaining.push(taskOf(entry, 'blocked', index))
-        } else if (entry.action !== 'none') {
-          remaining.push(taskOf(entry, 'queued', index))
+        } else if (entry.action !== 'none' || warmBackfill.has(entry.sessionId)) {
+          remaining.push(taskForEntry(entry, 'queued', index))
         }
         hooks.setScan(index + 1, total, entry.sessionId)
         await new Promise<void>((resolve) => { setImmediate(resolve) })
@@ -1458,6 +1485,22 @@ export function apply(ctx: Context, config: Config): void {
           doneEvents: report.doneEvents ?? report.totalEvents ?? task.totalEvents,
           ...report.bytes === undefined ? {} : { totalBytes: report.bytes, doneBytes: report.bytes },
         }
+      }
+      if (warmBackfill.has(entry.sessionId) && entry.action === 'none') {
+        // 补热只读本地日志：不回源、不写会话、不推进 receipt。
+        await withPullLock(() => warmSessionTask({
+          persistence: pullDeps.persistence,
+          logger,
+          onProgress: reportProgress,
+          ...pullDeps.warm === undefined ? {} : { warm: pullDeps.warm },
+        }, entry.sessionId))
+        const header = entry.local?.header
+        const lastSeq = entry.localLastSeq
+        if (header !== undefined && lastSeq !== undefined && projectionBehind(header, lastSeq)) {
+          warmStalled.add(entry.sessionId)
+          logger.warn(`dsh-session-cloudsync: 会话 ${entry.sessionId} 补热后缓存水位仍未追平，本进程内不再重试`)
+        }
+        return { state: 'done', totalEvents: 0, doneEvents: 0 }
       }
       const report = await withPullLock(() =>
         pullSessionTask({
