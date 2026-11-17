@@ -127,7 +127,7 @@ device/<deviceId>
 ```jsonc
 {
   "deviceId": "…",
-  "deviceName": "X2411",
+  "deviceName": "workstation",
   "os": { "platform": "win32", "arch": "x64", "release": "10.0.26100" },
   "dsh": {
     "version": "0.2.2-rc.1",
@@ -288,6 +288,65 @@ append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已
 - 单条 ≤ 8 KB，每用户 ≤ 20 MB，单工作区默认 200 条；
 - agent/用户可写，服务端永不写；
 - 默认不注入模型上下文，换设备时只取该工作区 1–3 条摘要。
+
+### 3.7 设备切换提示与本机环境工具（V4 设计，未实现）
+
+会话日志是跨设备共享的，但模型需要知道**现在**这台设备的路径、版本和工具链；否则它会沿用另一台设备的假设，
+或重新探测一遍环境。做法是一条极短的前置提示，指向本机环境工具。
+
+**注入通道：`agent/pre-step`，不用 `agent.inject`。**
+
+- `agent.inject()` 在调用那一刻就 `session.append('agent/inbox/spliced')`（`agent-loop/src/inbox.ts:223`），
+  即使用户没有继续会话也会落盘并被同步；对我们不合适；
+- `agent/pre-step` 的 listener 把消息放进 `decision.messages`，loop 只在**这一步被准入时**才写成
+  `user/message`（`agent-loop/src/agent.ts:463-473`）。在那之前它只在插件内存里：用户不发消息就不写日志、
+  不产生新的同步事件；
+- 只在 `payload.messages` 含 `source.kind === 'user'`（用户发起的 turn）时检查，工具步骤不触发；
+- 从 `agent.session.snapshotEvents()` 尾部反向扫最近一条 `user/message` 且 `source.kind === 'session-cloudsync'`
+  的提示，读其 `source.deviceId`：等于本机设备 id 就跳过，否则（或从未注入过）把新提示插到
+  `decision.messages` 最前面；子代理会话跳过；
+- `snapshotEvents()` 是内存数组（打开会话时日志已载入），实测 10,000 事件全量反向扫约 0.1 ms、
+  100,000 事件约 0.6 ms；通常第一条就命中，不需要额外状态文件。
+
+**消息格式**（`source.kind` 不能是 `user`，否则会被当成人工提问、影响列表排序和排队）：
+
+```jsonc
+{
+  "role": "user",
+  "content": [{
+    "type": "text",
+    "text": "<device-change device=\"workstation\" deviceId=\"…\">\n用户的工作设备已切换到 workstation，如需了解本机环境事实请使用工具 get_env。\n</device-change>"
+  }],
+  "source": {
+    "kind": "session-cloudsync",
+    "form": "notice",
+    "summary": "设备已切换到 workstation",
+    "deviceId": "…",
+    "deviceName": "workstation"
+  }
+}
+```
+
+- 去重读 `source.deviceId`，不解析文本；`<device-change>` 包裹只给模型看；
+- `form: 'notice'` 让 Trajectory 显示成提示行（`ui-trajectory` 已知 form 列表），`source.kind !== 'user'`
+  不影响 `sessionListMetadata.lastPromptAt`；
+- `deviceName` 优先取插件配置的 `deviceName`，为空时取 `/v2/me` 的 `device.label`；`deviceId` 取
+  `/v2/me` 的 `device.deviceId`（服务端创建设备时分配，见 `packages/server/src/http.ts:236-245`）。
+  插件缓存这对身份（token/配置变化时失效）；取不到时这一轮跳过，下一轮再试，绝不阻塞 pre-step；
+- 提示落盘后会随会话正常同步：这是"模型可见必须入日志"的必然结果，消息本身足够短，且同一设备连续会话
+  不会重复注入。
+
+**本机环境工具**（V4）：名字按 `get_env` → `this_env` → `dscs_env` 的顺序取第一个未被占用的
+（`ctx.tools.get()` 探测 + 注册 try/catch）；全部被占用时只告警，不注册工具、也不注入切换提示，
+提示文案里的工具名始终取实际注册成功的那个。代价是占用 `get_env` 这类通用名会让后加载的同名插件注册
+失败——这是选名顺序的已知取舍。插件配置 `envTool`（默认开）关闭工具与提示；`toolchainCommands`
+覆盖探测白名单（默认 node/npm/pnpm/git/python/uv）。
+
+工具只读本机、不发网络请求（工具链探测走宿主 `ctx.shell`，受执行器超时/沙箱约束），输出：设备名/设备 id、
+OS/arch/release、DSH 版本与 profile、Node、会话格式版本、工具链版本与路径（`auto` 源）、本机工作区映射。
+已加载/已安装的插件清单与 `authored` 工具链随 V3 设备台账加入；届时工具与 Vault 读缓存共用同一份
+`device/profile` 数据。
+
 
 ## 4. 密钥与加密
 

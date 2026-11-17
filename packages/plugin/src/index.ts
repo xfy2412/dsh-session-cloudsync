@@ -11,7 +11,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { interruptedTurnClosers } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, parse } from 'node:path'
 import { SyncController, type SyncRunResult, type TaskRunner } from './controller.ts'
@@ -19,6 +19,9 @@ import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { planSync, type LocalPlanSnapshot, type RemoteSessionSummary, type SyncPlanEntry, type SyncReceipt } from './sync-plan.ts'
 import { prepareReplaceScript } from './replace.ts'
 import { warmSessionProjection, projectionNeedsWarm, type ProjectionCacheLike, type ProjectionWarmInput } from './projection-warm.ts'
+import { DeviceIdentityCache, LocalEnvironment, DEFAULT_TOOLCHAIN_COMMANDS, type ShellServiceLike } from './device-info.ts'
+import { registerEnvTool, type ToolsServiceLike } from './env-tool.ts'
+import { deviceChangeMessage, prependDeviceChange, shouldInjectDeviceNotice, type SessionEventLike } from './device-notice.ts'
 import {
   correctCwd as correctSessionCwd,
   pullSessionTask,
@@ -165,6 +168,10 @@ export interface Config {
   batchBytes?: number
   /** 单次 HTTP 读取超时（毫秒），默认 10000。 */
   requestTimeoutMs?: number
+  /** 是否注册本机环境事实工具（默认开）；关闭后设备切换提示也关闭。 */
+  envTool?: boolean
+  /** 环境工具探测的工具链命令白名单；默认 node/npm/pnpm/git/python/uv。 */
+  toolchainCommands?: string[]
   /** 开发模式：把插件日志同时发到本地 dev 控制台；默认关闭。 */
   debug?: boolean
   /** 开发控制台日志接收地址，例如 `http://127.0.0.1:3092/api/log/a`。 */
@@ -186,6 +193,8 @@ export const Config = z.object({
   batchEvents: z.number().min(1).default(50).volatile(),
   batchBytes: z.number().min(1024).default(256 * 1024).volatile(),
   requestTimeoutMs: z.number().min(1000).default(10_000).volatile(),
+  envTool: z.boolean().default(true).volatile(),
+  toolchainCommands: z.array(z.string()).default([...DEFAULT_TOOLCHAIN_COMMANDS]).volatile(),
   debug: z.boolean().default(false).volatile(),
   devLogUrl: z.string().default('').volatile(),
 })
@@ -328,6 +337,8 @@ export function apply(ctx: Context, config: Config): void {
   let batchEvents = readVolatile<number>(config.batchEvents) ?? 50
   let batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
   let requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
+  let envToolEnabled = readVolatile<boolean>(config.envTool) !== false
+  let toolchainCommands = sanitizeCommandList(readVolatile<unknown>(config.toolchainCommands))
   // 每次 DSH 进程启动生成一次；同一进程内 lease/append 复用，重启后换新值。
   const clientId = randomBytes(16).toString('hex')
 
@@ -352,6 +363,35 @@ export function apply(ctx: Context, config: Config): void {
     clientId,
   }
 
+  /**
+   * `/v2/me` 身份缓存；设备切换提示与 `/v2/me` 读取共用，10 分钟 TTL。
+   * 放在这里是为了让后面的 `refreshSecrets()` 能在 token 变化时让它失效。
+   */
+  const deviceIdentity = new DeviceIdentityCache(() => ({
+    serverUrl,
+    token: engineConfig.token,
+    deviceName,
+    requestTimeoutMs,
+  }), logger)
+
+  /**
+   * 读取工具链命令白名单；缺省或非法值退回默认列表。
+   * @param value - 配置里的原始数组。
+   * @returns 合法的命令名列表（保持顺序、去重）。
+   */
+  function sanitizeCommandList(value: unknown): string[] {
+    const fallback = [...DEFAULT_TOOLCHAIN_COMMANDS]
+    if (!Array.isArray(value)) return fallback
+    const seen = new Set<string>()
+    for (const item of value) {
+      if (typeof item !== 'string') continue
+      const name = item.trim()
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/u.test(name) || seen.has(name)) continue
+      seen.add(name)
+    }
+    return seen.size === 0 ? fallback : [...seen]
+  }
+
   let scheduler: SyncScheduler | undefined
 
   /**
@@ -373,6 +413,8 @@ export function apply(ctx: Context, config: Config): void {
     batchEvents = readVolatile<number>(config.batchEvents) ?? 50
     batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
     requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
+    envToolEnabled = readVolatile<boolean>(config.envTool) !== false
+    toolchainCommands = sanitizeCommandList(readVolatile<unknown>(config.toolchainCommands))
     debug = envDevLogUrl !== '' || readVolatile<boolean>(config.debug) === true
     devLogUrl = envDevLogUrl !== ''
       ? envDevLogUrl
@@ -428,12 +470,15 @@ export function apply(ctx: Context, config: Config): void {
       ])
       const credentialToken = tokenValue?.value ?? ''
       const credentialPassphrase = passphraseValue?.value ?? ''
+      const previousToken = engineConfig.token
       engineConfig.token = envSyncToken !== ''
         ? envSyncToken
         : credentialToken !== '' ? credentialToken : configToken
       engineConfig.passphrase = envSyncPassphrase !== ''
         ? envSyncPassphrase
         : credentialPassphrase !== '' ? credentialPassphrase : configPassphrase
+      // 设备 id 跟着 token 走；token 变了必须重新读 /v2/me。
+      if (previousToken !== engineConfig.token) deviceIdentity.invalidate()
       tokenSource = envSyncToken !== ''
         ? 'env'
         : credentialToken !== ''
@@ -470,6 +515,36 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const workspaceRegistry = ctx.get('workspaceRegistry') as unknown as WorkspaceRegistryLike | undefined
+
+  /**
+   * 本机环境事实：环境工具与设备切换提示共用；工具链探测走宿主 `ctx.shell`。
+   */
+  const localEnvironment = new LocalEnvironment({
+    identity: () => deviceIdentity.snapshot(),
+    shell: () => ctx.get('shell') as unknown as ShellServiceLike | undefined,
+    workspaces: () => (workspaceRegistry?.list?.() ?? []).map((workspace) => ({
+      path: workspace.path,
+      label: workspace.title,
+    })),
+    commands: () => toolchainCommands,
+    logger,
+  })
+
+  /** 实际注册成功的环境工具名；没有注册时设备切换提示不注入。 */
+  let envToolName: string | undefined
+  ctx.inject(['tools'], (toolsCtx) => {
+    if (!envToolEnabled) return
+    const tools = toolsCtx.get('tools') as unknown as ToolsServiceLike | undefined
+    const registered = registerEnvTool(
+      tools,
+      (input) => localEnvironment.facts(input),
+      logger,
+    )
+    if (registered === undefined) return
+    envToolName = registered.name
+    logger.info(`dsh-session-cloudsync: 环境工具已注册为 ${registered.name}`)
+    toolsCtx.effect(() => () => registered.dispose(), 'dsh-session-cloudsync: env tool')
+  })
   if (yamlToken !== '' || yamlPassphrase !== '') {
     logger.warn(
       'dsh-session-cloudsync: token/passphrase 仍写在 YAML；建议迁到 DSH 凭据库'
@@ -842,9 +917,14 @@ export function apply(ctx: Context, config: Config): void {
           readonly origin?: string
           readonly parentSession?: string
         }
+        /** 内存里的完整日志；打开会话时已经载入，反向扫不碰磁盘。 */
+        snapshotEvents?: () => readonly SessionEventLike[]
       }
     }
   }
+  type PreStepDecisionLike =
+    | { readonly kind: 'reject' }
+    | { readonly kind: 'enter'; readonly messages: readonly unknown[]; readonly startsRequestSeries?: true }
   const onPreStep = ctx.on.bind(ctx) as unknown as (
     event: 'agent/pre-step',
     listener: (payload: PreStepPayloadLike, next: () => Promise<unknown>) => Promise<unknown>,
@@ -867,8 +947,49 @@ export function apply(ctx: Context, config: Config): void {
       if (snapshot === undefined) break
       header = snapshot.header
     }
-    return next()
+    const decision = await next() as PreStepDecisionLike
+    return withDeviceChangeNotice(payload, decision)
   })
+
+  /**
+   * 用户在这台设备继续会话时，把一条 `<device-change>` 提示放进本次 step。
+   *
+   * 只在真正有用户消息的 step、上一条提示不是本机时注入；消息由 loop 在步骤准入
+   * 时落成 `user/message`，在那之前不写日志、不产生同步事件。环境工具没注册、
+   * 设备身份还没读到时跳过（next turn 再试）。
+   * @param payload - pre-step 载荷。
+   * @param decision - 下游 waterfall 的决策。
+   * @returns 可能带提示的新决策。
+   */
+  function withDeviceChangeNotice(
+    payload: PreStepPayloadLike,
+    decision: PreStepDecisionLike,
+  ): PreStepDecisionLike {
+    if (decision.kind !== 'enter') return decision
+    const toolName = envToolName
+    if (toolName === undefined) return decision
+    const session = payload.agent.session
+    const sessionHeader = session.header
+    if (sessionHeader.origin === 'subagent' || sessionHeader.parentSession !== undefined) return decision
+    const human = decision.messages.some((message) => {
+      if (message === null || typeof message !== 'object') return false
+      const source = (message as { readonly source?: unknown }).source
+      return source !== null && typeof source === 'object'
+        && (source as { readonly kind?: unknown }).kind === 'user'
+    })
+    if (!human) return decision
+    const identity = deviceIdentity.snapshot()
+    if (identity === undefined) {
+      void deviceIdentity.refresh()
+      return decision
+    }
+    const events = typeof session.snapshotEvents === 'function' ? session.snapshotEvents() : undefined
+    if (events === undefined || !shouldInjectDeviceNotice(events, identity.deviceId)) return decision
+    return prependDeviceChange(
+      decision,
+      deviceChangeMessage({ deviceId: identity.deviceId, name: identity.name }, toolName),
+    )
+  }
 
   /**
    * 让宿主的投影缓存追上这次拉取的本地日志：冷会话的标题和
@@ -1579,6 +1700,8 @@ export function apply(ctx: Context, config: Config): void {
     await refreshSecrets()
     await deviceLease.ensure()
     await refreshBindings()
+    // 设备切换提示需要 deviceId；缓存 10 分钟，失败不阻塞同步。
+    void deviceIdentity.refresh()
     const activeRun = controller.snapshot().running
     if (!activeRun) perf.begin(trigger ?? (manual ? 'manual' : 'auto'))
     try {
@@ -2099,6 +2222,7 @@ export function apply(ctx: Context, config: Config): void {
       logger.info(`dsh-session-cloudsync: 未配置（${current.reason ?? '原因未知'}），只提供设置/状态 API`)
     } else {
       await refreshBindings()
+      void deviceIdentity.refresh()
       void runSync(false, 'startup').catch((error: unknown) => {
         logger.warn(`dsh-session-cloudsync: 启动同步失败：${error instanceof Error ? error.message : String(error)}`)
       })

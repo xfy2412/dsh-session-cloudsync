@@ -22,7 +22,9 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 >
 > **未发布的插件改动**：拉取预热覆盖全部拉取任务——新会话、追加、已追平但缓存落后都会刷新
 > `title` 与 `sessionListMetadata`（列表排序用的最后消息时间）；升级前落后的旧缓存由 scan 排
-> 一次性补热任务。实测见 SYNC-SAFETY §3 流程第 7 步。
+> 一次性补热任务。另新增本机环境工具（`get_env` → `this_env` → `dscs_env` 取第一个可用名）与
+> `agent/pre-step` 的设备切换提示（提示只在用户下一条消息准入时落盘）。实测见 SYNC-SAFETY §3
+> 流程第 7 步与 VAULT.md §3.7。
 
 ## 当前阶段的验收
 

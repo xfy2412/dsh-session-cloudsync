@@ -101,14 +101,17 @@ owner 为 `(deviceId, clientId)`）：只有持有者才能创建/append/删会�
   重启 DSH 再全量重拉（`packages/plugin/src/replace.ts:1-84`）；它不做帧级覆盖；
 - 修复/导出属于独立维护功能，不参与正常同步链，避免把“可删除”语义带进 append-only 协议。
 
-## 换设备与设备标记（历史设计，未实现）
+## 换设备与设备标记
 
 早期设计是：在会话日志里写一条 `plugin:dsh-session-cloudsync/device` 记录（`ignorable`），用 Session projection
-折叠出"最后设备"，判定换设备时在 `agent/pre-step` 追加 `<system-reminder>` 提醒模型。
+折叠出"最后设备"，判定换设备时在 `agent/pre-step` 追加 `<system-reminder>` 提醒模型。**这条链路没有实现，也不再采用**：
+它要求每个会话都写一条记录，而且分不清"用户是否在这台设备上继续"。
 
-**当前代码里没有这条链路**：插件不写 device 记录、不折叠最后设备、也不注入 system-reminder；
-`agent/pre-step` 现在只用于拒绝已标记分叉的会话（`packages/plugin/src/index.ts:776-795`）。
-要恢复换设备提示，需要作为独立功能重新设计。
+现在的设计（V4，见 [VAULT.md §3.7](../sync/VAULT.md)）不写设备记录：用户在这台设备发出下一条消息时，
+`agent/pre-step` 把一条 `<device-change device="…" deviceId="…">` 提示放进 `decision.messages`，loop 在步骤准入时
+才落成 `user/message`；用日志里上一条提示的 `source.deviceId` 判重，同机不重复注入。提示指向本机环境工具
+（`get_env` → `this_env` → `dscs_env` 取第一个可用名）。在那之前提示只在插件内存里：用户不继续会话就不写日志、不产生同步事件。
+`agent/pre-step` 同时仍用于拒绝已标记分叉的会话（`packages/plugin/src/index.ts`）。
 
 ## 加密
 
