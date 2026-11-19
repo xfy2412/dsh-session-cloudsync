@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>跨设备插件 · UI 原型</title>
+<style>
+  :root {
+    --bg: #0d1014;
+    --panel: #15191f;
+    --panel-2: #10141a;
+    --line: #29303a;
+    --line-soft: #20262e;
+    --text: #e6e9ee;
+    --muted: #8d98a7;
+    --faint: #66717e;
+    --green: #58c98a;
+    --blue: #6b9cff;
+    --amber: #f0b64a;
+    --red: #ff7b72;
+    --purple: #b98cff;
+    --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  body { padding: 18px 20px 40px; }
+  .top { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+  h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: .2px; }
+  .sub { margin: 4px 0 0; color: var(--muted); font-size: 11.5px; }
+  .actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  button { font: inherit; color: var(--text); background: #1a2028; border: 1px solid var(--line); border-radius: 7px; padding: 7px 12px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--faint); background: #1d242d; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: #23406f; border-color: #3b63a8; color: #eef4ff; }
+  button.primary:hover:not(:disabled) { background: #2a4b82; border-color: #5a85d6; }
+  #banner { display: none; margin: 10px 0 12px; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); font-size: 12px; }
+  #banner.show { display: block; }
+  #banner.ok { border-color: rgba(88, 201, 138, .45); color: var(--green); }
+  #banner.warn { border-color: rgba(240, 182, 74, .5); color: var(--amber); }
+  #banner.bad { border-color: rgba(255, 123, 114, .5); color: var(--red); }
+
+  .board {
+    display: grid;
+    grid-template-columns: 260px repeat(4, minmax(168px, 1fr));
+    min-width: 980px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: auto;
+    background: var(--panel);
+    max-height: calc(100vh - 150px);
+  }
+  .row { display: contents; }
+  .cell { border-top: 1px solid var(--line-soft); border-left: 1px solid var(--line-soft); padding: 10px 12px; min-height: 74px; }
+  .head { position: sticky; top: 0; z-index: 3; background: #11161c; border-top: none; padding: 10px 12px; }
+  .head.plug { left: 0; z-index: 5; }
+  .plug-cell { position: sticky; left: 0; z-index: 2; background: var(--panel); }
+  .plug { display: flex; gap: 10px; align-items: flex-start; }
+  .icon { width: 32px; height: 32px; flex-shrink: 0; border-radius: 8px; display: grid; place-items: center; font-size: 10px; font-weight: 700; letter-spacing: .3px; color: #0d1014; background: linear-gradient(145deg, var(--icon-a, #8cc8ff), var(--icon-b, #5d86c9)); }
+  .p-name { font-weight: 600; font-size: 12.5px; line-height: 1.35; word-break: break-all; }
+  .p-desc { margin-top: 3px; color: var(--faint); font-size: 10.5px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  .dev-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; border-top: 2px solid var(--c, var(--line)); }
+  .dev-head.local, .dev-head.registry { cursor: default; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--faint)); flex-shrink: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, #66717e) 14%, transparent); }
+  .dev-name { font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .dev-sub { color: var(--faint); font-size: 10px; margin-left: auto; white-space: nowrap; }
+  .adopt-hint { color: color-mix(in srgb, var(--c) 70%, var(--faint)); font-size: 9.5px; margin-left: auto; white-space: nowrap; }
+
+  .dev-cell { background: color-mix(in srgb, var(--c, #66717e) 3%, var(--panel)); border-left: 3px solid color-mix(in srgb, var(--c, #66717e) 38%, var(--line-soft)); }
+  .dev-cell.local { background: rgba(88, 201, 138, .045); border-left-color: rgba(88, 201, 138, .5); }
+  .dev-cell.registry { position: sticky; right: 0; z-index: 1; border-left-color: rgba(240, 182, 74, .4); background: #171a1e; box-shadow: -1px 0 0 var(--line-soft); }
+  .head.registry { position: sticky; right: 0; z-index: 6; background: #171a1e; box-shadow: -1px 0 0 var(--line-soft); }
+  .dev-cell.drop { outline: 2px dashed var(--amber); outline-offset: -4px; background: rgba(240, 182, 74, .06); }
+
+  .card {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    min-height: 34px; padding: 5px 9px; border-radius: 7px;
+    border: 1px solid color-mix(in srgb, var(--c, #66717e) 45%, var(--line));
+    background: color-mix(in srgb, var(--c, #66717e) 9%, #12171d);
+    font-family: var(--mono); font-size: 12px;
+    cursor: grab; user-select: none;
+  }
+  .card:hover { border-color: color-mix(in srgb, var(--c, #66717e) 75%, var(--text)); }
+  .card .tag { font-family: inherit; font-size: 9px; color: var(--muted); white-space: nowrap; }
+  .card.current { cursor: default; border-color: color-mix(in srgb, var(--c) 80%, var(--line)); background: color-mix(in srgb, var(--c) 17%, #12171d); }
+  .card.same, .card.older { opacity: .55; cursor: default; }
+  .card.selected { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .card.pending { cursor: default; border-style: dashed; border-color: var(--amber); background: rgba(240, 182, 74, .08); color: var(--amber); }
+  .card.blocked { border-color: rgba(255, 123, 114, .7); background: rgba(255, 123, 114, .08); color: var(--red); cursor: not-allowed; }
+  .card.failed { border-color: var(--red); background: rgba(255, 123, 114, .1); color: var(--red); }
+  .card.applying { cursor: progress; opacity: .6; }
+  .stack { display: flex; flex-direction: column; gap: 6px; }
+  .arrow { color: var(--amber); font-size: 10px; font-family: var(--mono); padding-left: 2px; }
+  .empty { color: var(--faint); font-family: var(--mono); font-size: 12px; padding: 7px 2px; }
+  .row-changed .plug-cell { box-shadow: inset 3px 0 0 var(--amber); }
+  .row-changed .dev-cell.local { background: rgba(240, 182, 74, .07); }
+  .row-failed .plug-cell { box-shadow: inset 3px 0 0 var(--red); }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(10px);
+    display: none; align-items: center; gap: 10px; padding: 9px 12px;
+    background: #1b222b; border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.45); font-size: 12px; z-index: 20;
+  }
+  #toast.show { display: flex; }
+  #toast button { padding: 4px 8px; font-size: 11px; }
+  .legend { margin-top: 10px; color: var(--faint); font-size: 10.5px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .legend b { color: var(--muted); font-weight: 500; }
+  .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>跨设备插件</h1>
+      <p class="sub">拖拽版本卡片到本机列，或点设备名全部采用该设备版本</p>
+    </div>
+    <div class="actions">
+      <button id="apply" class="primary" disabled>应用变更 0</button>
+      <button id="reset" disabled>清空暂存</button>
+    </div>
+  </header>
+
+  <div id="banner"></div>
+  <div id="board" class="board" aria-label="跨设备插件版本矩阵"></div>
+
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--green)"></i><b>本机</b>：当前安装</span>
+    <span><i class="swatch" style="background:var(--blue)"></i><b>设备列</b>：点击列名全部采用</span>
+    <span><i class="swatch" style="background:var(--amber)"></i><b>琥珀</b>：待应用变更</span>
+    <span><i class="swatch" style="background:var(--red)"></i><b>红色</b>：不可自动执行</span>
+    <span>最右列：registry 最新版本</span>
+  </div>
+
+  <div id="toast"><span id="toast-text"></span><button id="undo" type="button">撤销</button></div>
+
+<script>
+  // ---------- mock 数据 ----------
+  const devices = [
+    { id: 'local', name: '本机', sub: '当前', color: '#5ed392' },
+    { id: 'ws', name: 'X2411', sub: '5 分钟前', color: '#5b88ff' },
+    { id: 'laptop', name: 'Laptop', sub: '2 小时前', color: '#c084fc' },
+    { id: 'registry', name: 'registry 最新', sub: 'latest', color: '#f0b64a' },
+  ]
+
+  const plugins = [
+    {
+      id: 'context', name: 'dsh-context', icon: 'ctx', iconA: '#8cc8ff', iconB: '#4f7cc4',
+      desc: '上下文洞察与管理插件：提供跨屏的上下文仪表盘、上下文浏览器、上下文动态、/context 命令。',
+      versions: {
+        local: { version: '1.2.0' },
+        ws: { version: '1.3.0' },
+        laptop: { version: '1.3.0' },
+        registry: { version: '1.4.0' },
+      },
+    },
+    {
+      id: 'everything', name: 'dsh-everything-find', icon: 'ef', iconA: '#8cc8ff', iconB: '#4f7cc4',
+      desc: 'Everything（voidtools）文件名搜索：以 everything_find 工具和配置卡的形式提供。',
+      versions: {
+        local: {},
+        ws: { version: '0.2.0-rc.2' },
+        laptop: { version: '0.2.0-rc.2' },
+        registry: { version: '0.2.0' },
+      },
+    },
+    {
+      id: 'ssh', name: 'SSH 远程主机', icon: 'ssh', iconA: '#9fe3b3', iconB: '#4f9d75',
+      desc: '通过 SSH 在远程 Linux 主机执行命令、读写编辑文件、搜索与传输；ControlMaster 复用。',
+      versions: {
+        local: { version: '1.5.0' },
+        ws: { version: '1.5.0' },
+        laptop: { version: '1.5.0' },
+        registry: { version: '1.5.0' },
+      },
+    },
+    {
+      id: 'whale', name: 'dsh-whale-widget', icon: 'wh', iconA: '#d8c4ff', iconB: '#8a63c4',
+      desc: 'DSH Web 界面右下角的 DeepSeek 余额小鲸鱼挂件：余额、今日已用、峰谷定价。',
+      localNote: '本地较新',
+      versions: {
+        local: { version: '2.1.0' },
+        ws: { version: '2.0.0' },
+        laptop: { version: '2.0.0' },
+        registry: { version: '2.0.0' },
+      },
+    },
+    {
+      id: 'localonly', name: 'dsh-my-local-plugin', icon: 'my', iconA: '#ffd48a', iconB: '#b47d2f',
+      desc: '仅本机安装的私有插件；registry 上没有可安装的包。',
+      localNote: '仅本地',
+      versions: {
+        local: { version: '0.4.0' },
+        ws: {},
+        laptop: {},
+        registry: { version: '0.4.0', source: 'file:D:/work/plugin' },
+      },
+    },
+    {
+      id: 'incompat', name: 'dsh-legacy-hooks', icon: 'lg', iconA: '#ffb2ac', iconB: '#b04f49',
+      desc: '旧版 DSH 钩子插件；新版本声明了与当前 DSH 不兼容的 engines.dsh。',
+      versions: {
+        local: { version: '1.0.0' },
+        ws: { version: '2.0.0', incompatible: true },
+        laptop: {},
+        registry: { version: '2.0.0', incompatible: true },
+      },
+    },
+  ]
+
+  // ---------- 状态 ----------
+  /** pluginId -> { deviceId, version } */
+  let pending = new Map()
+  let applying = false
+  let failed = new Map()
+  let undoState = null
+  let undoAfterAdopt = null
+  let toastTimer = null
+
+  const board = document.getElementById('board')
+  const applyBtn = document.getElementById('apply')
+  const resetBtn = document.getElementById('reset')
+  const banner = document.getElementById('banner')
+  const toast = document.getElementById('toast')
+  const toastText = document.getElementById('toast-text')
+  const undoBtn = document.getElementById('undo')
+
+  function localVersion(plugin) {
+    return plugin.versions.local.version
+  }
+
+  function compare(a, b) {
+    if (a === b) return 0
+    const pa = String(a).split('-')
+    const pb = String(b).split('-')
+    const na = pa[0].split('.').map(Number)
+    const nb = pb[0].split('.').map(Number)
+    for (let i = 0; i < Math.max(na.length, nb.length); i += 1) {
+      const da = na[i] || 0
+      const db = nb[i] || 0
+      if (da !== db) return da > db ? 1 : -1
+    }
+    if (pa.length === 1 && pb.length > 1) return 1
+    if (pa.length > 1 && pb.length === 1) return -1
+    return String(pa.slice(1)).localeCompare(String(pb.slice(1)))
+  }
+
+  /**
+   * 返回卡片可执行性：
+   * ok / same / older / blocked
+   */
+  function availability(plugin, deviceId) {
+    const entry = plugin.versions[deviceId]
+    if (entry === undefined || entry.version === undefined) return { kind: 'missing' }
+    if (entry.source !== undefined && /^(file|link):/u.test(entry.source)) {
+      return { kind: 'blocked', reason: `来源 ${entry.source}，不能跨设备安装` }
+    }
+    if (entry.incompatible === true) {
+      return { kind: 'blocked', reason: '与当前 DSH 版本不兼容' }
+    }
+    const current = localVersion(plugin)
+    if (current === undefined) return { kind: 'ok' }
+    const order = compare(entry.version, current)
+    if (order === 0) return { kind: 'same' }
+    if (order < 0) return { kind: 'older', reason: '本地较新；降级需手工处理' }
+    return { kind: 'ok' }
+  }
+
+  function pendingFor(pluginId) {
+    return pending.get(pluginId)
+  }
+
+  function countPending() {
+    return pending.size
+  }
+
+  function setBanner(text, tone) {
+    banner.textContent = text
+    banner.className = text === '' ? '' : 'show ' + (tone || '')
+  }
+
+  function showToast(text, undo) {
+    toastText.textContent = text
+    undoAfterAdopt = undo || null
+    undoBtn.style.display = undo ? '' : 'none'
+    toast.classList.add('show')
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => { toast.classList.remove('show') }, 6000)
+  }
+
+  function snapshotPending() {
+    return new Map(pending)
+  }
+
+  function restorePending(snapshot) {
+    pending = new Map(snapshot)
+    render()
+  }
+
+  // ---------- 选择 ----------
+  function select(pluginId, deviceId) {
+    if (applying) return
+    const plugin = plugins.find((item) => item.id === pluginId)
+    const target = plugin.versions[deviceId]
+    const state = availability(plugin, deviceId)
+    if (state.kind === 'blocked') { showToast(state.reason); return }
+    if (state.kind !== 'ok') return
+    const current = pendingFor(pluginId)
+    if (current !== undefined && current.deviceId === deviceId) {
+      pending.delete(pluginId)
+    } else {
+      pending.set(pluginId, { deviceId, version: target.version })
+    }
+    render()
+  }
+
+  function adoptDevice(deviceId) {
+    if (applying) return
+    if (deviceId === 'local' || deviceId === 'registry') return
+    const before = snapshotPending()
+    let upgrade = 0
+    let install = 0
+    let skipped = 0
+    for (const plugin of plugins) {
+      const target = plugin.versions[deviceId]
+      if (target === undefined || target.version === undefined) {
+        pending.delete(plugin.id)
+        continue
+      }
+      const state = availability(plugin, deviceId)
+      if (state.kind === 'blocked') {
+        pending.delete(plugin.id)
+        skipped += 1
+        continue
+      }
+      if (state.kind === 'same') { pending.delete(plugin.id); continue }
+      if (state.kind === 'older') { pending.delete(plugin.id); skipped += 1; continue }
+      pending.set(plugin.id, { deviceId, version: target.version })
+      if (localVersion(plugin) === undefined) install += 1
+      else upgrade += 1
+    }
+    render()
+    const parts = []
+    if (upgrade > 0) parts.push(`${upgrade} 升级`)
+    if (install > 0) parts.push(`${install} 安装`)
+    if (skipped > 0) parts.push(`${skipped} 跳过`)
+    showToast(`已选择 ${devices.find((d) => d.id === deviceId).name} 的版本${parts.length ? '：' + parts.join('、') : ''}`, () => {
+      pending = before
+      render()
+      toast.classList.remove('show')
+    })
+  }
+
+  // ---------- 应用 ----------
+  async function applyChanges() {
+    if (applying || pending.size === 0) return
+    applying = true
+    failed = new Map()
+    const entries = [...pending.entries()]
+    const total = entries.length
+    setBanner('', '')
+    updateToolbar()
+    render()
+    let done = 0
+    let ok = 0
+    let bad = 0
+    for (const [pluginId, target] of entries) {
+      applyBtn.textContent = `正在应用 ${done + 1}/${total}`
+      await delay(520)
+      const plugin = plugins.find((item) => item.id === pluginId)
+      // 原型：固定让 everything 失败，演示红色失败态
+      if (pluginId === 'everything') {
+        bad += 1
+        failed.set(pluginId, '模拟安装失败：pnpm 退出码 1')
+        pending.delete(pluginId)
+      } else {
+        ok += 1
+        plugin.versions.local = { version: target.version, source: 'registry' }
+        delete plugin.localNote
+        pending.delete(pluginId)
+      }
+      done += 1
+      applyBtn.textContent = `正在应用 ${done}/${total}`
+      render()
+    }
+    applying = false
+    updateToolbar()
+    const parts = [`${ok} 项成功`]
+    if (bad > 0) parts.push(`${bad} 项失败`)
+    setBanner(`${parts.join('，')}。${ok > 0 ? '插件代码已变更，请点「重载界面」；若仍显示旧版本，需要重启 DSH 后端。' : ''}`, bad > 0 ? 'bad' : 'ok')
+    render()
+  }
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  // ---------- 渲染 ----------
+  function iconStyle(plugin) {
+    return `--icon-a:${plugin.iconA};--icon-b:${plugin.iconB}`
+  }
+
+  function cardHtml(plugin, deviceId) {
+    const entry = plugin.versions[deviceId]
+    if (entry === undefined || entry.version === undefined) {
+      return '<div class="empty">—</div>'
+    }
+    const state = availability(plugin, deviceId)
+    const isPending = pendingFor(plugin.id)?.deviceId === deviceId
+    const isLocal = deviceId === 'local'
+    const classes = ['card']
+    if (isLocal) classes.push('current')
+    else if (isPending) classes.push('selected')
+    if (state.kind === 'same') classes.push('same')
+    if (state.kind === 'older') classes.push('older')
+    if (state.kind === 'blocked') classes.push('blocked')
+    if (failed.has(plugin.id) && isLocal) classes.push('failed')
+    if (applying) classes.push('applying')
+    const tag = isLocal
+      ? (plugin.localNote || '当前')
+      : state.kind === 'blocked'
+        ? '不可执行'
+        : state.kind === 'older'
+          ? '本地较新'
+          : state.kind === 'same'
+            ? '一致'
+            : entry.source !== undefined && /^(file|link):/u.test(entry.source)
+              ? '不可执行'
+              : '可拖拽'
+    const title = state.kind === 'blocked' ? state.reason : state.kind === 'older' ? state.reason : '拖到本机列，或点击选中'
+    const draggable = !isLocal && state.kind === 'ok' && !applying
+    return `<div class="${classes.join(' ')}" data-plugin="${plugin.id}" data-device="${deviceId}" draggable="${draggable}" title="${escapeHtml(title)}">
+      <span>${escapeHtml(entry.version)}</span><span class="tag">${escapeHtml(tag)}</span>
+    </div>`
+  }
+
+  function cellHtml(plugin, device) {
+    const localPending = device.id === 'local' ? pendingFor(plugin.id) : undefined
+    if (device.id === 'local') {
+      const current = plugin.versions.local
+      const currentCard = cardHtml(plugin, 'local')
+      const failedHtml = failed.has(plugin.id)
+        ? `<div class="card failed"><span>${escapeHtml(failed.get(plugin.id))}</span></div>`
+        : ''
+      let pendingHtml = ''
+      if (localPending !== undefined) {
+        pendingHtml = `<div class="arrow">${escapeHtml(current.version || '—')} → ${escapeHtml(localPending.version)}</div>
+          <div class="card pending"><span>${escapeHtml(localPending.version)}</span><span class="tag">待应用</span></div>`
+      }
+      return `<div class="cell dev-cell local" data-drop="local" data-plugin="${plugin.id}">${currentCard}${pendingHtml}${failedHtml}</div>`
+    }
+    return `<div class="cell dev-cell ${device.id === 'registry' ? 'registry' : ''}" style="--c:${device.color}">${cardHtml(plugin, device.id)}</div>`
+  }
+
+  function render() {
+    const pieces = []
+    pieces.push('<div class="row">')
+    pieces.push('<div class="cell head plug">插件</div>')
+    for (const device of devices) {
+      const cls = ['cell', 'head', 'dev-head']
+      if (device.id === 'local') cls.push('local')
+      if (device.id === 'registry') cls.push('registry')
+      const actionable = device.id !== 'local' && device.id !== 'registry'
+      pieces.push(`<div class="${cls.join(' ')}" style="--c:${device.color}" ${actionable ? `data-adopt="${device.id}"` : ''}>
+        <span class="dot"></span><span class="dev-name">${escapeHtml(device.name)}</span>
+        <span class="${actionable ? 'adopt-hint' : 'dev-sub'}">${escapeHtml(actionable ? '点击全部采用' : device.sub)}</span>
+      </div>`)
+    }
+    pieces.push('</div>')
+
+    for (const plugin of plugins) {
+      const changed = pending.has(plugin.id)
+      const hasFailed = failed.has(plugin.id)
+      pieces.push(`<div class="row ${changed ? 'row-changed' : ''} ${hasFailed ? 'row-failed' : ''}">`)
+      pieces.push(`<div class="cell plug-cell"><div class="plug"><span class="icon" style="${iconStyle(plugin)}">${escapeHtml(plugin.icon)}</span>
+        <div><div class="p-name">${escapeHtml(plugin.name)}</div><div class="p-desc">${escapeHtml(plugin.desc)}</div></div></div></div>`)
+      for (const device of devices) pieces.push(cellHtml(plugin, device))
+      pieces.push('</div>')
+    }
+    board.innerHTML = pieces.join('')
+    bindBoard()
+    updateToolbar()
+  }
+
+  function updateToolbar() {
+    const count = pending.size
+    applyBtn.disabled = applying || count === 0
+    resetBtn.disabled = applying || count === 0
+    if (!applying) applyBtn.textContent = count === 0 ? '应用变更 0' : `应用变更 ${count}`
+  }
+
+  function bindBoard() {
+    board.querySelectorAll('[data-adopt]').forEach((el) => {
+      el.addEventListener('click', () => adoptDevice(el.dataset.adopt))
+    })
+    board.querySelectorAll('.card[data-plugin]').forEach((el) => {
+      if (el.classList.contains('current')) return
+      el.addEventListener('click', () => select(el.dataset.plugin, el.dataset.device))
+      if (el.getAttribute('draggable') === 'true') {
+        el.addEventListener('dragstart', (event) => {
+          event.dataTransfer.effectAllowed = 'move'
+          event.dataTransfer.setData('text/plain', JSON.stringify({ plugin: el.dataset.plugin, device: el.dataset.device }))
+          el.classList.add('applying')
+        })
+        el.addEventListener('dragend', () => el.classList.remove('applying'))
+      }
+    })
+    board.querySelectorAll('[data-drop="local"]').forEach((cell) => {
+      cell.addEventListener('dragover', (event) => {
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+        cell.classList.add('drop')
+      })
+      cell.addEventListener('dragleave', () => cell.classList.remove('drop'))
+      cell.addEventListener('drop', (event) => {
+        event.preventDefault()
+        cell.classList.remove('drop')
+        try {
+          const data = JSON.parse(event.dataTransfer.getData('text/plain'))
+          select(data.plugin, data.device)
+        } catch {
+          // 忽略非卡片拖拽
+        }
+      })
+    })
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[ch]))
+  }
+
+  applyBtn.addEventListener('click', applyChanges)
+  resetBtn.addEventListener('click', () => {
+    if (applying) return
+    pending.clear()
+    undoAfterAdopt = null
+    toast.classList.remove('show')
+    setBanner('', '')
+    render()
+  })
+  undoBtn.addEventListener('click', () => {
+    if (undoAfterAdopt) undoAfterAdopt()
+    undoAfterAdopt = null
+    toast.classList.remove('show')
+  })
+
+  render()
+</script>
+</body>
+</html>
