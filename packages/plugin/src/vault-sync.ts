@@ -31,6 +31,7 @@ import {
   workspaceKeyOf,
   type VaultRecordRef,
 } from '../../shared/src/vault.ts'
+import { sanitizePluginSnapshots, type PluginVersionSnapshot } from './plugin-versions.ts'
 
 /** Vault 同步配置。 */
 export interface VaultSyncConfig {
@@ -45,6 +46,8 @@ export interface VaultSyncConfig {
   readonly workspaces: readonly { readonly path: string; readonly title: string }[]
   readonly dshVersion?: string
   readonly dshProfile?: string
+  /** 本机已安装 bundle 快照；用于跨设备插件版本比较。 */
+  readonly plugins?: readonly PluginVersionSnapshot[]
 }
 
 /** Vault 同步日志接口。 */
@@ -129,6 +132,7 @@ export async function syncVault(
         profile: config.dshProfile ?? process.env.DSH_PROFILE ?? '',
         sessionFormatVersion: 4,
       },
+      ...config.plugins === undefined ? {} : { plugins: sanitizePluginSnapshots(config.plugins) },
     }
     const digest = sha256(stableStringify(payload))
     const pending: Array<{ kind: string; entity: string; data: unknown }> = []
@@ -492,11 +496,20 @@ export function vaultKeyForConfig(config: Pick<VaultSyncConfig, 'serverUrl' | 'p
   return vaultKeyOf(masterKeyOf(config, base))
 }
 
+/** Vault 里读到的另一台设备快照（只保留 UI 需要的字段）。 */
+export interface PeerDeviceProfile {
+  readonly deviceId: string
+  readonly name: string
+  readonly plugins: readonly PluginVersionSnapshot[]
+}
+
 /** 远端 workspace/profile 的 label/path 缓存。 */
 export interface WorkspaceProfileLabels {
   readonly labels: Record<string, string>
   /** workspaceKey → 来源设备的工作区根路径（写入时用 HMAC 反推校验过）。 */
   readonly paths: Record<string, string>
+  /** 各设备最新的 device/profile 快照（含插件列表）。 */
+  readonly devices: readonly PeerDeviceProfile[]
   readonly revision: number
 }
 
@@ -515,6 +528,7 @@ export async function readWorkspaceProfileLabels(
   if (base === '') throw new Error('serverUrl 非法')
   const vaultKey = vaultKeyOf(masterKeyOf(config, base))
   const labels: Record<string, { label: string; path?: string; at: number }> = {}
+  const devices: Record<string, { name: string; plugins: readonly PluginVersionSnapshot[]; at: number }> = {}
   let since = 0
   for (let page = 0; page < 50; page += 1) {
     const cursor = await requestJson(base, `/v2/vault/cursor?since=${since}&limit=500`, config.token, fetchImpl, { method: 'GET' })
@@ -544,6 +558,22 @@ export async function readWorkspaceProfileLabels(
         const bytes = blobs.get(record.blobSha256)
         if (bytes === undefined) continue
         const payload = openVaultRecord({ ref: record, bytes }, vaultKey)
+        if (payload.kind === 'device/profile') {
+          const data = payload.data as {
+            readonly deviceName?: unknown
+            readonly plugins?: unknown
+          } | undefined
+          const name = typeof data?.deviceName === 'string' && data.deviceName.trim() !== ''
+            ? data.deviceName.trim()
+            : payload.entity
+          const plugins = sanitizePluginSnapshots(data?.plugins)
+          const at = Number.isSafeInteger(payload.at) ? payload.at : record.createdAt
+          const previous = devices[payload.entity]
+          if (previous === undefined || at >= previous.at) {
+            devices[payload.entity] = { name, plugins, at }
+          }
+          continue
+        }
         if (payload.kind !== 'workspace/profile') continue
         const data = payload.data as { readonly label?: unknown; readonly path?: unknown } | undefined
         if (typeof data?.label !== 'string' || data.label.trim() === '') continue
@@ -571,6 +601,9 @@ export async function readWorkspaceProfileLabels(
     paths: Object.fromEntries(Object.entries(labels)
       .filter(([, value]) => value.path !== undefined)
       .map(([key, value]) => [key, value.path as string])),
+    devices: Object.entries(devices)
+      .map(([deviceId, value]) => ({ deviceId, name: value.name, plugins: value.plugins }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
     revision: since,
   }
 }

@@ -17,10 +17,10 @@ Vault 负责同步**会话事件之外**的加密数据：
 - L2 设备台账：设备名、OS、DSH 版本与 profile、会话格式版本、已加载插件与版本、最后在线；
 - 工作区身份与「远端工作区 → 本地工作区」绑定；
 - L3 agent 笔记（append-only）；
-- 会话生产者的插件/版本戳，用于跨设备兼容性提示和「一键匹配版本」（V3+ 设计）。
+- 设备级 `plugins` 快照，用于跨设备兼容性提示和「一键匹配版本」（V3+ 设计）。
 
 当前实现只有最小 `device/profile`（不含插件）与 `workspace/profile`（见 §3.3）；
-L3 笔记、会话生产者戳与插件版本匹配仍是 V3+/V4 设计。
+L3 笔记与插件版本匹配的其余部分仍是 V3+/V4 设计。
 
 **本机环境（`get_env` 工具、工具链版本/路径、本机路径）不在 Vault 范围内**：它只在本机
 读取、只在本机展示，不上行服务端（见 §3.7）。设备台账只保留同步/兼容性需要的身份与版本。
@@ -80,7 +80,7 @@ Vault 复用现有 **封帧原语、blob 存储、配额、cursor、错误分类
 device/<deviceId>
   seq 1: device/profile        # 已实现
   seq 2: workspace/profile     # 已实现
-  # 设计稿（未实现）：workspace/bind、session/producer、note/append
+  # 设计稿（未实现）：workspace/bind、note/append
 ```
 
 - 一台 DSH profile/安装实例对应一个 device token 与一条 stream；同一 token 不允许被多个进程当作两个 writer 并发使用；
@@ -503,36 +503,41 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 统一小写、`\` 归一为 `/`，但 HMAC 输入保留一份确定的平台规范形式。跨平台不同根目录不做
 自动换算，走别名绑定。
 
-## 7. 插件版本匹配与一键切换（V3+ 设计，未实现）
+## 7. 插件版本匹配与一键切换（V3+ 设计，部分实现）
 
 ### 7.1 版本来源
 
-- 设备台账记录**加载中**（loader entries）、**已安装**（package.json）、**实际**（spawn/version）
-  三种来源；
-- 会话额外记录 `kind:"session/producer"` 的版本戳：
-  - DSH 版本、sessionFormatVersion；
-  - 插件 `{name, version, source}`；
-  - agent preset；
-- 放 Vault 而不是 session header：不改变会话链，历史会话也能补记录。
+- 设备台账的 `plugins` 快照记录本机 **profile 已安装**的 bundle：`{name, version, source, enabled}`；
+  来源是 `pluginManager.listBundles()`，不按会话记录；
+- 插件是 profile 全局安装，没有“会话专用插件”；会话日志不写插件版本戳，
+  历史会话需要时另行设计，不在本期范围；
+- 快照按内容 digest 去重，安装/升级/启用变化时才 append；
+- `source` 保留原始 profile spec，用于判断 registry / git / file / link；
+- 当前插件自身（`dsh-session-cloudsync`）不上报，避免运行中替换自己。
 
 ### 7.2 检测与提示
 
-拉取/打开远端会话时比较：
+打开「跨设备插件」面板时比较本机与 Vault 里其他设备的 `plugins` 快照：
 
-- sessionFormatVersion 不同：**阻断**，提示先升级/降级 DSH；
-- DSH 版本不同：警告，说明可能读到未知事件；
-- 插件版本不同：列出 `当前 → 远端`；
-- 缺少插件：列出需安装项。
+- 本地缺包：显示待安装；
+- 本地版本低：显示可升级；
+- 本地版本高：显示「本地较新」，不自动降级；
+- `file:`/`link:` 或 git 来源：标为不可自动匹配；
+- profile / DSH 版本不同：同等对待为提示，不自动执行。
 
 ### 7.3 一键匹配
 
-- UI 提供「匹配插件版本」按钮，逐项展示将执行的精确 spec（`pkg@version`）；
-- 用户确认后，宿主调用 `pluginManager` 的安装/移除接口；**不能静默执行**；
+- UI 是「本机 + 各设备 + registry 最新」的版本矩阵，行是插件、列是设备；
+  registry 列按 `name@latest` 查询并缓存；失败显示 `—`，不影响其他列；
+  点其他设备列头可全部采用该设备版本，也可以把单张版本卡拖到本机列；
+- 顶部「应用变更」逐项执行；**不能静默执行**；
 - 安装顺序、build script 审批、版本豁免、DSH 引擎不兼容都沿用 Plugins 页现有规则；
-- 当前 DSH 的 `pluginManager.installBundle` 接受精确 `pkg@version`，已安装包会先移除/替换；
-  我们的编排是**一次一个包**，逐项汇报进度，不另造一套安装器；
+- 本地缺包用 `installBundle(pkg@version)`；本地版本低用 `updateBundle`；
+  当前 DSH 的 `installBundle` 不能替换已安装包，`updateBundle` 只升不降，
+  所以降级不在一键匹配范围，只给出手工命令；
+- 一次一个包，逐项汇报进度，不另造安装器；
 - 切换是 profile 级操作，会影响该 profile 所有会话；UI 必须写明；
-- 安装可能需要重启/HMR，结果按包逐个汇报；
+- 安装可能需要重启后端，结果按包逐个汇报；
 - 不自动切换 DSH 本体，只提示兼容版本。
 
 ### 7.4 “自动”的边界
@@ -551,6 +556,8 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 - 客户端只在 `/health` 的 `capabilities` 包含 `plugin-version-sync` 时才请求
   `/v2/peers`；当前服务端尚未声明/实现该接口，因此旧服务端不会收到未知请求；
 - 没有颜色时 UI 按 `deviceId` 哈希从调色板回退；
+- 图标：本机已安装插件用 `pluginManager.listBundles()` 的 `meta.icon`（data URL）；
+  其他设备/registry 列按 registry 的 `icon` 字段从 CDN 读取并缓存，取不到时回退首字母；
 - 服务端改动不写进插件发版 tag：插件先发版并带着门控，服务端后续声明能力即可生效。
 
 ## 8. 工具链识别（V4 设计，未实现）
@@ -601,7 +608,7 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 | V0 | Vault 密钥域、记录信封、加密/链测试 | 篡改/重放/跨设备挪记录被拒 |
 | V1 | Vault 服务端 append/cursor + 最小设备台账 + `workspace/profile` | 两台设备各自写 stream，互不覆盖 |
 | V2 | `workspaceKey` manifest 扩展 + 一次性绑定 + 未映射阻断 | 多工作区各自落地；未映射不 apply；绑定不可改 |
-| V3 | 会话生产者戳 + 插件版本检测 + 一键匹配 | 精确 spec、用户确认、失败可回退 |
+| V3 | 设备级插件快照 + 插件版本检测 + 一键匹配 | 精确 spec、用户确认、失败可回退 |
 | V4 | 工具链采集 + L3 笔记 + 压缩/保留策略 | 自动不覆盖 authored；笔记只追加 |
 
 V2 已完成工作区落点替换，不需要迁移分支。

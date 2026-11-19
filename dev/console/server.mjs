@@ -867,6 +867,19 @@ async function prepareSide(side, force = false) {
       const code = await runDsh(side, ['plugin', '--profile', 'web', 'add', pluginDir], cleanDshEnv(side))
       if (code !== 0) throw new Error(`dsh plugin add 失败（exit ${code}）`)
     }
+    // 可选：额外装 registry bundle，用于测试跨设备插件版本差异。
+    // 例：DEV_CONSOLE_EXTRA_A=dsh-plugin-release-probe@0.0.2
+    //     DEV_CONSOLE_EXTRA_B=dsh-plugin-release-probe@0.0.8
+    const extraSpecs = (process.env[`DEV_CONSOLE_EXTRA_${side.id.toUpperCase()}`] ?? '')
+      .split(',')
+      .map((spec) => spec.trim())
+      .filter((spec) => spec !== '')
+    for (const spec of extraSpecs) {
+      if (!/^\S+$/u.test(spec)) throw new Error(`额外插件 spec 非法：${spec}`)
+      appendLog(side, 'info', `安装额外插件：${spec}`, 'setup')
+      const code = await runDsh(side, ['plugin', '--profile', 'web', 'add', spec], cleanDshEnv(side))
+      if (code !== 0) throw new Error(`dsh plugin add ${spec} 失败（exit ${code}）`)
+    }
     side.setup = 'ready'
     appendLog(side, 'info', `实例 ${side.label} 准备完成`, 'setup')
   })().catch((error) => {

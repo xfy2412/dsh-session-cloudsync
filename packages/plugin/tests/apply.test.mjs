@@ -95,6 +95,8 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
     '/api/session-cloudsync/workspaces/resolve',
     '/api/session-cloudsync/workspaces/create',
     '/api/session-cloudsync/directory/pick',
+    '/api/session-cloudsync/plugin-versions',
+    '/api/session-cloudsync/plugin-versions/apply',
     '/api/session-cloudsync/sync',
     '/api/session-cloudsync/session-scope',
     '/api/session-cloudsync/attachments/repair',

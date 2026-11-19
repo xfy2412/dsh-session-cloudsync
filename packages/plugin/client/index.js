@@ -343,6 +343,32 @@ window.__ModuleLoader__.load({
       '.dssync-rowmark.tail{color:#b9ccff;background:rgba(86,134,254,.14)}',
       '.dssync-hovernote{padding:7px 2px;border-top:1px solid var(--dssync-line);color:var(--dssync-faint);font-size:11px;line-height:1.45}',
       '@media(prefers-reduced-motion:reduce){.dssync *,.dssync *:before,.dssync *:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}',
+      '.dssync-pv-wrap{display:flex;flex-direction:column;gap:8px;overflow:auto;border:1px solid var(--dssync-line);border-radius:12px;background:rgba(255,255,255,.02)}',
+      '.dssync-pv-row{display:grid;min-width:max-content;border-top:1px solid var(--dssync-line)}',
+      '.dssync-pv-row:first-child{border-top:0}',
+      '.dssync-pv-head{position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-primary,#151a20)}',
+      '.dssync-pv-cell{display:flex;align-items:center;gap:7px;min-width:0;padding:9px 10px;border-left:1px solid var(--dssync-line)}',
+      '.dssync-pv-cell:first-child{border-left:0}',
+      '.dssync-pv-name{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 10px;position:sticky;left:0;z-index:1;background:var(--dsw-alias-bg-primary,#151a20)}',
+      '.dssync-pv-ico{display:grid;place-items:center;width:28px;height:28px;flex:0 0 auto;border-radius:7px;background:linear-gradient(145deg,#8cc8ff,#4f7cc4);color:#0d1014;font-size:9px;font-weight:700;overflow:hidden}',
+      '.dssync-pv-ico img{width:100%;height:100%;object-fit:cover;border-radius:7px}',
+      '.dssync-pv-nm{min-width:0}.dssync-pv-nm b{display:block;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dssync-pv-nm span{display:block;font-size:10px;color:var(--dssync-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.dssync-pv-dev{display:flex;flex-direction:column;gap:1px;min-width:0;font-size:12px;font-weight:600}',
+      '.dssync-pv-dev small{font-weight:400;font-size:10px;color:var(--dssync-faint)}',
+      '.dssync-pv-dev.adopt{cursor:pointer}.dssync-pv-dev.adopt:hover small{color:var(--dssync-accent)}',
+      '.dssync-pv-card{display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:32px;padding:5px 8px;border:1px solid var(--dssync-line-strong);border-radius:7px;background:rgba(255,255,255,.03);font:11px/1.4 var(--dssync-mono,ui-monospace,Consolas,monospace);cursor:grab}',
+      '.dssync-pv-card.current{cursor:default;border-color:var(--dssync-accent);background:var(--dssync-accent-soft)}',
+      '.dssync-pv-card.same,.dssync-pv-card.older{opacity:.5;cursor:default}',
+      '.dssync-pv-card.blocked{border-color:rgba(255,143,143,.7);background:rgba(255,143,143,.08);color:#ff8f8f;cursor:not-allowed}',
+      '.dssync-pv-card.pending{border-style:dashed;border-color:#f0c87a;background:rgba(240,200,122,.09);color:#f0c87a;cursor:default}',
+      '.dssync-pv-card .tag{font-size:9px;color:var(--dssync-faint);white-space:nowrap}',
+      '.dssync-pv-stack{display:flex;flex-direction:column;gap:4px;min-width:0}',
+      '.dssync-pv-arrow{font:9px/1.2 var(--dssync-mono,ui-monospace,Consolas,monospace);color:#f0c87a}',
+      '.dssync-pv-empty{color:var(--dssync-faint);font:11px/1.4 var(--dssync-mono,ui-monospace,Consolas,monospace)}',
+      '.dssync-pv-changed{background:rgba(240,200,122,.06)}',
+      '.dssync-pv-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.dssync-pv-msg{font-size:11px;color:var(--dssync-muted)}',
+      '.dssync-pv-msg.bad{color:#ff8f8f}',
     ].join('')
 
     /* ---------- 小工具 ---------- */
@@ -1763,6 +1789,315 @@ window.__ModuleLoader__.load({
         h('pre', { className: 'dssync-perf-pre' }, JSON.stringify({ host: view.host, client: client }, null, 2)))
     }
 
+    /* ---------- 跨设备插件版本 ---------- */
+
+    /** 比较点分版本；预发布版本低于正式版。 */
+    function comparePluginVersions(left, right) {
+      if (left === right) return 0
+      var la = String(left).split('-')
+      var lb = String(right).split('-')
+      var na = la[0].split('.').map(Number)
+      var nb = lb[0].split('.').map(Number)
+      for (var i = 0; i < Math.max(na.length, nb.length); i += 1) {
+        var da = na[i] || 0
+        var db = nb[i] || 0
+        if (da !== db) return da > db ? 1 : -1
+      }
+      if (la.length === 1 && lb.length > 1) return 1
+      if (la.length > 1 && lb.length === 1) return -1
+      return String(la.slice(1)).localeCompare(String(lb.slice(1)))
+    }
+
+    /** 判断远端 bundle 的来源是否可跨设备安装。 */
+    function pluginSourceKind(plugin) {
+      var source = typeof plugin.source === 'string' ? plugin.source.trim() : ''
+      if (source === '') return 'unknown'
+      if (/^(file|link):/iu.test(source) || /^[A-Za-z]:[\\/]/u.test(source) || source.charAt(0) === '/' || source.slice(0, 2) === './') return 'local'
+      if (/^(git\+|github:|gitlab:|bitbucket:|https?:|ssh:)/iu.test(source)) return 'git'
+      return 'registry'
+    }
+
+    /** 比较本机与一台远端设备的同一插件。 */
+    function pluginTargetState(localPlugin, remotePlugin) {
+      if (remotePlugin === undefined || typeof remotePlugin.version !== 'string' || remotePlugin.version === '') {
+        return { kind: 'missing' }
+      }
+      var source = pluginSourceKind(remotePlugin)
+      if (source === 'local') return { kind: 'blocked', reason: '来源是本机路径，不能跨设备安装' }
+      if (source === 'git') return { kind: 'blocked', reason: 'git 来源暂不支持自动匹配' }
+      if (source === 'unknown') return { kind: 'blocked', reason: '没有可安装的来源 spec' }
+      if (localPlugin === undefined) return { kind: 'install', version: remotePlugin.version }
+      var order = comparePluginVersions(remotePlugin.version, localPlugin.version)
+      if (order === 0) return { kind: 'same', version: remotePlugin.version }
+      if (order < 0) return { kind: 'older', version: remotePlugin.version }
+      return { kind: 'update', version: remotePlugin.version }
+    }
+
+    function PluginVersionsPanel() {
+      var statePair = useState({ loading: true, snapshot: null, error: null })
+      var state = statePair[0]
+      var setState = statePair[1]
+      var pendingPair = useState({})
+      var pending = pendingPair[0]
+      var setPending = pendingPair[1]
+      var busyPair = useState(false)
+      var busy = busyPair[0]
+      var setBusy = busyPair[1]
+      var messagePair = useState(null)
+      var message = messagePair[0]
+      var setMessage = messagePair[1]
+      var undoPair = useState(null)
+      var undo = undoPair[0]
+      var setUndo = undoPair[1]
+
+      function refresh() {
+        setState({ loading: true, snapshot: state.snapshot, error: null })
+        fetchJson('/plugin-versions').then(function (snapshot) {
+          setState({ loading: false, snapshot: snapshot, error: null })
+        }, function (error) {
+          setState({ loading: false, snapshot: null, error: error.message })
+        })
+      }
+
+      useEffect(function () { refresh() }, [])
+
+      var snapshot = state.snapshot
+      var peers = snapshot === null ? [] : snapshot.peers
+      var local = snapshot === null ? null : snapshot.local
+      var names = {}
+      if (local !== null) local.plugins.forEach(function (plugin) { names[plugin.name] = true })
+      peers.forEach(function (peer) { peer.plugins.forEach(function (plugin) { names[plugin.name] = true }) })
+      var rows = Object.keys(names).sort()
+      function iconOf(pluginName) {
+        var localPlugin = local === null ? undefined : local.plugins.find(function (item) { return item.name === pluginName })
+        if (localPlugin !== undefined && typeof localPlugin.icon === 'string') return localPlugin.icon
+        for (var index = 0; index < peers.length; index += 1) {
+          var entry = peers[index].plugins.find(function (item) { return item.name === pluginName })
+          if (entry !== undefined && typeof entry.icon === 'string') return entry.icon
+        }
+        return snapshot !== null && snapshot.registryIcons ? snapshot.registryIcons[pluginName] : undefined
+      }
+
+      function select(pluginName, peerId) {
+        if (busy) return
+        var remote
+        if (peerId === 'registry') {
+          var latest = snapshot !== null && snapshot.registry ? snapshot.registry[pluginName] : undefined
+          if (latest === undefined) return
+          remote = { name: pluginName, version: latest, source: pluginName + '@' + latest }
+        } else {
+          var peer = peers.find(function (item) { return item.deviceId === peerId })
+          if (peer === undefined) return
+          remote = peer.plugins.find(function (item) { return item.name === pluginName })
+        }
+        var localPlugin = local.plugins.find(function (item) { return item.name === pluginName })
+        var target = pluginTargetState(localPlugin, remote)
+        if (target.kind !== 'install' && target.kind !== 'update') {
+          if (target.kind === 'blocked') setMessage({ bad: true, text: target.reason })
+          return
+        }
+        var next = Object.assign({}, pending)
+        var existing = next[pluginName]
+        if (existing !== undefined && existing.deviceId === peerId) delete next[pluginName]
+        else next[pluginName] = { name: pluginName, version: target.version, action: target.kind, deviceId: peerId }
+        setPending(next)
+        setMessage(null)
+      }
+
+      function adopt(peer) {
+        if (busy) return
+        var before = Object.assign({}, pending)
+        var next = {}
+        var installCount = 0
+        var updateCount = 0
+        var skipped = 0
+        rows.forEach(function (pluginName) {
+          var remote = peer.plugins.find(function (item) { return item.name === pluginName })
+          if (remote === undefined) return
+          var localPlugin = local.plugins.find(function (item) { return item.name === pluginName })
+          var target = pluginTargetState(localPlugin, remote)
+          if (target.kind === 'install') { next[pluginName] = { name: pluginName, version: target.version, action: 'install', deviceId: peer.deviceId }; installCount += 1 }
+          else if (target.kind === 'update') { next[pluginName] = { name: pluginName, version: target.version, action: 'update', deviceId: peer.deviceId }; updateCount += 1 }
+          else if (target.kind === 'blocked' || target.kind === 'older') skipped += 1
+        })
+        setPending(next)
+        setUndo({ pending: before })
+        var parts = []
+        if (updateCount > 0) parts.push(updateCount + ' 升级')
+        if (installCount > 0) parts.push(installCount + ' 安装')
+        if (skipped > 0) parts.push(skipped + ' 跳过')
+        setMessage({ text: '已选择 ' + peer.name + ' 的版本' + (parts.length === 0 ? '' : '：' + parts.join('、')) })
+      }
+
+      function clearPending() {
+        if (busy) return
+        setPending({})
+        setUndo(null)
+        setMessage(null)
+      }
+
+      function apply() {
+        if (busy) return
+        var items = Object.keys(pending).map(function (name) {
+          var item = pending[name]
+          return { name: item.name, version: item.version, action: item.action }
+        })
+        if (items.length === 0) return
+        setBusy(true)
+        setMessage(null)
+        fetchJson('/plugin-versions/apply', {
+          method: 'POST', body: JSON.stringify({ items: items }),
+        }).then(function (results) {
+          var ok = results.filter(function (item) { return item.ok }).length
+          var bad = results.length - ok
+          var nextPlugins = local.plugins.slice()
+          results.forEach(function (result) {
+            if (!result.ok) return
+            var existing = nextPlugins.find(function (plugin) { return plugin.name === result.name })
+            if (existing === undefined) {
+              nextPlugins.push({ name: result.name, version: result.version, enabled: true })
+            } else {
+              nextPlugins = nextPlugins.map(function (plugin) {
+                return plugin.name === result.name ? Object.assign({}, plugin, { version: result.version }) : plugin
+              })
+            }
+          })
+          setPending({})
+          setUndo(null)
+          setMessage({ bad: bad > 0, text: ok + ' 项成功' + (bad > 0 ? '，' + bad + ' 项失败（详见插件管理页）' : '；如插件代码变化，请重启 DSH 后端') })
+          setState({
+            loading: false,
+            error: null,
+            snapshot: Object.assign({}, snapshot, {
+              local: Object.assign({}, local, { plugins: nextPlugins }),
+            }),
+          })
+        }, function (error) {
+          setMessage({ bad: true, text: '应用失败：' + error.message })
+        }).then(function () { setBusy(false) })
+      }
+
+      var columns = '220px repeat(' + (2 + peers.length) + ', minmax(150px, 1fr))'
+      var pendingCount = Object.keys(pending).length
+
+      var body = null
+      if (state.loading && snapshot === null) body = h('div', { className: 'dssync-note' }, '读取插件版本…')
+      else if (state.error !== null) body = h('div', { className: 'dssync-note bad' }, state.error)
+      else if (snapshot === null) body = h('div', { className: 'dssync-note' }, '没有插件版本数据。')
+
+      return h('section', { className: 'dssync-sec' },
+        h(SectionHead, {
+          icon: 'plug', title: '跨设备插件', sub: '拖拽版本卡片到本机列，或点设备名全部采用',
+          right: h('div', { className: 'dssync-actions' },
+            h('button', { className: 'dssync-mini', type: 'button', disabled: busy || state.loading, onClick: refresh }, state.loading ? '刷新中…' : '刷新')),
+        }),
+        body,
+        snapshot === null ? null : h('div', { className: 'dssync-pv-toolbar' },
+          h('button', { className: 'dssync-pill primary', type: 'button', disabled: busy || pendingCount === 0, onClick: apply }, busy ? '正在应用…' : '应用变更 ' + pendingCount),
+          h('button', { className: 'dssync-pill', type: 'button', disabled: busy || pendingCount === 0, onClick: clearPending }, '清空暂存'),
+          undo !== null ? h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { setPending(undo.pending); setUndo(null); setMessage(null) } }, '撤销') : null,
+          message !== null ? h('span', { className: 'dssync-pv-msg' + (message.bad ? ' bad' : '') }, message.text) : null,
+          !snapshot.supported ? h('span', { className: 'dssync-pv-msg bad' }, '当前宿主没有 pluginManager，只能查看') : null),
+        snapshot === null ? null : (rows.length === 0
+          ? h('div', { className: 'dssync-note' }, '还没有可比较的插件。')
+          : h('div', null,
+            peers.length === 0 ? h('div', { className: 'dssync-note' }, '另一台设备上传插件快照后，这里会出现它的版本列。') : null,
+            h('div', { className: 'dssync-pv-wrap' },
+            h('div', { className: 'dssync-pv-row dssync-pv-head', style: { gridTemplateColumns: columns } },
+              h('div', { className: 'dssync-pv-name' }, h('b', null, '插件')),
+              h('div', { className: 'dssync-pv-cell' }, h('div', { className: 'dssync-pv-dev' }, h('span', null, '本机'), h('small', null, '当前'))),
+              peers.map(function (peer) {
+                return h('div', {
+                  key: peer.deviceId, className: 'dssync-pv-cell',
+                  onClick: function () { adopt(peer) },
+                }, h('div', { className: 'dssync-pv-dev adopt', title: '全部采用该设备的版本' },
+                  h('span', null, peer.name), h('small', null, '点击全部采用')))
+              }),
+              h('div', { className: 'dssync-pv-cell' }, h('div', { className: 'dssync-pv-dev' }, h('span', null, 'registry 最新'), h('small', null, 'latest')))),
+            rows.map(function (pluginName) {
+              var localPlugin = local.plugins.find(function (item) { return item.name === pluginName })
+              var selected = pending[pluginName]
+              return h('div', {
+                key: pluginName, className: 'dssync-pv-row' + (selected === undefined ? '' : ' dssync-pv-changed'),
+                style: { gridTemplateColumns: columns },
+              },
+                h('div', { className: 'dssync-pv-name' },
+                  h('span', { className: 'dssync-pv-ico' }, iconOf(pluginName) === undefined
+                    ? pluginName.slice(0, 3)
+                    : h('img', { src: iconOf(pluginName), alt: '' })),
+                  h('div', { className: 'dssync-pv-nm' }, h('b', { title: pluginName }, pluginName),
+                    h('span', null, localPlugin === undefined ? '本机未安装' : ('本机 ' + localPlugin.version)))),
+                h('div', {
+                  className: 'dssync-pv-cell',
+                  onDragOver: function (event) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' },
+                  onDrop: function (event) {
+                    event.preventDefault()
+                    try {
+                      var data = JSON.parse(event.dataTransfer.getData('text/plain'))
+                      if (data && typeof data.plugin === 'string' && typeof data.device === 'string') select(data.plugin, data.device)
+                    } catch (error) {
+                      // 忽略非卡片拖拽
+                    }
+                  },
+                },
+                  h('div', { className: 'dssync-pv-stack' },
+                    localPlugin === undefined
+                      ? h('span', { className: 'dssync-pv-empty' }, '—')
+                      : h('div', { className: 'dssync-pv-card current' }, h('span', null, localPlugin.version), h('span', { className: 'tag' }, localPlugin.enabled === false ? '已禁用' : '当前')),
+                    selected === undefined ? null : h('div', { className: 'dssync-pv-arrow' }, (localPlugin === undefined ? '—' : localPlugin.version) + ' → ' + selected.version),
+                    selected === undefined ? null : h('div', { className: 'dssync-pv-card pending' }, h('span', null, selected.version), h('span', { className: 'tag' }, '待应用')))),
+                peers.map(function (peer) {
+                  var remote = peer.plugins.find(function (item) { return item.name === pluginName })
+                  if (remote === undefined) return h('div', { key: peer.deviceId, className: 'dssync-pv-cell' }, h('span', { className: 'dssync-pv-empty' }, '—'))
+                  var target = pluginTargetState(localPlugin, remote)
+                  var isSelected = selected !== undefined && selected.deviceId === peer.deviceId
+                  var cls = 'dssync-pv-card'
+                  if (target.kind === 'blocked') cls += ' blocked'
+                  else if (target.kind === 'same') cls += ' same'
+                  else if (target.kind === 'older') cls += ' older'
+                  if (isSelected) cls += ' pending'
+                  return h('div', {
+                    key: peer.deviceId, className: 'dssync-pv-cell',
+                    onClick: function () { select(pluginName, peer.deviceId) },
+                  }, h('div', {
+                    className: cls,
+                    draggable: target.kind === 'install' || target.kind === 'update',
+                    title: target.kind === 'blocked' ? target.reason : target.kind === 'older' ? '本地较新；降级需手工处理' : '拖到本机列，或点击选中',
+                    onDragStart: function (event) {
+                      if (target.kind !== 'install' && target.kind !== 'update') return
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('text/plain', JSON.stringify({ plugin: pluginName, device: peer.deviceId }))
+                    },
+                  }, h('span', null, remote.version), h('span', { className: 'tag' }, target.kind === 'same' ? '一致' : target.kind === 'older' ? '本地较新' : target.kind === 'blocked' ? '不可执行' : isSelected ? '待应用' : '可拖拽')))
+                }),
+                (function () {
+                  var latest = snapshot.registry ? snapshot.registry[pluginName] : undefined
+                  if (latest === undefined) return h('div', { key: 'registry', className: 'dssync-pv-cell' }, h('span', { className: 'dssync-pv-empty' }, '—'))
+                  var remote = { name: pluginName, version: latest, source: pluginName + '@' + latest }
+                  var target = pluginTargetState(localPlugin, remote)
+                  var isSelected = selected !== undefined && selected.deviceId === 'registry'
+                  var cls = 'dssync-pv-card'
+                  if (target.kind === 'same') cls += ' same'
+                  else if (target.kind === 'older') cls += ' older'
+                  if (isSelected) cls += ' pending'
+                  return h('div', {
+                    key: 'registry', className: 'dssync-pv-cell',
+                    onClick: function () { select(pluginName, 'registry') },
+                  }, h('div', {
+                    className: cls,
+                    draggable: target.kind === 'install' || target.kind === 'update',
+                    title: target.kind === 'older' ? '本地较新；降级需手工处理' : '拖到本机列，或点击选中',
+                    onDragStart: function (event) {
+                      if (target.kind !== 'install' && target.kind !== 'update') return
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('text/plain', JSON.stringify({ plugin: pluginName, device: 'registry' }))
+                    },
+                  }, h('span', null, latest), h('span', { className: 'tag' }, target.kind === 'same' ? '一致' : target.kind === 'older' ? '本地较新' : isSelected ? '待应用' : '可拖拽')))
+                })()
+              )
+            })))))
+    }
+
     function SyncSettingsPage(props) {
       var model = props.model
       var state = useModel(model)
@@ -2284,6 +2619,8 @@ window.__ModuleLoader__.load({
             workspaces: workspaces,
             onRetry: function () { model.refreshWorkspaces() },
           })),
+
+        h(PluginVersionsPanel, null),
 
         h('section', { className: 'dssync-sec' },
           h(SectionHead, { icon: 'sliders', title: '同步行为', sub: '自动同步与子代理闭包', right: h('span', null, '自动同步 ' + (fields.autoSync ? '开' : '关') + ' · ' + Math.round((Number(fields.intervalMs) || 60000) / 1000) + 's') }),

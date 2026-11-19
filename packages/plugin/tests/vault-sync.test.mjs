@@ -171,6 +171,27 @@ test('读取远端 workspace/profile label', async () => {
   }
 })
 
+test('Vault 设备快照带插件列表，读端返回其他设备的 plugins', async () => {
+  const temp = createTempHome('plugin-vault-devices')
+  try {
+    const server = fakeServer()
+    const cfg = config(temp, [{ path: 'D:/work/a', title: 'a' }])
+    await syncVault({
+      ...cfg,
+      plugins: [{ name: 'dsh-context', version: '1.3.0', source: 'dsh-context@1.3.0', enabled: true }],
+    }, undefined, server.fetchImpl)
+    const result = await readWorkspaceProfileLabels(cfg, server.fetchImpl)
+    assert.equal(result.devices.length, 1)
+    assert.equal(result.devices[0].deviceId, WRITER)
+    assert.equal(result.devices[0].name, 'Writer')
+    assert.deepEqual(result.devices[0].plugins, [
+      { name: 'dsh-context', version: '1.3.0', source: 'dsh-context@1.3.0', enabled: true },
+    ])
+  } finally {
+    temp.dispose()
+  }
+})
+
 test('Vault writer 租约冲突时整轮失败且不写新记录', async () => {
   const temp = createTempHome('plugin-vault-conflict')
   try {

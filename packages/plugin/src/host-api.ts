@@ -13,6 +13,7 @@ import type { AttachmentRepairReport, CwdCorrectionResult, PassphraseCheck, Serv
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { PerfSnapshot } from './perf.ts'
+import type { PluginVersionApplyItem, PluginVersionApplyResult, PluginVersionsSnapshot } from './plugin-versions.ts'
 import type { SessionScopeResult, SessionSyncView, SetupInfo, SyncConfigSnapshot, SyncStatus, SyncWorkspaceList } from './status.ts'
 
 /** 宿主注入的控制面。 */
@@ -31,6 +32,10 @@ export interface SyncControl {
   setup(): Promise<SetupInfo>
   /** 同步列表：工作区、会话计数与当前选中项。 */
   workspaces(): Promise<SyncWorkspaceList>
+  /** 跨设备插件版本快照（本机 + Vault 里的其他设备）。 */
+  pluginVersions(): Promise<PluginVersionsSnapshot>
+  /** 应用选中的安装/升级项；逐项返回结果。 */
+  applyPluginVersions(items: readonly PluginVersionApplyItem[]): Promise<readonly PluginVersionApplyResult[]>
   /** 测试给定服务端地址是否可达；不读取配置、不携带 token。 */
   test(serverUrl: string): Promise<SyncTestResult>
   /** 手动触发一轮同步；已在运行时返回 `already-running`。 */
@@ -380,6 +385,50 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 400)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/plugin-versions',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => {
+        try {
+          return json({ ok: true, value: await control.pluginVersions() })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/plugin-versions/apply',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const body = await request.json() as { readonly items?: unknown }
+          if (!Array.isArray(body.items) || body.items.length === 0) {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要非空的 items' } }, 400)
+          }
+          const items: PluginVersionApplyItem[] = []
+          for (const item of body.items) {
+            if (item === null || typeof item !== 'object') continue
+            const record = item as Record<string, unknown>
+            const name = typeof record['name'] === 'string' ? record['name'].trim() : ''
+            const version = typeof record['version'] === 'string' ? record['version'].trim() : ''
+            const action: 'install' | 'update' | '' = record['action'] === 'install'
+              ? 'install'
+              : record['action'] === 'update' ? 'update' : ''
+            if (name !== '' && version !== '' && action !== '') items.push({ name, version, action })
+          }
+          if (items.length === 0) {
+            return json({ ok: false, error: { code: 'bad-request', message: '没有合法的插件变更项' } }, 400)
+          }
+          return json({ ok: true, value: await control.applyPluginVersions(items) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 500)
         }
       },
     },

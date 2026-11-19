@@ -162,6 +162,21 @@ node dev/console/send-message.mjs --side a --text "你好" --session "Benchmark 
 `--timeout` 改等待上限。显式选 `official` 是为了绕过老会话里保存的
 `deepseek-account` 选择（假模式下该路由已被 dev overlay 禁用）。
 
+## 测试跨设备插件版本
+
+A/B 可以在准备时额外安装 registry bundle，用来制造版本差异：
+
+```powershell
+$env:DEV_CONSOLE_EXTRA_A='dsh-plugin-release-probe@0.0.2'
+$env:DEV_CONSOLE_EXTRA_B='dsh-plugin-release-probe@0.0.8'
+pnpm dev:panel
+```
+
+- 变量按侧读取：`DEV_CONSOLE_EXTRA_A` / `DEV_CONSOLE_EXTRA_B`，逗号分隔多个 `pkg@version`；
+- `dsh-plugin-release-probe` 是发布在 npm 上的空壳 bundle（`0.0.2`–`0.0.8`），
+  只插入一条空插件，适合做版本对齐测试；
+- 准备完成后 A/B 的插件列表会不同；打开同步设置里的「跨设备插件」即可看到差异。
+
 ## 服务端初始化密钥
 
 顶部“同步服务端”徽标可点击，打开服务端面板：

@@ -74,6 +74,15 @@ function control(overrides = {}) {
       remoteWorkspaces: [],
     })),
     test: overrides.test ?? (async () => ({ ok: true })),
+    pluginVersions: overrides.pluginVersions ?? (async () => ({
+      supported: true,
+      generatedAt: 1,
+      local: { deviceId: 'dev-1', name: 'dev', plugins: [] },
+      peers: [],
+    })),
+    applyPluginVersions: overrides.applyPluginVersions ?? (async (items) => items.map((item) => ({
+      name: item.name, version: item.version, action: item.action, ok: true,
+    }))),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
     cwdDecision: overrides.cwdDecision ?? (async () => ({ ok: true, status: 'corrected' })),
     repairAttachments: overrides.repairAttachments ?? (async (sessionId) => ({
@@ -143,6 +152,8 @@ test('宿主 API：注册全部精确路由', () => {
     ['/api/session-cloudsync/workspaces/resolve', ['POST'], 'buffered'],
     ['/api/session-cloudsync/workspaces/create', ['POST'], 'buffered'],
     ['/api/session-cloudsync/directory/pick', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/plugin-versions', ['GET'], 'buffered'],
+    ['/api/session-cloudsync/plugin-versions/apply', ['POST'], 'buffered'],
     ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
     ['/api/session-cloudsync/session-scope', ['POST'], 'buffered'],
     ['/api/session-cloudsync/attachments/repair', ['POST'], 'buffered'],
@@ -151,6 +162,39 @@ test('宿主 API：注册全部精确路由', () => {
     ['/api/session-cloudsync/replace', ['POST'], 'buffered'],
     ['/api/session-cloudsync/workspaces/bind', ['POST'], 'buffered'],
   ])
+})
+
+test('宿主 API：plugin-versions 返回快照，apply 只接受合法 items', async () => {
+  const routes = createHostApi(control({
+    pluginVersions: async () => ({
+      supported: true,
+      generatedAt: 2,
+      local: { deviceId: 'dev-1', name: 'dev', plugins: [{ name: 'a', version: '1.0.0', enabled: true }] },
+      peers: [{ deviceId: 'dev-2', name: 'peer', plugins: [{ name: 'a', version: '2.0.0', source: 'a@2.0.0', enabled: true }] }],
+    }),
+    applyPluginVersions: async (items) => items.map((item) => ({
+      name: item.name, version: item.version, action: item.action, ok: true,
+    })),
+  }))
+  const snapshot = await bodyOf(await route(routes, '/api/session-cloudsync/plugin-versions').fetch(
+    new Request('http://host/api/session-cloudsync/plugin-versions'),
+  ))
+  assert.equal(snapshot.value.peers[0].name, 'peer')
+
+  const applied = await bodyOf(await route(routes, '/api/session-cloudsync/plugin-versions/apply').fetch(
+    new Request('http://host/api/session-cloudsync/plugin-versions/apply', {
+      method: 'POST',
+      body: JSON.stringify({ items: [{ name: 'a', version: '2.0.0', action: 'update' }] }),
+    }),
+  ))
+  assert.deepEqual(applied.value, [{ name: 'a', version: '2.0.0', action: 'update', ok: true }])
+
+  const bad = await route(routes, '/api/session-cloudsync/plugin-versions/apply').fetch(
+    new Request('http://host/api/session-cloudsync/plugin-versions/apply', {
+      method: 'POST', body: JSON.stringify({ items: [{ name: 'a' }] }),
+    }),
+  )
+  assert.equal(bad.status, 400)
 })
 
 test('宿主 API：config 返回单一快照', async () => {

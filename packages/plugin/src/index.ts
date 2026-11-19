@@ -55,7 +55,16 @@ import { DeviceLeaseKeeper } from './device-lease.ts'
 import { SyncScheduler } from './scheduler.ts'
 import { readPullJournal, writePlanDiagnostics, writePullJournal, STATE_VERSION, type PullJournal } from './state.ts'
 import { emptyBindings, keyForPath, pathForKey, readBindings, bindWorkspace as bindWorkspaceFile, type WorkspaceBindings } from './bindings.ts'
-import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault } from './vault-sync.ts'
+import { vaultKeyForConfig, readWorkspaceProfileLabels, syncVault, type PeerDeviceProfile } from './vault-sync.ts'
+import {
+  snapshotsFromBundles,
+  type PluginManagerLike,
+  type PluginVersionApplyItem,
+  type PluginVersionApplyResult,
+  type PluginVersionSnapshot,
+  type PluginVersionView,
+  type PluginVersionsSnapshot,
+} from './plugin-versions.ts'
 import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
 import type { SessionScopeResult, SetupInfo, SyncConfigSnapshot, SyncSessionCandidate, SyncTaskView, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
@@ -591,6 +600,11 @@ export function apply(ctx: Context, config: Config): void {
   let workspaceLabels: Record<string, string> = {}
   /** workspaceKey → 远端记录里的来源工作区路径（HMAC 已校验）。 */
   let workspacePaths: Record<string, string> = {}
+  /** Vault 里其他设备的最新 device/profile。 */
+  let peerDevices: readonly PeerDeviceProfile[] = []
+  /** 本机 bundle 快照缓存；匹配面板和 Vault 上行共用。 */
+  let localPluginSnapshots: readonly PluginVersionView[] = []
+  let localPluginSnapshotsAt = 0
   let labelsIdentity: string | undefined
   let labelsFetchedAt = 0
   let remoteInventory: {
@@ -621,6 +635,7 @@ export function apply(ctx: Context, config: Config): void {
       })
       workspaceLabels = result.labels
       workspacePaths = result.paths
+      peerDevices = result.devices
       labelsIdentity = identity
       labelsFetchedAt = Date.now()
     } catch (error: unknown) {
@@ -793,6 +808,141 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
+  /** 读取本机已安装 bundle 快照；30 秒缓存，安装/匹配后主动失效。 */
+  const localPluginSnapshot = async (): Promise<readonly PluginVersionView[]> => {
+    if (Date.now() - localPluginSnapshotsAt < 30_000) return localPluginSnapshots
+    const manager = ctx.get('pluginManager') as unknown as PluginManagerLike | undefined
+    if (manager === undefined || typeof manager.listBundles !== 'function') return localPluginSnapshots
+    // pluginManager 在 update/install 落盘后的极短时间内可能读到半完成状态；
+    // 如果上一轮有插件、这一轮突然为空，重试几次再接受空列表。
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const next = snapshotsFromBundles(await manager.listBundles())
+        if (next.length > 0 || localPluginSnapshots.length === 0) {
+          localPluginSnapshots = next
+          localPluginSnapshotsAt = Date.now()
+          return localPluginSnapshots
+        }
+      } catch (error: unknown) {
+        logger.warn(`dsh-session-cloudsync: 读取本机插件版本失败：${error instanceof Error ? error.message : String(error)}`)
+        return localPluginSnapshots
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    localPluginSnapshots = []
+    localPluginSnapshotsAt = Date.now()
+    return localPluginSnapshots
+  }
+
+  /** plugin name → registry latest；10 分钟缓存，失败项也缓存但期限更短。 */
+  const registryVersionCache = new Map<string, { readonly at: number; readonly version?: string }>()
+  /** `name@version` → 图标 data URL；10 分钟缓存。 */
+  const registryIconCache = new Map<string, { readonly at: number; readonly icon?: string }>()
+  const registryBaseOf = async (manager: PluginManagerLike | undefined): Promise<string> => {
+    let base = 'https://registry.npmjs.org'
+    try {
+      const plan = await manager?.registries?.()
+      if (plan?.resolved !== null && plan?.resolved !== undefined && plan.resolved !== '') base = plan.resolved
+      else if (plan?.registry !== null && plan?.registry !== undefined && plan.registry !== '') base = plan.registry
+    } catch {
+      // 读不到 registry 配置时回退到 npmjs
+    }
+    return base.replace(/\/+$/u, '')
+  }
+  const latestRegistryVersions = async (names: readonly string[]): Promise<Record<string, string>> => {
+    const manager = ctx.get('pluginManager') as unknown as PluginManagerLike | undefined
+    const base = await registryBaseOf(manager)
+    const result: Record<string, string> = {}
+    const queue = [...new Set(names)].slice(0, 64)
+    const worker = async (): Promise<void> => {
+      const name = queue.shift()
+      if (name === undefined) return
+      const cached = registryVersionCache.get(name)
+      if (cached !== undefined && Date.now() - cached.at < (cached.version === undefined ? 60_000 : 10 * 60_000)) {
+        if (cached.version !== undefined) result[name] = cached.version
+      } else {
+        try {
+          const response = await fetch(`${base}/${encodeURIComponent(name)}/latest`, {
+            headers: { accept: 'application/json' },
+            signal: AbortSignal.timeout(5_000),
+          })
+          if (response.ok) {
+            const body = await response.json() as { version?: unknown }
+            if (typeof body.version === 'string' && body.version !== '') {
+              result[name] = body.version
+              registryVersionCache.set(name, { at: Date.now(), version: body.version })
+            } else {
+              registryVersionCache.set(name, { at: Date.now() })
+            }
+          } else {
+            registryVersionCache.set(name, { at: Date.now() })
+          }
+        } catch {
+          registryVersionCache.set(name, { at: Date.now() })
+        }
+      }
+      await worker()
+    }
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, () => worker()))
+    return result
+  }
+
+  /**
+   * 从 registry 元数据 + CDN 读取一个版本的图标，转成 data URL。
+   * 只接受包内相对路径和常见图片类型，失败返回 undefined。
+   */
+  const registryIcon = async (name: string, version: string, base: string): Promise<string | undefined> => {
+    if (!/^(@[^/]+\/)?[^/]+$/u.test(name) || version === '') return undefined
+    const key = `${name}@${version}`
+    const cached = registryIconCache.get(key)
+    if (cached !== undefined && Date.now() - cached.at < (cached.icon === undefined ? 60_000 : 10 * 60_000)) return cached.icon
+    try {
+      const response = await fetch(`${base}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!response.ok) {
+        registryIconCache.set(key, { at: Date.now() })
+        return undefined
+      }
+      const body = await response.json() as { icon?: unknown }
+      const rawPath = typeof body.icon === 'string' ? body.icon.replace(/^\.\//u, '') : ''
+      if (rawPath === '' || rawPath.startsWith('/') || rawPath.includes('..') || rawPath.length > 512) {
+        registryIconCache.set(key, { at: Date.now() })
+        return undefined
+      }
+      if (!/\.(svg|png|jpe?g|webp)$/iu.test(rawPath)) {
+        registryIconCache.set(key, { at: Date.now() })
+        return undefined
+      }
+      const sources = [
+        `https://cdn.jsdelivr.net/npm/${name}@${version}/${rawPath}`,
+        `https://unpkg.com/${name}@${version}/${rawPath}`,
+        `https://registry.npmmirror.com/${name}/${version}/files/${rawPath}`,
+      ]
+      for (const url of sources) {
+        try {
+          const file = await fetch(url, { signal: AbortSignal.timeout(5_000) })
+          if (!file.ok) continue
+          const bytes = Buffer.from(await file.arrayBuffer())
+          if (bytes.length > 256 * 1024) continue
+          const type = (file.headers.get('content-type') ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? ''
+          if (!type.startsWith('image/')) continue
+          const icon = `data:${type};base64,${bytes.toString('base64')}`
+          registryIconCache.set(key, { at: Date.now(), icon })
+          return icon
+        } catch {
+          // 换下一个 CDN
+        }
+      }
+      registryIconCache.set(key, { at: Date.now() })
+      return undefined
+    } catch {
+      registryIconCache.set(key, { at: Date.now() })
+      return undefined
+    }
+  }
+
   const runVault = async (): Promise<void> => {
     if (statePath === undefined) return
     refreshConfig()
@@ -814,6 +964,7 @@ export function apply(ctx: Context, config: Config): void {
       deviceName,
       stateDir: join(dirname(statePath), 'vault'),
       workspaces,
+      plugins: await localPluginSnapshot(),
       ...process.env.DSH_VERSION === undefined ? {} : { dshVersion: process.env.DSH_VERSION },
       ...process.env.DSH_PROFILE === undefined ? {} : { dshProfile: process.env.DSH_PROFILE },
     }, logger)
@@ -2148,6 +2299,102 @@ export function apply(ctx: Context, config: Config): void {
     }),
     setup,
     workspaces,
+    pluginVersions: async (): Promise<PluginVersionsSnapshot> => {
+      await refreshWorkspaceLabels()
+      const identity = deviceIdentity.snapshot()
+      const plugins = await localPluginSnapshot()
+      const peers = peerDevices.filter((device) => device.deviceId !== identity?.deviceId)
+      const names = [
+        ...plugins.map((plugin) => plugin.name),
+        ...peers.flatMap((device) => device.plugins.map((plugin) => plugin.name)),
+      ]
+      const registry = await latestRegistryVersions(names)
+      const manager = ctx.get('pluginManager') as unknown as PluginManagerLike | undefined
+      const base = await registryBaseOf(manager)
+      const wanted = new Map<string, { readonly name: string; readonly version: string }>()
+      for (const peer of peers) {
+        for (const plugin of peer.plugins) {
+          if ((plugin as PluginVersionView).icon !== undefined) continue
+          wanted.set(`${plugin.name}@${plugin.version}`, { name: plugin.name, version: plugin.version })
+        }
+      }
+      for (const [name, version] of Object.entries(registry)) {
+        wanted.set(`${name}@${version}`, { name, version })
+      }
+      const icons = new Map<string, string>()
+      const queue = [...wanted.values()].slice(0, 32)
+      const worker = async (): Promise<void> => {
+        const item = queue.shift()
+        if (item === undefined) return
+        const icon = await registryIcon(item.name, item.version, base)
+        if (icon !== undefined) icons.set(`${item.name}@${item.version}`, icon)
+        await worker()
+      }
+      await Promise.all(Array.from({ length: Math.min(3, queue.length) }, () => worker()))
+      const attachIcons = (entries: readonly PluginVersionView[]): readonly PluginVersionView[] => entries.map((entry) => {
+        if (entry.icon !== undefined) return entry
+        const icon = icons.get(`${entry.name}@${entry.version}`)
+        return icon === undefined ? entry : { ...entry, icon }
+      })
+      const registryIcons: Record<string, string> = {}
+      for (const [name, version] of Object.entries(registry)) {
+        const icon = icons.get(`${name}@${version}`)
+        if (icon !== undefined) registryIcons[name] = icon
+      }
+      return {
+        supported: manager !== undefined,
+        generatedAt: Date.now(),
+        local: {
+          deviceId: identity?.deviceId ?? '',
+          name: deviceName,
+          plugins,
+        },
+        peers: peers.map((device) => ({ ...device, plugins: attachIcons(device.plugins) })),
+        registry,
+        registryIcons,
+      }
+    },
+    applyPluginVersions: async (items: readonly PluginVersionApplyItem[]): Promise<readonly PluginVersionApplyResult[]> => {
+      const manager = ctx.get('pluginManager') as unknown as PluginManagerLike | undefined
+      const results: PluginVersionApplyResult[] = []
+      for (const item of items) {
+        try {
+          if (manager === undefined || typeof manager.installBundle !== 'function') {
+            throw new Error('宿主没有提供 pluginManager')
+          }
+          if (typeof item.name !== 'string' || item.name.trim() === '' || typeof item.version !== 'string') {
+            throw new Error('插件名或版本非法')
+          }
+          if (item.action === 'install') {
+            if (typeof manager.installBundle !== 'function') throw new Error('宿主不支持安装 bundle')
+            await manager.installBundle(`${item.name}@${item.version}`, {
+              enabled: true,
+              saveExact: true,
+              expected: { name: item.name, version: item.version },
+            })
+          } else {
+            if (typeof manager.updateBundle !== 'function') throw new Error('宿主不支持升级 bundle')
+            await manager.updateBundle(item.name, item.version)
+          }
+          results.push({ name: item.name, version: item.version, action: item.action, ok: true })
+        } catch (error: unknown) {
+          const record = error !== null && typeof error === 'object' ? error as Record<string, unknown> : {}
+          const pending = Array.isArray(record['pendingBuilds'])
+            ? record['pendingBuilds'].filter((value): value is string => typeof value === 'string')
+            : undefined
+          results.push({
+            name: item.name,
+            version: item.version,
+            action: item.action,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            ...pending === undefined ? {} : { pendingBuilds: pending },
+          })
+        }
+        localPluginSnapshotsAt = 0
+      }
+      return results
+    },
     test: async (serverUrl: string) => testConnection(serverUrl, fetch, engineConfig.requestTimeoutMs),
     probe: async (serverUrl: string, token: string): Promise<ServerProbeResult> => {
       // 设置页没有裸 token；留空时回退到已解析的凭据，避免为了看状态再输一遍。
