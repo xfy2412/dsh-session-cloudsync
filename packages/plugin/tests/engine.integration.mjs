@@ -9,7 +9,6 @@ import {
   classifySyncError,
   correctCwd,
   probeServer,
-  pullOnce,
   pullSessionTask,
   syncOnce as syncOnceRaw,
   verifyPassphrase,
@@ -127,8 +126,7 @@ const sessions = {
   flush: async () => true,
 }
 
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply', async () => {
+test('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 apply', async () => {
   const temp = createTempHome('plugin-v2')
   try {
     const db = openDatabase(temp.dataDir)
@@ -205,41 +203,30 @@ test.skip('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 a
       const reusedManifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
       assert.equal(reusedManifest.body.value.manifest.workspaceKey, workspaceKey)
 
-      // 活跃会话本轮不 apply，游标必须停在它之前，否则 push 会一直 remote-ahead。
-      const active = await pullOnce({
+      // 活跃会话本轮不 apply，任务返回 local-active 并留下 pending。
+      const active = await pullSessionTask({
         persistence: fakeStore(undefined),
         sessions: { ...sessions, get: () => ({}) },
         config,
         workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
-      }, { revision: 0 })
-      assert.equal(active.sessions[0].status, 'local-active')
-      assert.equal(active.sessions[0].totalEvents, 6)
-      assert.equal(active.sessions[0].pendingEvents, 6)
-      assert.equal(active.revision, 0)
+      }, sessionId, false)
+      assert.equal(active.status, 'local-active')
+      assert.equal(active.totalEvents, 6)
+      assert.equal(active.pendingEvents, 6)
 
-      // 未映射报告带 cursor revision；游标越过之后不会再次交付。
-      const firstPull = await pullOnce({
+      const unmappedTask = await pullSessionTask({
         persistence: fakeStore(undefined),
         sessions,
         config,
         workspacePathOf: () => undefined,
-      }, { revision: 0 })
-      assert.equal(firstPull.sessions[0].status, 'unmapped')
-      assert.equal(firstPull.sessions[0].compression, 'zstd')
-      assert.equal(typeof firstPull.sessions[0].revision, 'number')
-      assert.equal(typeof firstPull.cursor, 'string')
-      const secondPull = await pullOnce({
-        persistence: fakeStore(undefined),
-        sessions,
-        config,
-        workspacePathOf: () => undefined,
-      }, { revision: firstPull.revision, cursor: firstPull.cursor })
-      assert.deepEqual(secondPull.sessions, [])
+      }, sessionId, false)
+      assert.equal(unmappedTask.status, 'unmapped')
+      assert.equal(unmappedTask.workspaceKey, workspaceKey)
 
       const mappedStore = fakeStore(undefined)
       const mappedProgress = []
       const pullRequests = []
-      const mapped = await pullOnce({
+      const mapped = await pullSessionTask({
         persistence: mappedStore,
         sessions,
         config,
@@ -249,13 +236,12 @@ test.skip('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 a
           return fetch(input, init)
         },
         onProgress: (progress) => { mappedProgress.push(progress) },
-      })
+      }, sessionId, false)
       assert.ok(pullRequests.some((url) => url.endsWith('/v2/blobs/batch/read')))
-      assert.equal(mapped.sessions[0].status, 'pulled')
-      assert.equal(mapped.sessions[0].compression, 'zstd')
-      assert.equal(mapped.sessions[0].applied, 6)
-      assert.equal(mapped.sessions[0].totalEvents, 6)
-      assert.equal(mapped.sessions[0].pendingEvents, 0)
+      assert.equal(mapped.status, 'pulled')
+      assert.equal(mapped.applied, 6)
+      assert.equal(mapped.totalEvents, 6)
+      assert.equal(mapped.pendingEvents, 0)
       assert.ok(mappedProgress.some((progress) => progress.direction === 'pull'
         && progress.totalEvents === 6 && progress.doneEvents === 6))
       assert.equal(mappedStore.sessions.get(sessionId).header.cwd, 'D:/mapped')
@@ -292,16 +278,14 @@ test.skip('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 a
       assert.deepEqual(existingAttached, [])
       assert.deepEqual(existingApplied, ['end:' + sessionId])
 
-      // 已加载但已经是最新：只读判断后返回 up-to-date，不能因为 live 就兜底
-      // local-active 卡住游标。
-      const liveCurrent = await pullOnce({
+      // 已加载但已经是最新：只读判断后返回 up-to-date，不能因为 live 就兜底 local-active。
+      const liveCurrent = await pullSessionTask({
         persistence: mappedStore,
         sessions: { ...sessions, get: () => ({}) },
         config,
         workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
-      }, { revision: 0 })
-      assert.equal(liveCurrent.sessions[0].status, 'up-to-date')
-      assert.equal(liveCurrent.revision, mapped.revision)
+      }, sessionId, true)
+      assert.equal(liveCurrent.status, 'up-to-date')
 
       // 本地落后但官方/其他插件已持有 write：先读判断，再探测 write；
       // 冲突必须归为 write-owned，而不是 error/unknown。
@@ -315,35 +299,34 @@ test.skip('V2 推送写入 workspaceKey，拉取按映射落点，未映射不 a
         }
         return originalOpen(id)
       }
-      const owned = await pullOnce({
+      const owned = await pullSessionTask({
         persistence: ownedStore,
         sessions,
         config,
         workspacePathOf: (key) => key === workspaceKey ? 'D:/mapped' : undefined,
-      }, { revision: 0 })
-      assert.equal(owned.sessions[0].status, 'write-owned')
-      assert.equal(owned.sessions[0].pendingEvents, 4)
+      }, sessionId, true)
+      assert.equal(owned.status, 'write-owned')
+      assert.equal(owned.pendingEvents, 4)
       assert.equal(ownedStore.sessions.get(sessionId).events.length, 2)
-      assert.ok(owned.revision < mapped.revision, 'write-owned 必须把游标停在会话之前')
 
       const unmappedStore = fakeStore(undefined)
-      const unmapped = await pullOnce({
+      const unmapped = await pullSessionTask({
         persistence: unmappedStore,
         sessions,
         config,
         workspacePathOf: () => undefined,
-      })
-      assert.equal(unmapped.sessions[0].status, 'unmapped')
+      }, sessionId, false)
+      assert.equal(unmapped.status, 'unmapped')
       assert.equal(unmappedStore.sessions.has(sessionId), false)
 
       const pulledStore = fakeStore(undefined)
-      const pulled = await pullOnce({
+      const pulled = await pullSessionTask({
         persistence: pulledStore,
         sessions,
         config: { ...config, syncSessionIds: [] },
         workspacePathOf: () => 'D:/mapped',
-      })
-      assert.equal(pulled.sessions[0].status, 'pulled')
+      }, sessionId, false)
+      assert.equal(pulled.status, 'pulled')
       assert.equal(pulledStore.sessions.has(sessionId), true)
     } finally {
       await close()
@@ -428,8 +411,7 @@ test('推送引擎：首次推送 header+批次，重复执行增量追加', asy
   }
 })
 
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允许跨界批次', async () => {
+test('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致则允许跨界批次', async () => {
   const temp = createTempHome('plugin-prefix')
   try {
     const db = openDatabase(temp.dataDir)
@@ -472,24 +454,22 @@ test.skip('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致�
       // 拉取方向：本地只到 59，但第 50 条不同；跨界的远端批次也必须比较重叠段。
       const localDiverged = events(0, 59)
       localDiverged[50].data.text = 'tampered'
-      const pullDiverged = await pullOnce({
+      await assert.rejects(pullSessionTask({
         persistence: fakeStore(header, localDiverged),
         sessions,
         config,
         workspacePathOf: () => localCwd,
-      }, { revision: 0 })
-      assert.equal(pullDiverged.sessions[0].status, 'error')
-      assert.equal(pullDiverged.sessions[0].kind, 'diverged')
+      }, sessionId, true), /共享前缀事件 seq 50 不一致/u)
 
       // 本地只到 59 且完全相同：跨界批次通过，拉取 60..119。
       const localAhead = fakeStore(header, events(0, 59))
-      const pulled = await pullOnce({
+      const pulled = await pullSessionTask({
         persistence: localAhead,
         sessions,
         config,
         workspacePathOf: () => localCwd,
-      }, { revision: 0 })
-      assert.equal(pulled.sessions[0].status, 'pulled')
+      }, sessionId, true)
+      assert.equal(pulled.status, 'pulled')
       assert.equal(localAhead.sessions.get(sessionId).events.length, 120)
 
       // 本地和远端完全一致：up-to-date，但仍会校验共享前缀。
@@ -512,8 +492,7 @@ test.skip('共享前缀校验：raw 前缀不同则拒绝推送/拉取，一致�
   }
 })
 
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('空标记对撞：end-seed 只有 time 不同时按等价处理并继续推送/拉取', async () => {
+test('空标记对撞：end-seed 只有 time 不同时按等价处理并继续推送/拉取', async () => {
   const temp = createTempHome('plugin-end-seed')
   try {
     const db = openDatabase(temp.dataDir)
@@ -570,11 +549,12 @@ test.skip('空标记对撞：end-seed 只有 time 不同时按等价处理并继
 
       // 拉取方向：设备 C 的 seq 10 也是自己的 end-seed，应被等价处理并拉到 11..14。
       const cStore = fakeStore(header, [...prefix, marker(10, 7000)])
-      const pulled = await pullOnce(
+      const pulled = await pullSessionTask(
         { persistence: cStore, sessions, config, workspacePathOf: () => localCwd },
-        { revision: 0 },
+        sessionId,
+        true,
       )
-      assert.equal(pulled.sessions[0].status, 'pulled')
+      assert.equal(pulled.status, 'pulled')
       assert.equal(cStore.sessions.get(sessionId).events.length, 15)
       assert.equal(cStore.sessions.get(sessionId).events[14].seq, 14)
 
@@ -612,8 +592,7 @@ test.skip('空标记对撞：end-seed 只有 time 不同时按等价处理并继
   }
 })
 
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
+test('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
   const temp = createTempHome('plugin-nonportable')
   try {
     const db = openDatabase(temp.dataDir)
@@ -649,15 +628,15 @@ test.skip('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
 
       // 拉取到另一个工作区根时，最后 cwd 仍在工作区外，只告警且暂不挂载。
       const attached = []
-      const pulled = await pullOnce({
+      const pulled = await pullSessionTask({
         persistence: fakeStore(undefined),
         sessions,
         config,
         workspacePathOf: () => localCwd,
         attach: async (id) => { attached.push(id) },
-      }, { revision: 0 })
-      assert.equal(pulled.sessions[0].status, 'pulled')
-      assert.equal(pulled.sessions[0].cwdNonPortable, true)
+      }, sessionId, false)
+      assert.equal(pulled.status, 'pulled')
+      assert.equal(pulled.cwdNonPortable, true)
       assert.deepEqual(attached, [])
 
       // 后来的 change 回到工作区内，源端 nonPortable 应清除。
@@ -671,14 +650,14 @@ test.skip('nonPortable：只看最后 cwd，且不阻塞推拉', async () => {
       assert.equal(repushed.sessions[0].status, 'pushed')
       assert.equal(repushed.sessions[0].cwdNonPortable, undefined)
 
-      const pulledInside = await pullOnce({
+      const pulledInside = await pullSessionTask({
         persistence: fakeStore(undefined),
         sessions,
         config,
         workspacePathOf: () => localCwd,
-      }, { revision: 0 })
-      assert.equal(pulledInside.sessions[0].status, 'pulled')
-      assert.equal(pulledInside.sessions[0].cwdNonPortable, undefined)
+      }, sessionId, false)
+      assert.equal(pulledInside.status, 'pulled')
+      assert.equal(pulledInside.cwdNonPortable, undefined)
     } finally {
       await close()
       db.close()
@@ -756,8 +735,7 @@ test('接收端 cwd 修正：租约内 append 并立即推送', async () => {
   }
 })
 
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('拉取引擎：一个只读阶段失败后继续其他安全会话', async () => {
+test('拉取引擎：一个只读阶段失败后继续其他安全会话', async () => {
   const temp = createTempHome('plugin-pull-continue')
   try {
     const db = openDatabase(temp.dataDir)
@@ -794,21 +772,23 @@ test.skip('拉取引擎：一个只读阶段失败后继续其他安全会话', 
       divergent[1].data.text = 'tampered'
       const local = fakeStore(headerA, divergent)
       const attached = []
-      const result = await pullOnce({
+      await assert.rejects(pullSessionTask({
         persistence: local,
         sessions,
         config,
         workspacePathOf: () => 'D:/work',
         attach: async (id) => { attached.push(id) },
-      }, { revision: 0 })
+      }, headerA.id, true), /共享前缀事件 seq 1 不一致/u)
+      const safe = await pullSessionTask({
+        persistence: local,
+        sessions,
+        config,
+        workspacePathOf: () => 'D:/work',
+        attach: async (id) => { attached.push(id) },
+      }, headerB.id, false)
 
-      const failed = result.sessions.find((entry) => entry.sessionId === headerA.id)
-      const safe = result.sessions.find((entry) => entry.sessionId === headerB.id)
-      assert.equal(failed.status, 'error')
-      assert.equal(failed.kind, 'diverged')
       assert.equal(safe.status, 'pulled')
       assert.deepEqual(attached, [headerB.id])
-      assert.equal(result.revision, 0)
       assert.equal(local.sessions.has(headerB.id), true)
     } finally {
       await close()
@@ -898,8 +878,7 @@ test('推送引擎：白名单只选根时同步其子代理闭包', async () =>
   }
 })
 
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('拉取引擎：子代理先创建，根会话后创建', async () => {
+test('拉取引擎：子代理先创建，根会话后创建', async () => {
   const temp = createTempHome('plugin-pull-closure')
   try {
     const db = openDatabase(temp.dataDir)
@@ -941,14 +920,15 @@ test.skip('拉取引擎：子代理先创建，根会话后创建', async () => 
 
       const storeB = fakeStore(undefined)
       const attached = []
-      const pulled = await pullOnce({
+      const config = {
+        serverUrl: base,
+        token: device.token,
+        passphrase: 'pull closure pass',
+      }
+      const childTask = await pullSessionTask({
         persistence: storeB,
         sessions,
-        config: {
-          serverUrl: base,
-          token: device.token,
-          passphrase: 'pull closure pass',
-        },
+        config,
         workspacePathOf: () => 'D:/b',
         attach: async (id) => {
           attached.push({
@@ -957,14 +937,27 @@ test.skip('拉取引擎：子代理先创建，根会话后创建', async () => 
             events: storeB.sessions.get(id)?.events.length ?? -1,
           })
         },
-      }, { revision: 0 })
+      }, child.id, false)
+      const rootTask = await pullSessionTask({
+        persistence: storeB,
+        sessions,
+        config,
+        workspacePathOf: () => 'D:/b',
+        attach: async (id) => {
+          attached.push({
+            id,
+            created: storeB.created.length,
+            events: storeB.sessions.get(id)?.events.length ?? -1,
+          })
+        },
+      }, root.id, false)
 
-      assert.equal(pulled.configured, true)
+      assert.equal(childTask.status, 'pulled')
+      assert.equal(rootTask.status, 'pulled')
       assert.deepEqual(storeB.created, [child.id, root.id])
-      assert.deepEqual(pulled.sessions.map((entry) => entry.sessionId), [child.id, root.id])
-      // 所有会话先 apply 完，最后才挂载；子代理先于根，但两者挂载时已有完整闭包。
+      // 任务模式按会话逐个 apply/挂载：子代理可以先于根被拉取。
       assert.deepEqual(attached, [
-        { id: child.id, created: 2, events: 3 },
+        { id: child.id, created: 1, events: 3 },
         { id: root.id, created: 2, events: 2 },
       ])
     } finally {
@@ -1076,8 +1069,7 @@ test('错误分类：M4 故障矩阵', () => {
   }
 })
 
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('拉取引擎：append 失败留下 pending，重启后按 pending 补完', async () => {
+test('拉取引擎：append 失败后同一会话可重试成功', async () => {
   const temp = createTempHome('plugin-pending')
   try {
     const db = openDatabase(temp.dataDir)
@@ -1107,89 +1099,21 @@ test.skip('拉取引擎：append 失败留下 pending，重启后按 pending 补
       assert.equal((await syncOnce({ persistence: storeA, sessions, config, isTailOpen: () => false })).sessions[0].status, 'pushed')
 
       const storeB = fakeStore(undefined, [], { failAppendOnce: true })
-      let pending
       const deps = {
         persistence: storeB,
         sessions,
         config,
         workspacePathOf: () => 'D:/b',
         attach: async () => {},
-        beforeApply: async (id, targetSeq) => {
-          pending = { sessionId: id, targetSeq, at: 1 }
-        },
-        afterApply: async () => { pending = undefined },
       }
 
-      const first = await pullOnce(deps, { revision: 0 })
-      assert.equal(first.sessions[0].status, 'error')
-      assert.equal(first.sessions[0].kind, 'unknown')
-      assert.ok(pending !== undefined, 'append 失败后应留下 pending')
+      await assert.rejects(pullSessionTask(deps, sessionId, false), /simulated append failure/u)
       assert.equal(storeB.sessions.get(sessionId).events.length, 0)
 
-      const second = await pullOnce(deps, { revision: 0, pending })
-      assert.equal(second.sessions.some((entry) => entry.status === 'pulled' || entry.status === 'up-to-date'), true)
-      assert.equal(pending, undefined, '恢复成功后应清除 pending')
+      const second = await pullSessionTask(deps, sessionId, storeB.sessions.has(sessionId))
+      assert.ok(second.status === 'pulled' || second.status === 'up-to-date')
       assert.equal(storeB.sessions.get(sessionId).events.length, 60)
       assert.equal(storeB.sessions.get(sessionId).events.at(-1).seq, 59)
-    } finally {
-      await close()
-      db.close()
-    }
-  } finally {
-    temp.dispose()
-  }
-})
-
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('拉取引擎：一个会话失败后停止，不覆盖它的 pending', async () => {
-  const temp = createTempHome('plugin-pending-stop')
-  try {
-    const db = openDatabase(temp.dataDir)
-    const device = createDevice(db, 'pending-stop-test')
-    const { base, close } = await listenServer(db, temp.dataDir)
-    try {
-      await holdLease(base, device)
-
-      const firstId = 'session-pending-stop-1'
-      const secondId = 'session-pending-stop-2'
-      const header = (id, createdAt) => ({
-        id,
-        version: 4,
-        createdAt,
-        isSeeded: false,
-        delegationDepth: 0,
-        agentPreset: 'standard',
-        cwd: 'D:/a',
-      })
-      const storeA = fakeStore(header(firstId, 100), events(0, 3))
-      storeA.sessions.set(secondId, { header: header(secondId, 200), events: events(0, 5) })
-      const config = {
-        serverUrl: base,
-        token: device.token,
-        passphrase: 'pending stop pass',
-        batchEvents: 20,
-      }
-      const pushed = await syncOnce({ persistence: storeA, sessions, config, isTailOpen: () => false })
-      assert.equal(pushed.sessions.length, 2)
-
-      const storeB = fakeStore(undefined, [], { failAppendOnce: true })
-      let pending
-      const pulled = await pullOnce({
-        persistence: storeB,
-        sessions,
-        config,
-        workspacePathOf: () => 'D:/b',
-        attach: async () => {},
-        beforeApply: async (id, targetSeq) => { pending = { sessionId: id, targetSeq, at: 1 } },
-        afterApply: async (id) => {
-          if (pending?.sessionId === id) pending = undefined
-        },
-      }, { revision: 0 })
-
-      assert.equal(pulled.sessions.length, 1, '第一个会话失败后应立即停止')
-      assert.equal(pulled.sessions[0].status, 'error')
-      assert.deepEqual(pending?.sessionId, pulled.sessions[0].sessionId)
-      assert.equal(storeB.sessions.size, 1, '不应开始创建第二个会话')
     } finally {
       await close()
       db.close()
@@ -1232,8 +1156,7 @@ test('推送引擎：未配置时不动作，离线时只报告错误不抛出',
   assert.ok((offline.sessions[0].error ?? '').length > 0)
 })
 
-// pullOnce 已废弃；服务端 /v2/changes 已移除，下个插件版本迁移到 pullSessionTask 后恢复。
-test.skip('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', async () => {
+test('拉取引擎：只 apply 到安全边界，开放尾闭合后再补', async () => {
   const temp = createTempHome('plugin-pull')
   try {
     const db = openDatabase(temp.dataDir)
@@ -1282,15 +1205,14 @@ test.skip('拉取引擎：只 apply 到安全边界，开放尾闭合后再补',
 
       const storeB = fakeStore(undefined)
       const attached = []
-      const pulled = await pullOnce({
+      const pulled = await pullSessionTask({
         persistence: storeB,
         sessions,
         config,
         workspacePathOf: () => 'D:/device-b',
         attach: async (id) => { attached.push(id) },
-      }, { revision: 0 })
-      assert.equal(pulled.configured, true)
-      assert.equal(pulled.sessions[0].status, 'partial')
+      }, sessionId, false)
+      assert.equal(pulled.status, 'partial')
       const localB = storeB.sessions.get(sessionId)
       assert.equal(localB.events.length, 120)
       assert.equal(localB.events[localB.events.length - 1].seq, 119)
@@ -1306,14 +1228,14 @@ test.skip('拉取引擎：只 apply 到安全边界，开放尾闭合后再补',
       })
       assert.equal(closedPush.sessions[0].status, 'pushed')
 
-      const pulledAgain = await pullOnce({
+      const pulledAgain = await pullSessionTask({
         persistence: storeB,
         sessions,
         config,
         workspacePathOf: () => 'D:/device-b',
         attach: async () => {},
-      }, { revision: pulled.revision })
-      assert.equal(pulledAgain.sessions[0].status, 'pulled')
+      }, sessionId, true)
+      assert.equal(pulledAgain.status, 'pulled')
       assert.equal(localB.events.length, 122)
       assert.equal(localB.events[localB.events.length - 1].seq, 121)
     } finally {
