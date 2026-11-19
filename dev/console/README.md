@@ -82,6 +82,86 @@ DEV_CONSOLE_SYNC=off pnpm dev:panel
 
 导入后可以在 DSH 侧栏打开 `Benchmark 69k`，这就是形状基准会话。
 
+## 本地假模型
+
+面板默认在 `127.0.0.1:8790` 起一个**假模型服务**（`DEV_CONSOLE_FAKE_AI_PORT` 可改），并把
+A/B 的模型指向它：
+
+```text
+DEEPSEEK_BASE_URL=http://127.0.0.1:8790
+DEEPSEEK_API_KEY=sk-local-dev-fake
+```
+
+这样在 DSH 里发消息不会调用真实模型、不花额度，适合调 UI、同步和工具调用。想用真实模型：
+
+```sh
+DEV_CONSOLE_FAKE_AI=off pnpm dev:panel
+```
+
+假模型模式还会给 A/B 加一个 dev overlay：禁用 `llm-deepseek-account`（账号路由），把
+`agent-default-model` 钉到 `deepseek-official / deepseek-flash`。原因：账号路由不保证走
+`DEEPSEEK_BASE_URL`，且它的 reasoning effort 能力在未登录/未取到目录时可能直接报
+`does not support reasoning effort`。因此假模型下请在模型选择里用 `deepseek-official`；
+之前保存过账号路由选择的老会话需要重新选模型或新开会话。
+
+假服务实现的是 DSH `dsh-llm-deepseek` 使用的 **Anthropic Messages** 协议
+（`POST /v1/messages` 的 SSE 事件）；`/v1/models` 返回固定的 `deepseek-flash`，
+`/v1/files` 返回 400，图片请求会由 DSH 自动退回 inline。会话标题请求（系统提示是
+“Create a concise title…”）固定回 `Dev 会话`；不做 thinking / 图片 / 压缩语义。
+
+顶部 **假模型** 按钮打开面板：
+
+- 显示服务地址、已处理请求数；
+- 最近请求列表：模型、最后一条用户文本、是否带 `<device-change>`、是否带 `tool_result`、
+  调用到的工具、以及假服务给出的回复；
+- 规则编辑框（JSON，按顺序匹配，第一条命中生效），可应用、恢复默认、清空记录。
+
+`when` 支持：`contains`（任意用户文本包含）、`systemContains`（system 提示包含）、
+`lastUserContains`（最后一条用户文本包含）、`hasToolResult`（历史里出现过工具结果）、
+`lastMessageIsToolResult`（最后一条消息本身就是工具续跑）。默认规则用
+`lastMessageIsToolResult`，避免历史里带过工具结果后每条新消息都被当成工具续跑。
+
+规则格式：
+
+```jsonc
+[
+  {
+    "name": "env-tool",
+    "when": { "lastUserContains": "/env" },   // 还可 contains、hasToolResult
+    "reply": { "tool": { "name": "get_env", "input": {} } }
+  },
+  {
+    "name": "device-change",
+    "when": { "contains": "<device-change" },
+    "reply": { "text": "已收到设备切换提示。" }
+  }
+]
+```
+
+`reply.text` 支持 `{{user}}`、`{{tool}}`、`{{count}}` 占位；没有规则命中时回显
+`收到：<最后一条用户文本>`。默认规则见 `dev/console/fake-ai.mjs` 的 `defaultRules()`。
+
+用它验证插件行为：
+
+- 在 DSH 里发 `/env` → 模型发起 `get_env` 工具调用 → 工具结果回来后再发一轮；
+- 面板的请求列表里 `含 device-change` 为 true，说明插件的 `<device-change>` 提示确实进入了模型请求；
+- 规则改成 `tool: {"name": "get_env"}` 之类可以手动驱动任意工具调用。
+
+### 不打开浏览器，直接发消息
+
+`dev/console/send-message.mjs` 走 Web 客户端同一套 Remote API：
+
+```sh
+node dev/console/send-message.mjs --side a --text "/env"
+node dev/console/send-message.mjs --side a --text "你好" --session "Benchmark 69k"
+```
+
+流程：从面板状态取 A/B 的入口 URL → `GET /connect?token=…` 换 API Cookie →
+`session/list` 找会话 → `session/selectModel` 选 `deepseek-official/deepseek-flash` →
+`session/prompt` 投递。默认等假模型新增请求并打印；`--no-wait` 只投递，
+`--timeout` 改等待上限。显式选 `official` 是为了绕过老会话里保存的
+`deepseek-account` 选择（假模式下该路由已被 dev overlay 禁用）。
+
 ## 服务端初始化密钥
 
 顶部“同步服务端”徽标可点击，打开服务端面板：

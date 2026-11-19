@@ -227,6 +227,27 @@
   .clean-list input { margin-top: 2px; }
   .clean-actions { display: flex; justify-content: flex-end; gap: 8px; }
   .clean-actions a { color: var(--accent); font-size: 11px; align-self: center; text-decoration: none; }
+  .fake-ai-requests {
+    margin: 10px 0 12px;
+    max-height: 240px;
+    overflow: auto;
+    padding: 10px 12px;
+    border: 1px solid var(--line-soft); border-radius: 8px;
+    background: #12171d;
+    font-family: var(--mono); font-size: 10.5px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .fake-ai-rules-label { display: block; margin: 6px 0 4px; color: var(--muted); font-size: 11px; }
+  textarea#fake-ai-rules {
+    width: 100%; box-sizing: border-box;
+    min-height: 180px;
+    padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: #12171d; color: var(--text);
+    font-family: var(--mono); font-size: 11px; line-height: 1.45;
+    resize: vertical;
+  }
+  dialog#fake-ai-dialog { width: min(760px, calc(100vw - 32px)); }
   .setup-code {
     display: flex; align-items: center; gap: 8px;
     margin: 12px 0; padding: 10px 12px;
@@ -263,6 +284,7 @@
     <span class="global-state" id="global-state">连接控制台…</span>
     <button id="restore">恢复预配置</button>
     <button id="import-open">导入大会话</button>
+    <button id="fake-ai-open" type="button" title="查看本地假模型请求与规则">假模型</button>
     <button id="prepare-all" class="primary">准备两套</button>
     <button id="start-all">启动两套</button>
     <button id="stop-all" class="danger">停止两套</button>
@@ -419,6 +441,24 @@
     <div class="clean-actions">
       <button type="button" id="sync-restart">重启服务端</button>
       <a id="server-admin" href="#" target="_blank" rel="noreferrer">打开管理台</a>
+      <button value="cancel">关闭</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="clean-dialog" id="fake-ai-dialog">
+  <form class="clean-body" method="dialog">
+    <h2>本地假模型</h2>
+    <p id="fake-ai-summary">正在读取…</p>
+    <p class="hint" id="fake-ai-hint">A/B 已指向本地 Messages 端点；在 DSH 里发消息即可，不会调用真实模型。</p>
+    <div class="fake-ai-requests" id="fake-ai-requests">暂无请求</div>
+    <label class="fake-ai-rules-label" for="fake-ai-rules">规则（JSON，按顺序匹配；`when` 支持 contains / lastUserContains / hasToolResult）</label>
+    <textarea id="fake-ai-rules" rows="10" spellcheck="false"></textarea>
+    <div class="clean-actions">
+      <button type="button" id="fake-ai-refresh">刷新</button>
+      <button type="button" id="fake-ai-apply" class="primary">应用规则</button>
+      <button type="button" id="fake-ai-reset-rules">恢复默认规则</button>
+      <button type="button" id="fake-ai-clear">清空记录</button>
       <button value="cancel">关闭</button>
     </div>
   </form>
@@ -718,8 +758,96 @@ async function openServerDialog() {
   await refreshServerDialog()
 }
 
+let fakeAiTimer = undefined
+
+/** 把假模型请求渲染成可读文本。 */
+function renderFakeAiRequests(requests) {
+  if (!Array.isArray(requests) || requests.length === 0) return '暂无请求'
+  return requests.map((request) => {
+    const flags = [
+      request.sawDeviceChange ? '含 device-change' : '',
+      request.hasToolResult ? '含 tool_result' : '',
+      request.compact ? 'compaction' : '',
+      request.sessionId ? `session ${String(request.sessionId).slice(0, 8)}` : '',
+    ].filter(Boolean).join(' · ')
+    const reply = request.reply?.kind === 'tool'
+      ? `tool:${request.reply.name}`
+      : `text:${request.reply?.text ?? ''}`
+    return `[${timeOf(request.at)}] ${request.model || 'model?'} → ${reply}`
+      + `\n  user: ${request.lastUserText || '（无）'}`
+      + (flags ? `\n  ${flags}` : '')
+      + (request.toolNames?.length ? `\n  tools: ${request.toolNames.slice(0, 12).join(', ')}` : '')
+  }).join('\n\n')
+}
+
+/** 刷新假模型面板。 */
+async function refreshFakeAi() {
+  const summary = $('fake-ai-summary')
+  const hint = $('fake-ai-hint')
+  const list = $('fake-ai-requests')
+  try {
+    const body = await api('/api/fake-ai')
+    const value = body.value
+    summary.textContent = `${value.url} · 已处理 ${value.requestCount} 次请求`
+    list.textContent = renderFakeAiRequests(value.requests)
+    const rules = $('fake-ai-rules')
+    if (document.activeElement !== rules) rules.value = JSON.stringify(value.rules, null, 2)
+    hint.textContent = value.requests.length === 0
+      ? '还没有请求：启动 A/B 后在 DSH 里发一条消息。'
+      : '最近请求（新的在下面）。规则里可用 {{user}}、{{tool}}、{{count}} 占位。'
+  } catch (error) {
+    summary.textContent = `读取失败：${error.message}`
+    hint.textContent = '设置 DEV_CONSOLE_FAKE_AI=off 时该服务关闭，A/B 使用真实模型。'
+    list.textContent = ''
+  }
+}
+
+/** 打开假模型面板并轮询最近请求。 */
+async function openFakeAiDialog() {
+  const dialog = $('fake-ai-dialog')
+  if (!dialog.open) dialog.showModal()
+  await refreshFakeAi()
+  clearInterval(fakeAiTimer)
+  fakeAiTimer = setInterval(() => { void refreshFakeAi() }, 2000)
+  dialog.addEventListener('close', () => {
+    clearInterval(fakeAiTimer)
+    fakeAiTimer = undefined
+  }, { once: true })
+}
+
 function bindActions() {
   $('sync-state').addEventListener('click', () => void openServerDialog())
+  $('fake-ai-open').addEventListener('click', () => void openFakeAiDialog())
+  $('fake-ai-refresh').addEventListener('click', () => void refreshFakeAi())
+  $('fake-ai-apply').addEventListener('click', async (event) => {
+    const button = event.currentTarget
+    button.disabled = true
+    try {
+      const rules = JSON.parse($('fake-ai-rules').value)
+      await api('/api/fake-ai/rules', { method: 'POST', body: JSON.stringify({ rules }) })
+      await refreshFakeAi()
+    } catch (error) {
+      $('fake-ai-hint').textContent = `应用失败：${error.message}`
+    } finally {
+      button.disabled = false
+    }
+  })
+  $('fake-ai-reset-rules').addEventListener('click', async () => {
+    try {
+      await api('/api/fake-ai/rules', { method: 'POST', body: JSON.stringify({}) })
+      await refreshFakeAi()
+    } catch (error) {
+      $('fake-ai-hint').textContent = `恢复默认失败：${error.message}`
+    }
+  })
+  $('fake-ai-clear').addEventListener('click', async () => {
+    try {
+      await api('/api/fake-ai/reset', { method: 'POST', body: '{}' })
+      await refreshFakeAi()
+    } catch (error) {
+      $('fake-ai-hint').textContent = `清空失败：${error.message}`
+    }
+  })
   $('setup-copy').addEventListener('click', () => {
     const code = $('setup-code').textContent
     if (code) void copyText(code)

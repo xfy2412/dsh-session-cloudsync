@@ -17,6 +17,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { createServer } from 'node:http'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { startFakeAi } from './fake-ai.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
@@ -70,6 +71,41 @@ const sync = {
   health: undefined,
   buffers: { stdout: '', stderr: '' },
   stopping: false,
+}
+
+/** 本地假模型服务；`DEV_CONSOLE_FAKE_AI=off` 时关闭，A/B 使用真实模型。 */
+const fakeAiEnabled = process.env.DEV_CONSOLE_FAKE_AI !== 'off'
+const fakeAiPort = Number(process.env.DEV_CONSOLE_FAKE_AI_PORT ?? '8790')
+const fakeAiOverlay = join(tempRoot, 'fake-ai.overlay.yml')
+let fakeAi
+if (fakeAiEnabled) {
+  try {
+    fakeAi = await startFakeAi({ host: bindHost, port: fakeAiPort })
+  } catch (error) {
+    console.error(`假模型服务监听 ${fakeAiPort} 失败，改用随机端口：${error instanceof Error ? error.message : String(error)}`)
+    try {
+      fakeAi = await startFakeAi({ host: bindHost, port: 0 })
+    } catch (retryError) {
+      console.error(`假模型服务启动失败：${retryError instanceof Error ? retryError.message : String(retryError)}`)
+      fakeAi = undefined
+    }
+  }
+  // 假模型只接管 API-key 路由；账号路由（deepseek-account）会绕过本地端点并可能
+  // 因 reasoning effort 不匹配直接失败，所以在 dev overlay 里关掉它，并把默认
+  // 模型钉到 deepseek-official/deepseek-flash。
+  if (fakeAi !== undefined) {
+    mkdirSync(tempRoot, { recursive: true })
+    writeFileSync(fakeAiOverlay, [
+      '# 由 dev/console 生成：假模型模式只保留 API-key 路由。',
+      '- id: llm-deepseek-account',
+      '  disabled: true',
+      '- id: agent-default-model',
+      '  config:',
+      '    provider: deepseek-official',
+      '    model: deepseek-flash',
+      '',
+    ].join('\n'))
+  }
 }
 
 /** ANSI 颜色序列；控制台里不需要。 */
@@ -675,6 +711,8 @@ async function importLargeSession(request) {
         id: 'session-bench-shape',
         attachments: benchAttachments(),
       })
+      // 重新导入是全新会话；清掉同 id 的旧投影缓存，避免旧模型选择/标题行污染。
+      rmSync(join(side.home, 'storages', 'session_projcache', 'sessions', `${result.sessionId}.json`), { force: true })
       appendLog(
         side,
         'info',
@@ -729,6 +767,10 @@ function cleanDshEnv(side) {
       'DSH_SESSION_CLOUDSYNC_PASSPHRASE',
       'DSH_SESSION_CLOUDSYNC_DEVICE_NAME',
     ]) delete env[key]
+  }
+  if (fakeAi !== undefined) {
+    env.DEEPSEEK_BASE_URL = fakeAi.url
+    env.DEEPSEEK_API_KEY = 'sk-local-dev-fake'
   }
   return env
 }
@@ -849,9 +891,13 @@ async function startSide(side) {
   side.url = null
   side.stopping = false
   appendLog(side, 'info', `启动 DSH ${side.label} :${side.port}`, 'host')
+  appendLog(side, 'info', fakeAi === undefined
+    ? '模型：真实模型（假模型关闭）'
+    : `模型：本地假模型 ${fakeAi.url}（deepseek-official；账号路由已禁用）`, 'host')
   side.tokenSince = side.logs.length
 
   const args = ['--port', String(side.port), '--home', side.home, '--documents', side.documents]
+  if (fakeAi !== undefined) args.push('--patch', fakeAiOverlay)
   if (credentials !== undefined) args.push('--credentials', credentials)
   const child = spawn(process.execPath, [devDsh, ...args], {
     cwd: repoRoot,
@@ -985,6 +1031,9 @@ function state() {
       available: existsSync(benchTracePath),
       path: benchTracePath,
     },
+    fakeAi: fakeAi === undefined
+      ? { enabled: false }
+      : { enabled: true, url: fakeAi.url },
     sides: [...sides.values()].map(sideState),
   }
 }
@@ -1073,6 +1122,7 @@ function shutdown() {
       }
     }
   }
+  void fakeAi?.close()
 }
 
 const server = createServer(async (req, res) => {
@@ -1087,6 +1137,32 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'GET' && pathname === '/api/state') {
       json(res, 200, state())
+      return
+    }
+    if (pathname === '/api/fake-ai' || pathname.startsWith('/api/fake-ai/')) {
+      if (fakeAi === undefined) return json(res, 200, { ok: false, error: '假模型服务未启用（DEV_CONSOLE_FAKE_AI=off）' })
+      if (req.method === 'GET' && pathname === '/api/fake-ai') {
+        json(res, 200, { ok: true, value: fakeAi.snapshot() })
+        return
+      }
+      if (req.method === 'POST' && pathname === '/api/fake-ai/rules') {
+        const body = await readBody(req)
+        try {
+          const value = body?.rules === undefined || body.rules === null
+            ? fakeAi.resetRules()
+            : fakeAi.setRules(body.rules)
+          json(res, 200, { ok: true, value })
+        } catch (error) {
+          json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+        return
+      }
+      if (req.method === 'POST' && pathname === '/api/fake-ai/reset') {
+        fakeAi.reset()
+        json(res, 200, { ok: true, value: fakeAi.snapshot() })
+        return
+      }
+      json(res, 404, { ok: false, error: 'not found' })
       return
     }
     if (req.method === 'GET' && pathname.startsWith('/api/logs/')) {
@@ -1191,6 +1267,7 @@ server.listen(consolePort, bindHost, () => {
   console.log(`DSH 双实例控制台：http://${bindHost}:${consolePort}/`)
   console.log(`A：http://${bindHost}:${sidePorts.a}/  B：http://${bindHost}:${sidePorts.b}/`)
   console.log(`同步服务端：${sync.mode === 'off' ? '关闭' : syncUrl}（${sync.mode}）`)
+  console.log(`假模型：${fakeAi === undefined ? '关闭（A/B 使用真实模型）' : `${fakeAi.url}（Anthropic Messages）`}`)
   console.log(`实例目录：${tempRoot}`)
   if (credentials === undefined) {
     console.log('登录态：未指定 DEV_CONSOLE_CREDENTIALS（两套实例都不会复制凭据）')
