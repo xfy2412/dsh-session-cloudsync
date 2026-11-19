@@ -59,7 +59,7 @@ function environmentOf(overrides = {}) {
 test('设备身份：配置名优先，服务端 label 兜底；TTL 与 token 变化会让缓存失效', async () => {
   let token = 'token-a'
   let deviceName = ''
-  const fetchImpl = fakeFetch({ value: { role: 'device', device: { deviceId: 'device-1', label: 'server-name' } } })
+  const fetchImpl = fakeFetch({ value: { role: 'device', device: { deviceId: 'device-1', label: 'server-name', color: '#5b88ff' } } })
   const cache = new DeviceIdentityCache(() => ({
     serverUrl: 'http://127.0.0.1:8787',
     token,
@@ -67,13 +67,13 @@ test('设备身份：配置名优先，服务端 label 兜底；TTL 与 token �
     fetch: fetchImpl,
   }))
   assert.equal(cache.snapshot(), undefined)
-  assert.deepEqual(await cache.refresh(), { deviceId: 'device-1', name: 'server-name' })
-  assert.deepEqual(cache.snapshot(), { deviceId: 'device-1', name: 'server-name' })
+  assert.deepEqual(await cache.refresh(), { deviceId: 'device-1', name: 'server-name', color: '#5b88ff' })
+  assert.deepEqual(cache.snapshot(), { deviceId: 'device-1', name: 'server-name', color: '#5b88ff' })
   assert.match(fetchImpl.calls[0].url, /\/v2\/me$/u)
   assert.equal(fetchImpl.calls[0].init.headers.authorization, 'Bearer token-a')
 
   deviceName = 'custom-name'
-  assert.deepEqual(await cache.refresh(), { deviceId: 'device-1', name: 'custom-name' })
+  assert.deepEqual(await cache.refresh(), { deviceId: 'device-1', name: 'custom-name', color: '#5b88ff' })
 
   token = 'token-b'
   assert.equal(cache.snapshot(), undefined, 'token 变了旧身份作废')

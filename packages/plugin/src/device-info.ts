@@ -15,6 +15,8 @@ import { dirname, join, resolve } from 'node:path'
 export interface DeviceIdentity {
   readonly deviceId: string
   readonly name: string
+  /** 服务端分配的设备颜色；旧服务端没有时省略。 */
+  readonly color?: string
 }
 
 /** 宿主的 `shell` 服务里本模块用到的最小结构。 */
@@ -197,6 +199,7 @@ export class DeviceIdentityCache {
     readonly at: number
     readonly deviceId: string
     readonly label: string
+    readonly color?: string
   } | undefined
   private readonly source: () => DeviceIdentitySource
   private readonly logger: WarnLogger | undefined
@@ -232,6 +235,7 @@ export class DeviceIdentityCache {
     return {
       deviceId: this.cached.deviceId,
       name: configured !== '' ? configured : this.cached.label,
+      ...this.cached.color === undefined ? {} : { color: this.cached.color },
     }
   }
 
@@ -273,12 +277,14 @@ export class DeviceIdentityCache {
       if (typeof record['deviceId'] !== 'string' || typeof record['label'] !== 'string') {
         throw new Error('/v2/me 缺少 deviceId/label')
       }
+      const color = typeof record['color'] === 'string' && record['color'] !== '' ? record['color'] : undefined
       this.cached = {
         base,
         token: source.token,
         at: this.now(),
         deviceId: record['deviceId'],
         label: record['label'],
+        ...color === undefined ? {} : { color },
       }
       return this.snapshot()
     } catch (error: unknown) {

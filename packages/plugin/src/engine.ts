@@ -79,6 +79,15 @@ export interface AttachmentBridge {
 /** 服务端能力缓存时长；服务端升级后一分钟内生效。 */
 const CAPABILITY_TTL_MS = 60 * 1000
 
+/**
+ * 跨设备插件版本同步的服务端能力。
+ *
+ * 客户端可以为这个能力提前做好设备颜色/peer 列表逻辑，但只有 `/health`
+ * 明确声明后才发 `/v2/peers`；旧服务端不受影响，也不用把服务端改动塞进
+ * 插件发版 tag。
+ */
+export const PLUGIN_SYNC_CAPABILITY = 'plugin-version-sync'
+
 /** 服务端能力缓存：`base|token` → 能力集合与采集时间。 */
 const capabilityCache = new Map<string, { readonly at: number; readonly capabilities: readonly string[] }>()
 
@@ -2061,7 +2070,17 @@ export interface ServerProbeMe {
     readonly label: string
     readonly createdAt: number
     readonly lastSeenAt?: number
+    /** 服务端分配的设备颜色；旧服务端没有时省略。 */
+    readonly color?: string
   }
+}
+
+/** 设备颜色/名称，用于跨设备插件版本矩阵。 */
+export interface PeerDevice {
+  readonly deviceId: string
+  readonly label: string
+  readonly color?: string
+  readonly lastSeenAt?: number
 }
 
 /** 连接探测结果：不读配置、不落盘。 */
@@ -2075,6 +2094,8 @@ export interface ServerProbe {
     readonly usedBytes: number
   }
   readonly counts?: { readonly workspaces: number; readonly sessions: number }
+  /** 仅当服务端声明 {@link PLUGIN_SYNC_CAPABILITY} 时才读取。 */
+  readonly peers?: readonly PeerDevice[]
 }
 
 export interface ServerProbeResult {
@@ -2088,6 +2109,49 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
+}
+
+/**
+ * 读取设备 token 可见的设备列表（名称/颜色/最后在线）。
+ *
+ * 只应由声明了 {@link PLUGIN_SYNC_CAPABILITY} 的服务端调用；失败返回空数组，
+ * 不影响连接探测本身。
+ *
+ * @param fetchImpl - 带超时的 fetch。
+ * @param base - 规范化后的服务端基地址。
+ * @param token - 设备 token。
+ * @returns 可用的 peer 设备。
+ */
+async function probePeerDevices(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+): Promise<readonly PeerDevice[]> {
+  try {
+    const response = await requestJson(fetchImpl, base, '/v2/peers', token)
+    if (response.status !== 200) return []
+    const items = recordOf(response.body)?.['value']
+    if (!Array.isArray(items)) return []
+    return items.flatMap((item) => {
+      const record = recordOf(item)
+      if (record === undefined) return []
+      const deviceId = record['deviceId']
+      const label = record['label']
+      if (typeof deviceId !== 'string' || typeof label !== 'string') return []
+      const color = typeof record['color'] === 'string' && record['color'] !== '' ? record['color'] : undefined
+      const lastSeenAt = Number.isSafeInteger(record['lastSeenAt'])
+        ? record['lastSeenAt'] as number
+        : undefined
+      return [{
+        deviceId,
+        label,
+        ...color === undefined ? {} : { color },
+        ...lastSeenAt === undefined ? {} : { lastSeenAt },
+      }]
+    })
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -2135,6 +2199,9 @@ export async function probeServer(
     const device = recordOf(meValue['device'])
     const serverInfo = recordOf(meValue['server'])
     const counts = recordOf(meValue['counts'])
+    const peers = capabilities.includes(PLUGIN_SYNC_CAPABILITY)
+      ? await probePeerDevices(timed, base, input.token)
+      : undefined
     return {
       ok: true,
       probe: {
@@ -2151,9 +2218,11 @@ export async function probeServer(
               label: String(device['label'] ?? ''),
               createdAt: Number(device['createdAt'] ?? 0),
               ...Number.isSafeInteger(device['lastSeenAt']) ? { lastSeenAt: device['lastSeenAt'] as number } : {},
+              ...typeof device['color'] === 'string' && device['color'] !== '' ? { color: device['color'] } : {},
             },
           },
         },
+        ...peers === undefined ? {} : { peers },
         ...serverInfo === undefined ? {} : {
           server: {
             version: String(serverInfo['version'] ?? ''),

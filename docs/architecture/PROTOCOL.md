@@ -63,6 +63,10 @@ GET /health
 }
 ```
 
+> 客户端已为未来的 `plugin-version-sync` 能力预留门控：只有服务端在
+> `capabilities` 里声明它，插件才会请求 `GET /v2/peers`（设备 token 可见的
+> 设备名/颜色/最后在线）。当前服务端尚未实现该接口，上面的能力列表也不包含它。
+
 不再有 `/v1/health`，也没有 `/v2/health`。
 
 **响应包络**：除 `/health` 与二进制 blob 下载外，设备 API 的 JSON 响应统一是

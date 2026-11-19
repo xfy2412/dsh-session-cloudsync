@@ -969,6 +969,53 @@ test('拉取引擎：子代理先创建，根会话后创建', async () => {
   }
 })
 
+test('连接测试：只有服务端声明 plugin-version-sync 才请求 /v2/peers', async () => {
+  const makeFetch = (capabilities, peersStatus = 200) => {
+    const calls = []
+    const fetchImpl = async (input) => {
+      const path = new URL(String(input)).pathname
+      calls.push(path)
+      if (path === '/health') {
+        return Response.json({ ok: true, server: { version: '0.2.2-rc.1', protocols: [2], capabilities } })
+      }
+      if (path === '/v2/me') {
+        return Response.json({ ok: true, value: { role: 'device', device: { deviceId: 'device-a', label: 'A', createdAt: 1, color: '#5b88ff' } } })
+      }
+      if (path === '/v2/peers') {
+        if (peersStatus !== 200) return Response.json({ ok: false, error: { code: 'server', message: 'boom' } }, { status: peersStatus })
+        return Response.json({ ok: true, value: [
+          { deviceId: 'device-a', label: 'A', color: '#5b88ff', lastSeenAt: 10 },
+          { deviceId: 'device-b', label: 'B' },
+          { deviceId: 'bad' },
+        ] })
+      }
+      return Response.json({ ok: false, error: { code: 'not-found', message: path } }, { status: 404 })
+    }
+    return { calls, fetchImpl }
+  }
+
+  const absent = makeFetch(['attachment-index'])
+  const withoutCapability = await probeServer({ serverUrl: 'http://probe.test', token: 'token' }, absent.fetchImpl)
+  assert.equal(withoutCapability.ok, true)
+  assert.equal(withoutCapability.probe.me.device.color, '#5b88ff')
+  assert.equal(withoutCapability.probe.peers, undefined)
+  assert.deepEqual(absent.calls, ['/health', '/v2/me'])
+
+  const present = makeFetch(['plugin-version-sync'])
+  const withCapability = await probeServer({ serverUrl: 'http://probe.test', token: 'token' }, present.fetchImpl)
+  assert.equal(withCapability.ok, true)
+  assert.deepEqual(withCapability.probe.peers, [
+    { deviceId: 'device-a', label: 'A', color: '#5b88ff', lastSeenAt: 10 },
+    { deviceId: 'device-b', label: 'B' },
+  ])
+  assert.ok(present.calls.includes('/v2/peers'))
+
+  const failed = makeFetch(['plugin-version-sync'], 500)
+  const degraded = await probeServer({ serverUrl: 'http://probe.test', token: 'token' }, failed.fetchImpl)
+  assert.equal(degraded.ok, true, 'peers 失败不影响连接探测')
+  assert.deepEqual(degraded.probe.peers, [])
+})
+
 test('连接测试：只探测公开的 /health，不读配置也不带 token', async () => {
   const temp = createTempHome('plugin-test-connection')
   try {
