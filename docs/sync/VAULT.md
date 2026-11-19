@@ -14,14 +14,16 @@
 
 Vault 负责同步**会话事件之外**的加密数据：
 
-- L2 设备台账：OS、DSH 版本与 profile、已加载插件与版本、会话格式版本、工具链版本与路径、
-  `DSH_HOME`、工作区、最后在线；
+- L2 设备台账：设备名、OS、DSH 版本与 profile、会话格式版本、已加载插件与版本、最后在线；
 - 工作区身份与「远端工作区 → 本地工作区」绑定；
 - L3 agent 笔记（append-only）；
 - 会话生产者的插件/版本戳，用于跨设备兼容性提示和「一键匹配版本」（V3+ 设计）。
 
-当前实现只有最小 `device/profile`（不含插件/工具链）与 `workspace/profile`（见 §3.3）；
-L3 笔记、会话生产者戳、工具链与版本匹配仍是 V3+/V4 设计。
+当前实现只有最小 `device/profile`（不含插件）与 `workspace/profile`（见 §3.3）；
+L3 笔记、会话生产者戳与插件版本匹配仍是 V3+/V4 设计。
+
+**本机环境（`get_env` 工具、工具链版本/路径、本机路径）不在 Vault 范围内**：它只在本机
+读取、只在本机展示，不上行服务端（见 §3.7）。设备台账只保留同步/兼容性需要的身份与版本。
 
 不做：
 
@@ -40,14 +42,15 @@ L3 笔记、会话生产者戳、工具链与版本匹配仍是 V3+/V4 设计。
 4. **不改绑**：首次绑定后不提供 workspace/session 迁移或改绑；DSH 本身也不支持工作区/会话迁移，强行走文件搬运破坏性太大；
 5. **子代理继承**：子代理跟随根会话的 key；子代理 manifest 不重复 key，拉取前先读根 manifest；
 6. **未映射行为**：不 apply、不猜落点，标 `unmapped` 等用户选择；
-7. **工具链**：沿用 L2 的 `auto` / `authored` 双源，自动采集不覆盖人工/agent 维护。
+7. **本机环境不上行**：`get_env` 读到的 OS、工具链、路径只在本机使用；设备台账只上报
+   OS/DSH/插件这类展示或兼容性字段，不上报工具链与 `DSH_HOME`。
 
 ### V0/V1 范围
 
 - **V0**：只做本地密钥域、记录信封、AES-GCM/AAD、记录链与篡改/重放测试；不接服务端。
 - **V1**：服务端 `/v2/vault/append|cursor|stream`、最小设备台账、`workspace/profile` 同步；不做工作区落点改变。
 - **V2**：会话 manifest 增加 `workspaceKey`、本机绑定、未映射阻断和映射 UI。
-- V3 工具链/版本匹配、V4 笔记/保留策略不在 V1 范围内。
+- V3 插件版本匹配、V4 笔记/保留策略不在 V1 范围内。
 
 公益服与自部署的差异（多租户、配额、管理、审计）留在独立 package/仓库；插件只依赖本文定义的 Vault 记录与 HTTP 边界，不把公益服实现塞进自部署包。
 
@@ -132,32 +135,29 @@ device/<deviceId>
   "dsh": {
     "version": "0.2.2-rc.1",
     "profile": "web",
-    "node": "v24.20.0",
     "sessionFormatVersion": 4
   },
-  "workspaces": [
-    { "key": "opaque-key", "label": "project", "path": "D:\\work\\project" }
-  ],
-  "dshHome": "C:\\Users\\…\\.dsh",
+  "plugins": [ { "name": "dsh-session-cloudsync", "version": "0.1.5" } ],
   "lastSeenAt": 1790000000000
 }
 ```
 
-当前代码只写上述字段（`vault-sync.ts`）：`plugins`、`toolchain`、`dsh.source`、
-周期刷新的 `lastSeenAt` 都没有实现；`sessionFormatVersion` 固定写 4。
+当前代码只写上述字段（`vault-sync.ts`）：`plugins` 是下一步（V3 插件版本匹配）才写入；
+`os` 供设备列表展示。`workspaces`、`dshHome`、Node 版本、工具链版本/路径**不写入**
+`device/profile`——工作区列表由每工作区一条 `workspace/profile` 承载（见 §3.4），
+工具链只由本机环境工具读取（见 §3.7）。
 
-设计约束（`device/profile` 当前只有最小字段；下列多为 V3+ 目标）：
+设计约束：
 
 - **版本来源要标**：`ctx.loader.entries()` = 加载了什么；`package.json` = 装了什么；
   `spawn` = 实际工具链是什么。三者可能不一致，不能合并成一个“版本”；
-- 工具链分 `auto` / `authored` 两源，自动采集只刷新 `auto`；同名渲染时 `authored` 优先；
+- 设备台账只记录 DSH 运行时版本/会话格式和已加载插件；工具链属于本机环境，不进台账；
 - 本地状态是 `<DSH_HOME>/session-cloudsync/vault/state.json`（writer/seq/prevHash/digest），
   随 Vault 上行的是加密记录本身；`ledger/<deviceId>.json` / `DEVICES.md` 未实现；
-- `device/profile` 只在内容 digest（含工作区列表）变化时 append，不是每轮都写；
+- `device/profile` 只在内容 digest 变化时 append，不是每轮都写；
   `lastSeenAt` 只在写新记录时带一次，没有按小时刷新的实现；
-- 工具链自动采集只在启动或手动刷新时执行，不能每轮同步都跑；
-- agent 写入走工具白名单字段，不允许改 `deviceId`/`dshHome` 这类身份字段；
-- 不采集用户名、环境变量值、密钥路径、token；
+- agent 写入走工具白名单字段，不允许改 `deviceId`/`deviceName` 这类身份字段；
+- 不采集用户名、环境变量值、密钥路径、token、工具链与 `DSH_HOME`；
 - 设备台账本身是兼容性闸门：`sessionFormatVersion` + DSH 版本决定能否安全推送。
 
 ### 3.4 工作区身份与绑定
@@ -289,10 +289,14 @@ append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已
 - agent/用户可写，服务端永不写；
 - 默认不注入模型上下文，换设备时只取该工作区 1–3 条摘要。
 
-### 3.7 设备切换提示与本机环境工具（V4 设计，未实现）
+### 3.7 设备切换提示与本机环境工具（本机功能，不进 Vault）
 
 会话日志是跨设备共享的，但模型需要知道**现在**这台设备的路径、版本和工具链；否则它会沿用另一台设备的假设，
 或重新探测一遍环境。做法是一条极短的前置提示，指向本机环境工具。
+
+这两者都只在本机：提示落盘后随会话同步的只是那条短消息；环境工具只读取本机，**不写入
+`device/profile`、不上行 Vault**。设备切换提示用的 `deviceId`/`deviceName` 来自 `/v2/me`
+的服务端身份，不是环境采集结果。
 
 **注入通道：`agent/pre-step`，不用 `agent.inject`。**
 
@@ -343,9 +347,17 @@ append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已
 覆盖探测白名单（默认 node/npm/pnpm/git/python/uv）。
 
 工具只读本机、不发网络请求（工具链探测走宿主 `ctx.shell`，受执行器超时/沙箱约束），输出：设备名/设备 id、
-OS/arch/release、DSH 版本与 profile、Node、会话格式版本、工具链版本与路径（`auto` 源）、本机工作区映射。
-已加载/已安装的插件清单与 `authored` 工具链随 V3 设备台账加入；届时工具与 Vault 读缓存共用同一份
-`device/profile` 数据。
+OS/arch/release、DSH 版本与 profile、Node、会话格式版本、工具链版本与路径、本机工作区映射。
+
+工具链分两源：
+
+- `auto`：按 `toolchainCommands` 白名单（默认 node/npm/pnpm/git/python/uv）从 PATH 探测；
+- `authored`：本机 config 的 `toolchainAuthored` 手工条目，用于不在 PATH 里的工具，形如
+  `{ name, path, version? }`。同名时 `authored` 优先，自动探测跳过该名字；`path` 不执行，
+  `version` 手填，缺失时显示 `unknown`。
+
+`authored` 条目只在本机 config 里，不写 Vault、不随设备台账上传；换设备后路径本来也不通用。
+它和插件版本匹配（V3）无关：插件清单走设备台账，工具链走本机环境工具。
 
 
 ## 4. 密钥与加密

@@ -170,7 +170,7 @@ sessionId + createdAt + formatVersion
 | **deviceId** | 设备 token 派生的设备标识 |
 | **device token** | 设备 API 的 Bearer token |
 | **L1** | 会话数据（sessions/attachments 等） |
-| **L2** | 设备台账（OS、DSH/插件版本、工具链、工作区） |
+| **L2** | 设备台账（OS、DSH/插件版本、会话格式、最后在线；不含本机工具链/路径） |
 | **L3** | agent 笔记（append-only） |
 | **Vault** | L2/L3 的加密旁路存储，与会话同步分开 |
 | **DSH** | DeepSeek Harness，本插件运行的宿主 |

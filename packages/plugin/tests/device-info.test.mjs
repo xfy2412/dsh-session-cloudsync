@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { DeviceIdentityCache, LocalEnvironment, detectDshVersion } from '../src/device-info.ts'
+import { DeviceIdentityCache, LocalEnvironment, detectDshVersion, sanitizeAuthoredToolchain } from '../src/device-info.ts'
 
 /** 造一个返回固定 JSON 的假 fetch。 */
 function fakeFetch(payload, status = 200) {
@@ -126,6 +126,54 @@ test('DSH 版本：环境变量优先，否则读运行包的 package.json', () 
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('authored 工具链：校验/去重，同名覆盖自动探测且不执行路径', async () => {
+  assert.deepEqual(sanitizeAuthoredToolchain([
+    { name: 'go', path: 'C:/Go/bin/go.exe', version: '1.22.3' },
+    { name: 'GO', path: 'C:/other/go.exe', version: '9.9.9' },
+    { name: 'bad name!', path: 'C:/bad.exe' },
+    { name: 'rust', path: '  ' },
+    { name: 'node', path: 'C:/node/node.exe' },
+  ]), [
+    { name: 'go', path: 'C:/Go/bin/go.exe', version: '1.22.3' },
+    { name: 'node', path: 'C:/node/node.exe' },
+  ])
+  assert.deepEqual(sanitizeAuthoredToolchain('nope'), [])
+
+  let authored = [{ name: 'go', path: 'C:/Go/bin/go.exe', version: '1.22.3' }]
+  const shell = fakeShell((command) => command.includes('--version')
+    ? { stdout: 'git version 2.55.0\n' }
+    : { stdout: 'C:/Git/git.exe\n' })
+  const { options } = environmentOf({
+    shell: () => shell,
+    commands: () => ['node', 'git'],
+    authoredToolchain: () => authored,
+  })
+  const environment = new LocalEnvironment(options)
+  const facts = await environment.facts()
+  assert.deepEqual(facts.toolchain.map((tool) => [tool.name, tool.source]), [
+    ['go', 'authored'],
+    ['node', 'auto'],
+    ['git', 'auto'],
+  ])
+  assert.equal(shell.commands.some((command) => command.startsWith('go')), false, 'authored 条目不执行')
+  assert.equal(facts.toolchain[0].version, '1.22.3')
+
+  authored = [{ name: 'go', path: 'C:/Go/bin/go.exe', version: '1.23.0' }]
+  const refreshed = await environment.facts()
+  assert.equal(refreshed.toolchain[0].version, '1.23.0', 'authored 配置变化会失效缓存')
+})
+
+test('authored 工具链在没有 shell 时仍可展示', async () => {
+  const { options } = environmentOf({
+    shell: () => undefined,
+    authoredToolchain: () => [{ name: 'go', path: 'C:/Go/bin/go.exe' }],
+  })
+  const facts = await new LocalEnvironment(options).facts()
+  assert.equal(facts.toolchain.length, 1)
+  assert.equal(facts.toolchain[0].source, 'authored')
+  assert.equal(facts.toolchainError, undefined)
 })
 
 test('环境事实：OS/DSH/工作区/工具链都来自本机，非法命令名被过滤', async () => {

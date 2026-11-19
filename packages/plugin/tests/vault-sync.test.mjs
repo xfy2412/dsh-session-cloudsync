@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
-import { syncVault, readWorkspaceProfileLabels } from '../src/vault-sync.ts'
-import { vaultRecordHashOf } from '../../shared/src/vault.ts'
+import { syncVault, readWorkspaceProfileLabels, vaultKeyForConfig } from '../src/vault-sync.ts'
+import { openVaultRecord, vaultRecordHashOf } from '../../shared/src/vault.ts'
 import { decodeBlobBatch, encodeBlobBatch } from '../../shared/src/blob-batch.ts'
 
 const CLIENT_ID = '0123456789abcdef'
@@ -109,7 +109,6 @@ function config(temp, workspaces) {
     passphrase: 'passphrase',
     clientId: CLIENT_ID,
     deviceName: 'Writer',
-    dshHome: temp.home,
     stateDir: `${temp.home}/session-cloudsync/vault`,
     workspaces,
     dshVersion: '0.2.1-rc.2',
@@ -133,6 +132,18 @@ test('Vault 首次写入设备台账和 workspace/profile，第二次不重复',
     assert.equal(server.lease(), null)
     assert.ok([...server.blobs.keys()].length >= 3)
     assert.ok(server.calls.includes('POST /v2/blobs/batch'))
+
+    const cfg = config(temp, workspaces)
+    const deviceRecord = server.records[0]
+    const payload = openVaultRecord({
+      ref: deviceRecord,
+      bytes: server.blobs.get(deviceRecord.blobSha256),
+    }, vaultKeyForConfig(cfg))
+    assert.equal(payload.kind, 'device/profile')
+    assert.deepEqual(Object.keys(payload.data).sort(), ['deviceId', 'deviceName', 'dsh', 'lastSeenAt', 'os'])
+    assert.equal('dshHome' in payload.data, false)
+    assert.equal('workspaces' in payload.data, false)
+    assert.equal('node' in payload.data.dsh, false)
 
     const second = await syncVault(config(temp, workspaces), undefined, server.fetchImpl)
     assert.equal(second.appended, 0)

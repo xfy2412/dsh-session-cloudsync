@@ -41,7 +41,6 @@ export interface VaultSyncConfig {
   readonly clientId: string
   readonly requestTimeoutMs?: number
   readonly deviceName: string
-  readonly dshHome: string
   readonly stateDir: string
   readonly workspaces: readonly { readonly path: string; readonly title: string }[]
   readonly dshVersion?: string
@@ -128,11 +127,8 @@ export async function syncVault(
       dsh: {
         version: config.dshVersion ?? process.env.DSH_VERSION ?? 'unknown',
         profile: config.dshProfile ?? process.env.DSH_PROFILE ?? '',
-        node: process.version,
         sessionFormatVersion: 4,
       },
-      workspaces,
-      dshHome: config.dshHome,
     }
     const digest = sha256(stableStringify(payload))
     const pending: Array<{ kind: string; entity: string; data: unknown }> = []

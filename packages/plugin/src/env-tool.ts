@@ -103,7 +103,7 @@ const OUTPUT_SCHEMA = {
           name: { type: 'string' },
           version: { type: 'string' },
           path: { type: 'string' },
-          source: { type: 'string', enum: ['auto'] },
+          source: { type: 'string', enum: ['auto', 'authored'] },
         },
         required: ['name', 'source'],
         additionalProperties: false,
@@ -231,7 +231,8 @@ export function renderFacts(facts: EnvironmentFacts): string {
     lines.push('- toolchain:')
     for (const tool of facts.toolchain) {
       const path = tool.path === undefined ? '' : ` — ${tool.path}`
-      lines.push(`  - ${tool.name} ${tool.version ?? 'unknown'}${path}`)
+      const source = tool.source === 'authored' ? ' [authored]' : ''
+      lines.push(`  - ${tool.name} ${tool.version ?? 'unknown'}${path}${source}`)
     }
     if (facts.toolchainError !== undefined) lines.push(`  - error: ${facts.toolchainError}`)
   }

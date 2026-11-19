@@ -19,7 +19,7 @@ import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { planSync, type LocalPlanSnapshot, type RemoteSessionSummary, type SyncPlanEntry, type SyncReceipt } from './sync-plan.ts'
 import { prepareReplaceScript } from './replace.ts'
 import { warmSessionProjection, projectionNeedsWarm, type ProjectionCacheLike, type ProjectionWarmInput } from './projection-warm.ts'
-import { DeviceIdentityCache, LocalEnvironment, DEFAULT_TOOLCHAIN_COMMANDS, type ShellServiceLike } from './device-info.ts'
+import { DeviceIdentityCache, LocalEnvironment, DEFAULT_TOOLCHAIN_COMMANDS, sanitizeAuthoredToolchain, type ShellServiceLike } from './device-info.ts'
 import { registerEnvTool, type ToolsServiceLike } from './env-tool.ts'
 import { deviceChangeMessage, prependDeviceChange, shouldInjectDeviceNotice, type SessionEventLike } from './device-notice.ts'
 import {
@@ -172,6 +172,13 @@ export interface Config {
   envTool?: boolean
   /** 环境工具探测的工具链命令白名单；默认 node/npm/pnpm/git/python/uv。 */
   toolchainCommands?: string[]
+  /** 手工维护的工具链（用于不在 PATH 里的工具）；同名时优先于自动探测。 */
+  toolchainAuthored?: {
+    name: string
+    path: string
+    /** 手填版本；不执行路径。 */
+    version?: string
+  }[]
   /** 开发模式：把插件日志同时发到本地 dev 控制台；默认关闭。 */
   debug?: boolean
   /** 开发控制台日志接收地址，例如 `http://127.0.0.1:3092/api/log/a`。 */
@@ -195,6 +202,11 @@ export const Config = z.object({
   requestTimeoutMs: z.number().min(1000).default(10_000).volatile(),
   envTool: z.boolean().default(true).volatile(),
   toolchainCommands: z.array(z.string()).default([...DEFAULT_TOOLCHAIN_COMMANDS]).volatile(),
+  toolchainAuthored: z.array(z.object({
+    name: z.string(),
+    path: z.string(),
+    version: z.string().default(''),
+  })).default([]).volatile(),
   debug: z.boolean().default(false).volatile(),
   devLogUrl: z.string().default('').volatile(),
 })
@@ -339,6 +351,7 @@ export function apply(ctx: Context, config: Config): void {
   let requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
   let envToolEnabled = readVolatile<boolean>(config.envTool) !== false
   let toolchainCommands = sanitizeCommandList(readVolatile<unknown>(config.toolchainCommands))
+  let toolchainAuthored = sanitizeAuthoredToolchain(readVolatile<unknown>(config.toolchainAuthored))
   // 每次 DSH 进程启动生成一次；同一进程内 lease/append 复用，重启后换新值。
   const clientId = randomBytes(16).toString('hex')
 
@@ -415,6 +428,7 @@ export function apply(ctx: Context, config: Config): void {
     requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
     envToolEnabled = readVolatile<boolean>(config.envTool) !== false
     toolchainCommands = sanitizeCommandList(readVolatile<unknown>(config.toolchainCommands))
+    toolchainAuthored = sanitizeAuthoredToolchain(readVolatile<unknown>(config.toolchainAuthored))
     debug = envDevLogUrl !== '' || readVolatile<boolean>(config.debug) === true
     devLogUrl = envDevLogUrl !== ''
       ? envDevLogUrl
@@ -527,6 +541,7 @@ export function apply(ctx: Context, config: Config): void {
       label: workspace.title,
     })),
     commands: () => toolchainCommands,
+    authoredToolchain: () => toolchainAuthored,
     logger,
   })
 
@@ -600,7 +615,6 @@ export function apply(ctx: Context, config: Config): void {
         ...engineConfig.salt === undefined || engineConfig.salt === '' ? {} : { salt: engineConfig.salt },
         clientId: engineConfig.clientId ?? '0000000000000000',
         deviceName,
-        dshHome: dirname(dirname(statePath)),
         stateDir: dirname(statePath),
         workspaces: [],
         ...engineConfig.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: engineConfig.requestTimeoutMs },
@@ -798,7 +812,6 @@ export function apply(ctx: Context, config: Config): void {
       clientId,
       requestTimeoutMs,
       deviceName,
-      dshHome: dirname(dirname(statePath)),
       stateDir: join(dirname(statePath), 'vault'),
       workspaces,
       ...process.env.DSH_VERSION === undefined ? {} : { dshVersion: process.env.DSH_VERSION },

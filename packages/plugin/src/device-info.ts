@@ -47,7 +47,16 @@ export interface ToolchainFact {
   readonly version?: string
   /** 执行文件路径；解析不到时省略。 */
   readonly path?: string
-  readonly source: 'auto'
+  /** `auto` = 从 PATH 探测；`authored` = 本机配置手工维护（不执行路径）。 */
+  readonly source: 'auto' | 'authored'
+}
+
+/** 手工维护的工具链条目：用于不在 PATH 里的工具。 */
+export interface AuthoredToolchainEntry {
+  readonly name: string
+  readonly path: string
+  /** 手填版本；不执行 `path --version`。 */
+  readonly version?: string
 }
 
 /** 环境工具返回的规范值。 */
@@ -128,6 +137,40 @@ const TOOLCHAIN_TTL_MS = 10 * 60 * 1000
 const PROBE_TIMEOUT_MS = 1_500
 const PROBE_CONCURRENCY = 2
 const SAFE_COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/u
+const MAX_AUTHORED_TOOLCHAIN = 32
+
+/**
+ * 校验并归一化手工工具链条目。
+ *
+ * `name` 走和自动探测相同的白名单；`path` 只做非空与长度校验，不解析、不执行。
+ * 同名条目按大小写不敏感去重，先出现的生效。
+ *
+ * @param value - 插件配置里的原始值。
+ * @returns 合法条目；非法项静默跳过。
+ */
+export function sanitizeAuthoredToolchain(value: unknown): AuthoredToolchainEntry[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const entries: AuthoredToolchainEntry[] = []
+  for (const item of value) {
+    if (item === null || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    const name = typeof record['name'] === 'string' ? record['name'].trim() : ''
+    const path = typeof record['path'] === 'string' ? record['path'].trim() : ''
+    if (!SAFE_COMMAND_NAME.test(name) || path === '' || path.length > 1024) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    const version = typeof record['version'] === 'string' ? record['version'].trim() : ''
+    seen.add(key)
+    entries.push({
+      name,
+      path,
+      ...version === '' ? {} : { version: version.slice(0, 120) },
+    })
+    if (entries.length >= MAX_AUTHORED_TOOLCHAIN) break
+  }
+  return entries
+}
 
 /** 设备身份来源；每次读取时取最新配置。 */
 export interface DeviceIdentitySource {
@@ -256,6 +299,8 @@ export interface LocalEnvironmentOptions {
   readonly workspaces: () => readonly { readonly path: string; readonly label: string }[]
   /** 工具链命令白名单；默认 {@link DEFAULT_TOOLCHAIN_COMMANDS}。 */
   readonly commands?: () => readonly string[]
+  /** 手工维护的工具链（不在 PATH 里的工具）；与自动探测同名时优先。 */
+  readonly authoredToolchain?: () => readonly AuthoredToolchainEntry[]
   /** DSH 版本；缺省读环境变量。 */
   readonly dshVersion?: () => string
   /** DSH profile；缺省读环境变量。 */
@@ -272,6 +317,7 @@ export class LocalEnvironment {
     readonly at: number
     readonly value: readonly ToolchainFact[]
     readonly error?: string
+    readonly authoredKey: string
   }
   private readonly options: LocalEnvironmentOptions
 
@@ -315,28 +361,44 @@ export class LocalEnvironment {
     readonly error?: string
   }> {
     const now = (this.options.now ?? Date.now)()
+    const authored = sanitizeAuthoredToolchain(this.options.authoredToolchain?.() ?? [])
+    const authoredKey = JSON.stringify(authored)
     const current = this.toolchain
-    if (input.refresh !== true && current !== undefined && now - current.at < TOOLCHAIN_TTL_MS) {
+    if (input.refresh !== true && current !== undefined
+      && current.authoredKey === authoredKey && now - current.at < TOOLCHAIN_TTL_MS) {
       return current.error === undefined ? { value: current.value } : { value: current.value, error: current.error }
     }
+    const authoredFacts: ToolchainFact[] = authored.map((entry) => ({
+      name: entry.name,
+      ...entry.version === undefined ? {} : { version: entry.version },
+      path: entry.path,
+      source: 'authored',
+    }))
     const shell = this.options.shell()
     if (shell === undefined) {
+      if (authoredFacts.length > 0) {
+        this.toolchain = { at: now, value: authoredFacts, authoredKey }
+        return { value: authoredFacts }
+      }
       const error = '宿主没有 shell 服务，工具链未采集'
-      this.toolchain = { at: now, value: [], error }
+      this.toolchain = { at: now, value: [], error, authoredKey }
       return { value: [], error }
     }
+    const authoredNames = new Set(authored.map((entry) => entry.name.toLowerCase()))
     const commands = (this.options.commands?.() ?? DEFAULT_TOOLCHAIN_COMMANDS)
       .filter((name): name is string => typeof name === 'string' && SAFE_COMMAND_NAME.test(name))
+      .filter((name) => !authoredNames.has(name.toLowerCase()))
     const probed = await runLimited(
       commands.map((name) => async () => probeTool(shell, name, input.signal, input.workdir, input.sandboxPolicy)),
       PROBE_CONCURRENCY,
     )
-    const value = probed.flatMap((entry) => entry.fact === undefined ? [] : [entry.fact])
+    const autoValue = probed.flatMap((entry) => entry.fact === undefined ? [] : [entry.fact])
     const errors = probed.flatMap((entry) => entry.error === undefined ? [] : [entry.error])
+    const value = [...authoredFacts, ...autoValue]
     const error = value.length === 0 && errors.length > 0
       ? errors.slice(0, 3).join('; ')
       : undefined
-    this.toolchain = { at: now, value, ...error === undefined ? {} : { error } }
+    this.toolchain = { at: now, value, authoredKey, ...error === undefined ? {} : { error } }
     return error === undefined ? { value } : { value, error }
   }
 }

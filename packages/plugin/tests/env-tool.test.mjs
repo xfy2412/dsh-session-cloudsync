@@ -44,6 +44,17 @@ test('按 get_env → this_env → dscs_env 取第一个可用名', async () => 
   assert.deepEqual(tools.disposed, ['this_env'])
 })
 
+test('render 给 authored 工具链加标记', () => {
+  const text = renderFacts(factsOf({
+    toolchain: [
+      { name: 'go', version: '1.22.3', path: 'C:\\Go\\bin\\go.exe', source: 'authored' },
+      { name: 'node', version: 'v24.20.0', path: 'C:\\node.exe', source: 'auto' },
+    ],
+  }))
+  assert.match(text, /go 1\.22\.3 — C:\\Go\\bin\\go\.exe \[authored\]/u)
+  assert.doesNotMatch(text, /node v24\.20\.0 — C:\\node\.exe \[authored\]/u)
+})
+
 test('execute 把会话 cwd 与 sandbox 策略传给采集', async () => {
   const calls = []
   const tools = fakeTools()
