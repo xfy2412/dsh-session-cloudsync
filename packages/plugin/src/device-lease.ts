@@ -54,6 +54,26 @@ interface LeaseResponse {
   readonly leaseUntil?: number
   readonly ownerDeviceId?: string
   readonly message?: string
+  readonly status?: number
+}
+
+/**
+ * 把租约失败归入客户端错误分类。
+ * 网络失败只代表"没拿到租约"，不能展示成"租约丢失"。
+ * @param message - 原始错误。
+ * @param status - HTTP 状态（网络错误没有）。
+ * @returns 错误分类。
+ */
+function leaseErrorKind(
+  message: string,
+  status?: number,
+): NonNullable<DeviceLeaseView['errorKind']> {
+  if (status === 401) return 'auth'
+  if (status === 403) return 'forbidden'
+  if (status !== undefined && status >= 500) return 'server'
+  if (/fetch failed|ECONN|ETIMEDOUT|timeout|network|socket|ENOTFOUND/u.test(message)) return 'network'
+  if (/未配置|配置/u.test(message)) return 'config'
+  return 'unknown'
 }
 
 /** 默认续租间隔。 */
@@ -147,7 +167,7 @@ export class DeviceLeaseKeeper {
     this.inflight = this.runTick().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
       this.options.logger?.warn(`dsh-session-cloudsync: 全局租约扫描失败：${message}`)
-      this.setView({ state: 'lost', error: message })
+      this.setView({ state: 'lost', error: message, errorKind: leaseErrorKind(message) })
       return false
     }).then((held) => {
       if (this.dirty) {
@@ -186,7 +206,7 @@ export class DeviceLeaseKeeper {
     }
     const base = normalizeBase(config.serverUrl)
     if (base === '' || config.token.trim() === '' || config.clientId === '') {
-      this.setView({ state: 'lost', error: '服务端地址/token/clientId 未配置全' })
+      this.setView({ state: 'lost', error: '服务端地址/token/clientId 未配置全', errorKind: 'config' })
       return false
     }
     const now = this.now()
@@ -239,6 +259,7 @@ export class DeviceLeaseKeeper {
         lastRenewAt: existing.lastRenewAt,
       },
       ...response.message === undefined ? {} : { error: response.message },
+      errorKind: leaseErrorKind(response.message ?? '', response.status),
     })
     return false
   }
@@ -259,6 +280,7 @@ export class DeviceLeaseKeeper {
       || previous.ownerDeviceId !== view.ownerDeviceId
       || previous.lastRenewAt !== view.lastRenewAt
       || previous.error !== view.error
+      || previous.errorKind !== view.errorKind
     if (!changed) return
     this.view = view
     this.dirty = true
@@ -313,7 +335,7 @@ export class DeviceLeaseKeeper {
       if (response.status === 409 && error.code === 'lease-held') {
         return { kind: 'foreign', message: error.message }
       }
-      return { kind: 'error', message: error.message }
+      return { kind: 'error', message: error.message, status: response.status }
     } catch (error: unknown) {
       return { kind: 'error', message: error instanceof Error ? error.message : String(error) }
     }

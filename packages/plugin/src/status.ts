@@ -269,6 +269,8 @@ export interface DeviceLeaseView {
   readonly lastRenewAt?: number
   /** 最近一次申请/续租错误。 */
   readonly error?: string
+  /** 租约失败的原因分类；`lost` 时用它区分网络/鉴权/服务端，而不是笼统说"租约丢失"。 */
+  readonly errorKind?: 'config' | 'network' | 'auth' | 'forbidden' | 'server' | 'unknown'
 }
 
 /** 客户端轮询的完整同步状态。 */

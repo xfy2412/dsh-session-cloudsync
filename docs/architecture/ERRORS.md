@@ -86,7 +86,7 @@ errorKind?: 'config' | 'network' | 'auth' | 'forbidden' | 'server' | 'unknown'
 
 - [x] 服务端错误码已经稳定（`bad-request`/`unauthorized`/`diverged`/`lease-held`/`gone`/`quota`/`rate-limited`）；
 - [x] `classifySyncError` 作为唯一 HTTP/异常分类入口；
-- [ ] `DeviceLeaseView.errorKind`：租约失败时写入分类；
-- [ ] 客户端所有租约文案改用统一 helper（气泡、底栏、详情行）；
+- [x] `DeviceLeaseView.errorKind`：租约失败时写入分类；
+- [x] 客户端所有租约文案改用统一 helper（气泡、底栏、详情行）；
 - [ ] `reset-pending` 错误码（随删除设计实现）；
-- [ ] 状态条不再把全局租约错误当成会话错误。
+- [x] 状态条不再把全局租约错误当成会话错误。

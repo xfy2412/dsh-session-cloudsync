@@ -17,6 +17,15 @@ function fakeServer(now) {
   const fetchImpl = async (url, init = {}) => {
     calls.push({ url: String(url), method: init.method, clientId: init.headers ? init.headers['x-client-id'] : undefined })
     if (mode === 'network') throw new Error('network down')
+    if (mode === 'auth') {
+      return jsonResponse({ ok: false, error: { code: 'unauthorized', message: '未知 token' } }, 401)
+    }
+    if (mode === 'forbidden') {
+      return jsonResponse({ ok: false, error: { code: 'forbidden', message: '无权同步' } }, 403)
+    }
+    if (mode === 'server') {
+      return jsonResponse({ ok: false, error: { code: 'server', message: '内部错误' } }, 500)
+    }
     if (mode === 'foreign') {
       return jsonResponse({ ok: false, error: { code: 'lease-held', message: 'held by other' } }, 409)
     }
@@ -91,11 +100,36 @@ test('全局租约：网络错误标记 lost，恢复后重新 held', async () =
   now.value += 40_000
   await keeper.tick()
   assert.equal(keeper.snapshot().state, 'lost')
+  assert.equal(keeper.snapshot().errorKind, 'network')
   assert.equal(await keeper.ensure(), false)
 
   server.setMode('ok')
   assert.equal(await keeper.ensure(), true)
   assert.equal(keeper.snapshot().state, 'held')
+  await keeper.dispose()
+})
+
+test('全局租约：401 标记 auth、500 标记 server，而不是笼统的租约丢失', async () => {
+  const { keeper, server } = makeKeeper()
+  server.setMode('auth')
+  assert.equal(await keeper.tick(), false)
+  assert.equal(keeper.snapshot().state, 'lost')
+  assert.equal(keeper.snapshot().errorKind, 'auth')
+
+  server.setMode('server')
+  assert.equal(await keeper.tick(), false)
+  assert.equal(keeper.snapshot().state, 'lost')
+  assert.equal(keeper.snapshot().errorKind, 'server')
+
+  server.setMode('forbidden')
+  assert.equal(await keeper.tick(), false)
+  assert.equal(keeper.snapshot().state, 'lost')
+  assert.equal(keeper.snapshot().errorKind, 'forbidden')
+
+  server.setMode('foreign')
+  assert.equal(await keeper.tick(), false)
+  assert.equal(keeper.snapshot().state, 'foreign')
+  assert.equal(keeper.snapshot().errorKind, undefined)
   await keeper.dispose()
 })
 

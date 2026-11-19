@@ -1008,13 +1008,25 @@ window.__ModuleLoader__.load({
       return 'warn'
     }
 
+    /** 全局单写者租约的展示文案：lost 必须按原因区分，不能一律说"租约丢失"。 */
+    function leaseErrorText(lease) {
+      if (!lease) return null
+      if (lease.state === 'foreign') return '另一台设备持有全局同步锁；本机当前只拉取'
+      if (lease.state !== 'lost') return null
+      var kind = lease.errorKind
+      if (kind === 'network') return '无法连接服务端；本机暂停上传并重试'
+      if (kind === 'auth') return '设备 token 无效或已吊销；本机暂停上传'
+      if (kind === 'forbidden') return '当前 token 无权同步；本机暂停上传'
+      if (kind === 'server') return '服务端错误；本机暂停上传并重试'
+      if (kind === 'config') return '服务端地址或 token 未配置全'
+      return '全局同步租约丢失；本机暂停上传并重试'
+    }
+
     /** 全局单写者租约是否阻止本机上传。 */
     function deviceLeaseBlockReason(status) {
       var lease = status && status.deviceLease
       if (!lease || lease.state === 'held' || lease.state === 'unconfigured') return null
-      return lease.state === 'foreign'
-        ? '另一台设备持有全局同步锁；本机当前只拉取'
-        : '全局同步租约丢失；本机暂停上传并重试'
+      return leaseErrorText(lease)
     }
 
     /** 取短会话 id，和同步气泡保持一致。 */
@@ -3376,9 +3388,7 @@ window.__ModuleLoader__.load({
                 : deferred > 0 ? '部分待处理' : '同步完成'
       var subtitle = failed ? '有会话未完成，已暂停'
         : blockedCount > 0 ? blockedCount + ' 个会话历史分叉，已阻止继续写入'
-          : leaseBlocked ? (lease.state === 'foreign'
-            ? '另一台设备持有全局同步锁；本机只拉取'
-            : '全局同步租约丢失；本机只拉取并重试')
+          : leaseBlocked ? leaseErrorText(lease)
             : running ? (headerStageLabel !== ''
               ? headerStageLabel + ' · ' + activeCount + ' 个会话'
               : total === 0 ? '连接服务端…' : done + '/' + total + ' 个会话 · 端到端加密')
@@ -3830,9 +3840,7 @@ window.__ModuleLoader__.load({
             : rows.length > 0
               ? rows
               : h('div', { className: 'dssync-note dssync-idle' }, syncIdleLine(new Date(), idleTick, status ? status.lastSuccess : null))),
-          leaseBlocked ? h('div', { className: 'dssync-error' }, lease.state === 'foreign'
-            ? '另一台设备持有全局同步锁；本机只拉取，不上传'
-            : '全局同步租约丢失；本机暂停上传并重试') : null,
+          leaseBlocked ? h('div', { className: 'dssync-error' }, leaseErrorText(lease)) : null,
           status && status.lastError ? h('div', { className: 'dssync-error' }, status.lastError.message + (status.retryCount > 0 ? ' · 已重试 ' + status.retryCount + ' 次' : '')) : null,
           h('div', { className: 'dssync-foot' },
             h('span', null, running ? '正在同步…' : failed ? '已暂停' : blockedCount > 0 ? '有分叉待处理' : deferred > 0 ? '有会话待处理' : planned > 0 ? '等待开始' : '全部完成'),
@@ -4146,6 +4154,17 @@ window.__ModuleLoader__.load({
       var running = task !== null && task.state !== 'done' && task.state !== 'failed'
         && task.state !== 'deferred' && task.state !== 'blocked'
       var leaseState = state.status && state.status.deviceLease ? state.status.deviceLease.state : null
+      var leaseDetail = state.status && state.status.deviceLease ? state.status.deviceLease : null
+      var leaseDetailText = leaseState === null ? '未知'
+        : leaseState === 'held' ? '已持有'
+          : leaseState === 'foreign' ? '被其他设备占用'
+            : leaseState === 'unconfigured' ? '未配置'
+              : leaseDetail && leaseDetail.errorKind === 'network' ? '丢失（无法连接服务端）'
+                : leaseDetail && leaseDetail.errorKind === 'auth' ? '丢失（token 无效）'
+                  : leaseDetail && leaseDetail.errorKind === 'forbidden' ? '丢失（无权同步）'
+                    : leaseDetail && leaseDetail.errorKind === 'server' ? '丢失（服务端错误）'
+                      : leaseDetail && leaseDetail.errorKind === 'config' ? '丢失（未配置全）'
+                        : '丢失'
       // 没有租约时推送会被宿主拒绝；这里提前置灰，别让用户白点。
       var leaseHeld = leaseState === null || leaseState === 'held'
       if (collapsed) {
@@ -4237,7 +4256,7 @@ window.__ModuleLoader__.load({
         }
         if (busy || blocked || pushingRef.current) return
         if (!leaseHeld) {
-          setDialog({ status: 'error', message: '全局同步租约被其他设备占用，稍后再试。' })
+          setDialog({ status: 'error', message: leaseErrorText(leaseDetail) || '全局同步租约被其他设备占用，稍后再试。' })
           return
         }
         // 会话正在生成（尾未闭合）时，推送只能到安全边界：先确认。
@@ -4278,7 +4297,7 @@ window.__ModuleLoader__.load({
         detailRow('远端', remoteLast + ' · ' + (view.headChainHash ? String(view.headChainHash).slice(0, 8) : '-')),
         detailRow('差异', diff === 0 ? '一致' : diff > 0 ? '本地领先 ' + diff : '远端领先 ' + (-diff)),
         detailRow('格式', 'v' + (view.formatVersion === null ? '?' : view.formatVersion)),
-        detailRow('租约', leaseState === null ? '未知' : leaseState === 'held' ? '已持有' : '被其他设备占用'),
+        detailRow('租约', leaseDetailText),
         view.blocked ? detailRow('阻塞', view.blocked) : null)
       }
       return h('div', { className: 'dssync-bar', style: SYNC_BAR_STYLE.bar, title: blocked ? view.blocked : '会话 ' + sessionId },
@@ -4415,12 +4434,10 @@ window.__ModuleLoader__.load({
       var sync = sessionState(state.status, sessionId)
       var compressed = sync.compression === 'zstd' || sync.compression === 'mixed'
       var taskError = sync.task && sync.task.error ? sync.task.error : null
-      var leaseNote = deviceLeaseBlockReason(state.status)
-      if (reason === null && !compressed && taskError === null && leaseNote === null) return null
+      if (reason === null && !compressed && taskError === null) return null
       return h('div', { className: 'dssync-hovernote' },
         reason === null ? null : h('div', null, '会话同步：', reason),
         taskError === null ? null : h('div', null, '同步任务：', taskError),
-        leaseNote === null ? null : h('div', null, leaseNote),
         compressed ? h('div', null, '封帧压缩：' + (sync.compression === 'mixed' ? 'zstd 混合' : 'zstd')) : null)
     }
 
