@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
-import { DeviceIdentityCache, LocalEnvironment } from '../src/device-info.ts'
+import { DeviceIdentityCache, LocalEnvironment, detectDshVersion } from '../src/device-info.ts'
 
 /** 造一个返回固定 JSON 的假 fetch。 */
 function fakeFetch(payload, status = 200) {
@@ -20,10 +23,13 @@ function fakeFetch(payload, status = 200) {
 /** 造一个按命令返回输出的假 shell。 */
 function fakeShell(handler) {
   const commands = []
+  const requests = []
   return {
     commands,
+    requests,
     resolve(request) {
       commands.push(request.command)
+      requests.push(request)
       return request
     },
     async execute(spec) {
@@ -106,6 +112,22 @@ test('设备身份：未配置地址/token 或响应不是设备身份时刷新�
   assert.equal(await wrong.refresh(), undefined)
 })
 
+test('DSH 版本：环境变量优先，否则读运行包的 package.json', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-version-'))
+  try {
+    mkdirSync(join(root, 'lib'))
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9' }))
+    const entry = join(root, 'lib', 'bin.js')
+    writeFileSync(entry, '')
+    assert.equal(detectDshVersion([process.execPath, entry], {}), '9.9.9')
+    assert.equal(detectDshVersion([process.execPath, entry], { DSH_VERSION: '1.2.3' }), '1.2.3')
+    assert.equal(detectDshVersion([process.execPath, join(root, 'lib', 'bin.js')], {}), '9.9.9')
+    assert.equal(detectDshVersion([process.execPath], {}), 'unknown')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('环境事实：OS/DSH/工作区/工具链都来自本机，非法命令名被过滤', async () => {
   const shell = fakeShell((command) => command.includes('--version')
     ? { stdout: `${command.split(' ')[0]} 1.2.3\n` }
@@ -114,18 +136,31 @@ test('环境事实：OS/DSH/工作区/工具链都来自本机，非法命令名
     shell: () => shell,
     commands: () => ['node', 'bad name!', 'git'],
   })
-  const facts = await new LocalEnvironment(options).facts()
+  const policy = { mode: 'danger-full-access' }
+  const facts = await new LocalEnvironment(options).facts({ workdir: 'D:/work/app', sandboxPolicy: policy })
   assert.deepEqual(facts.device, { deviceId: 'device-1', name: 'workstation' })
+  assert.ok(shell.requests.every((request) => request.workdir === 'D:/work/app'), '探测命令带上会话 cwd')
+  assert.ok(shell.requests.every((request) => request.sandboxPolicy === policy), '探测命令带上会话 sandbox 策略')
   assert.equal(facts.os.platform, process.platform)
   assert.equal(facts.dsh.version, '0.2.2-rc.1')
   assert.equal(facts.dsh.sessionFormatVersion, 4)
   assert.equal(facts.node, process.version)
   assert.deepEqual(facts.workspaces, [{ path: 'D:\\work\\app', label: 'app' }])
   assert.deepEqual(facts.toolchain.map((tool) => tool.name), ['node', 'git'])
-  assert.equal(facts.toolchain[0].version, 'node 1.2.3')
+  assert.equal(facts.toolchain[0].version, '1.2.3')
   assert.equal(facts.toolchain[0].path, '/usr/bin/tool')
   assert.equal(facts.toolchain[0].source, 'auto')
   assert.equal(facts.toolchainError, undefined)
+})
+
+test('shell 返回 CollectedOutput（{text}）时也能解析版本与路径', async () => {
+  const shell = fakeShell((command) => command.includes('--version')
+    ? { stdout: { text: `${command.split(' ')[0]} 9.9.9\n` } }
+    : { stdout: { text: '/usr/bin/tool\n' } })
+  const { options } = environmentOf({ shell: () => shell, commands: () => ['node'] })
+  const facts = await new LocalEnvironment(options).facts()
+  assert.equal(facts.toolchain[0].version, '9.9.9')
+  assert.equal(facts.toolchain[0].path, '/usr/bin/tool')
 })
 
 test('工具链：探测失败/超时的命令被跳过，缓存 TTL 内不重复探测，refresh 强制重跑', async () => {

@@ -8,6 +8,8 @@
  * @module dsh-session-cloudsync/device-info
  */
 import { arch, platform, release } from 'node:os'
+import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 
 /** 服务端为本机分配的设备身份；`name` 已按配置优先、服务端 label 兜底。 */
 export interface DeviceIdentity {
@@ -17,8 +19,8 @@ export interface DeviceIdentity {
 
 /** 宿主的 `shell` 服务里本模块用到的最小结构。 */
 export interface ShellResultLike {
-  readonly stdout?: string
-  readonly stderr?: string
+  readonly stdout?: string | { readonly text?: string }
+  readonly stderr?: string | { readonly text?: string }
   readonly exitCode?: number | null
   readonly timedOut?: boolean
 }
@@ -32,6 +34,8 @@ export interface ShellServiceLike {
     readonly command: string
     readonly timeoutMs?: number
     readonly signal?: AbortSignal
+    readonly workdir?: string
+    readonly sandboxPolicy?: unknown
   }): unknown
   execute(spec: unknown): Promise<ShellExecutionLike>
 }
@@ -70,6 +74,54 @@ export const DEFAULT_TOOLCHAIN_COMMANDS = ['node', 'npm', 'pnpm', 'git', 'python
 
 /** 当前插件验证与写入的 DSH 会话格式代际。 */
 export const DSH_SESSION_FORMAT_VERSION = 4
+
+/**
+ * 读取当前 DSH 版本。
+ *
+ * DSH 没有给插件暴露版本服务；官方 `getDshRuntimeVersion()` 也是读运行包的
+ * `package.json`。这里按同样思路：DSH_VERSION 环境变量优先，其次从运行入口
+ * （`process.argv[1]`，如 `…/@deepseek-ai/dsh/lib/bin.js`）向上找名为
+ * `@deepseek-ai/dsh` 的 package.json。读不到时返回 `unknown`。
+ *
+ * @param argv - 进程参数，默认 `process.argv`；测试可注入。
+ * @param env - 环境变量，默认 `process.env`；测试可注入。
+ * @returns 版本号或 `unknown`。
+ */
+export function detectDshVersion(
+  argv: readonly string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const fromEnv = env.DSH_VERSION?.trim()
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv
+  const entry = argv[1]
+  if (entry === undefined || entry === '') return 'unknown'
+  let directory = dirname(resolve(entry))
+  for (let depth = 0; depth < 4; depth += 1) {
+    const manifest = readManifest(join(directory, 'package.json'))
+    if (manifest !== undefined && manifest.name === '@deepseek-ai/dsh'
+      && typeof manifest.version === 'string' && manifest.version !== '') {
+      return manifest.version
+    }
+    const parent = dirname(directory)
+    if (parent === directory) break
+    directory = parent
+  }
+  return 'unknown'
+}
+
+/**
+ * 读一个 package.json 的 name/version。
+ * @param path - 文件路径。
+ * @returns 字段对象；读不到或解析失败时 undefined。
+ */
+function readManifest(path: string): { readonly name?: unknown; readonly version?: unknown } | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'))
+    return parsed !== null && typeof parsed === 'object' ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
 
 const IDENTITY_TTL_MS = 10 * 60 * 1000
 const TOOLCHAIN_TTL_MS = 10 * 60 * 1000
@@ -235,14 +287,14 @@ export class LocalEnvironment {
    * @param input - 可选中止信号与强制刷新工具链。
    * @returns 规范值。
    */
-  async facts(input: { readonly signal?: AbortSignal; readonly refresh?: boolean } = {}): Promise<EnvironmentFacts> {
+  async facts(input: { readonly signal?: AbortSignal; readonly refresh?: boolean; readonly workdir?: string; readonly sandboxPolicy?: unknown } = {}): Promise<EnvironmentFacts> {
     const toolchain = await this.toolchainFacts(input)
     const identity = this.options.identity()
     return {
       ...identity === undefined ? {} : { device: { deviceId: identity.deviceId, name: identity.name } },
       os: { platform: platform(), arch: arch(), release: release() },
       dsh: {
-        version: this.options.dshVersion?.() ?? process.env.DSH_VERSION ?? 'unknown',
+        version: this.options.dshVersion?.() ?? detectDshVersion(),
         profile: this.options.dshProfile?.() ?? process.env.DSH_PROFILE ?? '',
         sessionFormatVersion: DSH_SESSION_FORMAT_VERSION,
       },
@@ -258,7 +310,7 @@ export class LocalEnvironment {
    * @param input - 中止信号与强制刷新。
    * @returns 条目与可选错误说明。
    */
-  private async toolchainFacts(input: { readonly signal?: AbortSignal; readonly refresh?: boolean }): Promise<{
+  private async toolchainFacts(input: { readonly signal?: AbortSignal; readonly refresh?: boolean; readonly workdir?: string; readonly sandboxPolicy?: unknown }): Promise<{
     readonly value: readonly ToolchainFact[]
     readonly error?: string
   }> {
@@ -276,12 +328,16 @@ export class LocalEnvironment {
     const commands = (this.options.commands?.() ?? DEFAULT_TOOLCHAIN_COMMANDS)
       .filter((name): name is string => typeof name === 'string' && SAFE_COMMAND_NAME.test(name))
     const probed = await runLimited(
-      commands.map((name) => async () => probeTool(shell, name, input.signal)),
+      commands.map((name) => async () => probeTool(shell, name, input.signal, input.workdir, input.sandboxPolicy)),
       PROBE_CONCURRENCY,
     )
-    const value = probed.filter((entry): entry is ToolchainFact => entry !== undefined)
-    this.toolchain = { at: now, value }
-    return { value }
+    const value = probed.flatMap((entry) => entry.fact === undefined ? [] : [entry.fact])
+    const errors = probed.flatMap((entry) => entry.error === undefined ? [] : [entry.error])
+    const error = value.length === 0 && errors.length > 0
+      ? errors.slice(0, 3).join('; ')
+      : undefined
+    this.toolchain = { at: now, value, ...error === undefined ? {} : { error } }
+    return error === undefined ? { value } : { value, error }
   }
 }
 
@@ -290,20 +346,34 @@ export class LocalEnvironment {
  * @param shell - 宿主 shell 服务。
  * @param name - 已通过白名单校验的命令名。
  * @param signal - 调用方的中止信号。
- * @returns 探测结果；命令不存在时 undefined。
+ * @param workdir - 探测命令的工作目录（会话 cwd）。
+ * @returns 探测结果或失败原因。
  */
-async function probeTool(shell: ShellServiceLike, name: string, signal?: AbortSignal): Promise<ToolchainFact | undefined> {
-  const versionOutput = await runShell(shell, `${name} --version`, signal)
-  if (versionOutput === undefined) return undefined
-  const version = firstLine(versionOutput, 120)
-  if (version === undefined) return undefined
-  const pathOutput = await runShell(shell, executablePathCommand(name), signal)
-  const executable = pathOutput === undefined ? undefined : firstLine(pathOutput, 300)
+async function probeTool(
+  shell: ShellServiceLike,
+  name: string,
+  signal?: AbortSignal,
+  workdir?: string,
+  sandboxPolicy?: unknown,
+): Promise<{ readonly fact?: ToolchainFact; readonly error?: string }> {
+  const versionProbe = await runShell(shell, `${name} --version`, signal, workdir, sandboxPolicy)
+  if (versionProbe.output === undefined) {
+    return { error: `${name}: ${versionProbe.error ?? '没有输出'}` }
+  }
+  const rawVersion = firstLine(versionProbe.output, 120)
+  if (rawVersion === undefined) return { error: `${name}: 版本输出为空` }
+  // `git --version` 输出 "git version 2.55"，`python --version` 输出 "Python 3.14"；
+  // 去掉重复的命令名前缀，`version` 字段只保留版本本身。
+  const version = rawVersion.replace(new RegExp(`^${name}(?:\\s+version)?\\s+`, 'iu'), '') || rawVersion
+  const pathProbe = await runShell(shell, executablePathCommand(name), signal, workdir, sandboxPolicy)
+  const executable = pathProbe.output === undefined ? undefined : firstLine(pathProbe.output, 300)
   return {
-    name,
-    version,
-    ...executable === undefined ? {} : { path: executable },
-    source: 'auto',
+    fact: {
+      name,
+      version,
+      ...executable === undefined ? {} : { path: executable },
+      source: 'auto',
+    },
   }
 }
 
@@ -325,24 +395,46 @@ function executablePathCommand(name: string): string {
  * @param signal - 调用方的中止信号。
  * @returns stdout/stderr；超时、失败或空输出时 undefined。
  */
-async function runShell(shell: ShellServiceLike, command: string, signal?: AbortSignal): Promise<string | undefined> {
+async function runShell(
+  shell: ShellServiceLike,
+  command: string,
+  signal?: AbortSignal,
+  workdir?: string,
+  sandboxPolicy?: unknown,
+): Promise<{ readonly output?: string; readonly error?: string }> {
   try {
     const spec = shell.resolve({
       command,
       timeoutMs: PROBE_TIMEOUT_MS,
       ...signal === undefined ? {} : { signal },
+      ...workdir === undefined || workdir === '' ? {} : { workdir },
+      ...sandboxPolicy === undefined ? {} : { sandboxPolicy },
     })
     const handle = await shell.execute(spec)
     const result = await handle.result()
-    if (result.timedOut === true) return undefined
+    if (result.timedOut === true) return { error: '超时' }
     // 命令不存在时 PowerShell/bash 会把错误写到 stderr；非 0 退出码不能当版本行。
-    if (result.exitCode !== undefined && result.exitCode !== 0) return undefined
-    const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim()
-    return output === '' ? undefined : output
-  } catch {
+    if (result.exitCode !== undefined && result.exitCode !== 0) return { error: `退出码 ${result.exitCode}` }
+    const output = `${outputText(result.stdout)}\n${outputText(result.stderr)}`.trim()
+    return output === '' ? { error: '没有输出' } : { output }
+  } catch (error: unknown) {
     // 单条探测失败只说明该工具不可用；整体环境采集继续。
-    return undefined
+    return { error: error instanceof Error ? error.message : String(error) }
   }
+}
+
+/**
+ * 取 shell 输出文本：DSH 的 `CollectedOutput` 是 `{ text, truncated }`，测试里也允许裸字符串。
+ * @param value - stdout/stderr 字段。
+ * @returns 文本。
+ */
+function outputText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value !== null && typeof value === 'object') {
+    const text = (value as { readonly text?: unknown }).text
+    if (typeof text === 'string') return text
+  }
+  return ''
 }
 
 /**

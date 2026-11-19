@@ -20,6 +20,10 @@ export interface ToolsServiceLike {
 /** 工具执行上下文里本工具用到的字段。 */
 export interface ToolExecutionLike {
   readonly signal?: AbortSignal
+  /** 运行该工具的 Agent；用会话 cwd 作为探测命令的工作目录。 */
+  readonly agent?: {
+    readonly session?: { readonly header?: { readonly cwd?: string } }
+  }
 }
 
 /** 工具定义的最小结构；字段按 DSH `ToolDefinition` 的运行时契约填写。 */
@@ -130,8 +134,14 @@ const PARAMETERS_SCHEMA = {
  */
 export function registerEnvTool(
   tools: ToolsServiceLike | undefined,
-  collect: (input: { readonly signal?: AbortSignal; readonly refresh?: boolean }) => Promise<EnvironmentFacts>,
+  collect: (input: {
+    readonly signal?: AbortSignal
+    readonly refresh?: boolean
+    readonly workdir?: string
+    readonly sandboxPolicy?: unknown
+  }) => Promise<EnvironmentFacts>,
   logger?: WarnLogger,
+  policyOf?: (exec: ToolExecutionLike) => unknown,
 ): RegisteredEnvTool | undefined {
   if (tools === undefined || typeof tools.register !== 'function') return undefined
   for (const candidate of ENV_TOOL_NAMES) {
@@ -143,7 +153,7 @@ export function registerEnvTool(
       }
     }
     try {
-      const dispose = tools.register(definitionOf(candidate, collect))
+      const dispose = tools.register(definitionOf(candidate, collect, policyOf))
       return { name: candidate, dispose }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
@@ -162,7 +172,13 @@ export function registerEnvTool(
  */
 function definitionOf(
   name: string,
-  collect: (input: { readonly signal?: AbortSignal; readonly refresh?: boolean }) => Promise<EnvironmentFacts>,
+  collect: (input: {
+    readonly signal?: AbortSignal
+    readonly refresh?: boolean
+    readonly workdir?: string
+    readonly sandboxPolicy?: unknown
+  }) => Promise<EnvironmentFacts>,
+  policyOf?: (exec: ToolExecutionLike) => unknown,
 ): ToolDefinitionLike {
   return {
     name,
@@ -176,9 +192,13 @@ function definitionOf(
     async execute(args, exec) {
       const refresh = args !== null && typeof args === 'object'
         && (args as { readonly refresh?: unknown }).refresh === true
+      const workdir = exec?.agent?.session?.header?.cwd
+      const sandboxPolicy = exec === undefined ? undefined : policyOf?.(exec)
       return await collect({
         ...exec?.signal === undefined ? {} : { signal: exec.signal },
         ...refresh ? { refresh: true } : {},
+        ...workdir === undefined || workdir === '' ? {} : { workdir },
+        ...sandboxPolicy === undefined ? {} : { sandboxPolicy },
       })
     },
   }

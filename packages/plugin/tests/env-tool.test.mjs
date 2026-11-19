@@ -44,6 +44,25 @@ test('按 get_env → this_env → dscs_env 取第一个可用名', async () => 
   assert.deepEqual(tools.disposed, ['this_env'])
 })
 
+test('execute 把会话 cwd 与 sandbox 策略传给采集', async () => {
+  const calls = []
+  const tools = fakeTools()
+  const policy = { mode: 'danger-full-access' }
+  registerEnvTool(
+    tools,
+    async (input) => { calls.push(input); return factsOf() },
+    undefined,
+    () => policy,
+  )
+  const definition = tools.registered[0]
+  await definition.execute({}, {
+    signal: new AbortController().signal,
+    agent: { session: { header: { cwd: 'D:/work' } } },
+  })
+  assert.equal(calls[0].workdir, 'D:/work')
+  assert.equal(calls[0].sandboxPolicy, policy)
+})
+
 test('注册抛 already registered 时继续尝试下一个名字', () => {
   const tools = fakeTools({
     failWith: (name) => name === 'get_env' ? 'tool "get_env" is already registered' : undefined,

@@ -535,10 +535,19 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['tools'], (toolsCtx) => {
     if (!envToolEnabled) return
     const tools = toolsCtx.get('tools') as unknown as ToolsServiceLike | undefined
+    // 探测命令跟随调用方会话的 sandbox 策略，避免在 danger-full-access 下仍按
+    // workspace-write 解析、或在 workspace 覆盖 temp 目录时被 ACL runner 拒绝。
+    const sandboxPolicy = toolsCtx.get('sandboxPolicy') as
+      | { resolve?: (input: { readonly session?: unknown }) => unknown }
+      | undefined
     const registered = registerEnvTool(
       tools,
       (input) => localEnvironment.facts(input),
       logger,
+      (exec) => {
+        const session = exec.agent?.session
+        return sandboxPolicy?.resolve?.(session === undefined ? {} : { session })
+      },
     )
     if (registered === undefined) return
     envToolName = registered.name
