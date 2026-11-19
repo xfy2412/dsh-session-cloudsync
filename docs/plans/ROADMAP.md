@@ -1,6 +1,6 @@
 # 里程碑与当前状态
 
-> 当前真值，2026-11-10。以本文件为准。
+> 当前真值，2026-11-19。以本文件为准。
 
 ```
 M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件同步 → M4 自动化/故障/客户端防护
@@ -14,27 +14,29 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 | **M2** | 自部署服务端：设备 token、blob、manifest、租约、append、墓碑、会话快照、批量 blob、zstd 封帧、配额、管理台、首次初始化 | ✅ 服务端已实现 v2-only（`PROTOCOL_VERSION=3`）；插件走 v2 路径、幂等 append、批量 blob 与 zstd，0.0.x 插件不再兼容；变更流已移除（见 [CURSOR-HISTORY](CURSOR-HISTORY.md)） |
 | **M3** | 插件 MVP：枚举会话、事件批次哈希、推送/拉取、免重启 ingest、手动触发/状态、断网降级、安全边界（`tailOpen`/`safeThroughSeq`）与 apply journal | ✅ 已完成；0.1.4 已发布（单会话推送、底部会话状态条、上传范围开关、空闲文案） |
 | **M4** | 自动同步、设置页、故障演练（5xx/超时/分叉/代际 skew/口令错误）、客户端防误操作（composer block、列表拦截、同步标记） | ✅ 主要项已完成（A1–A5、B1–B5、C1–C4/C6、E1）；C5 GUI 回归、D5 故障文案演练、E3 文档收口顺延，不阻塞发布 |
-| **Vault V0–V2.1** | 密钥域/记录链 → 服务端 append/cursor + 最小设备台账 → `workspaceKey` + 一次性绑定 + 未映射阻断 → 根会话级同步选择 + label 映射 | ✅ V0–V2.1 已完成（133 tests）；V3/V4 设计稿；见 [VAULT.md](../sync/VAULT.md) |
+| **Vault V0–V2.1** | 密钥域/记录链 → 服务端 append/cursor + 最小设备台账 → `workspaceKey` + 一次性绑定 + 未映射阻断 → 根会话级同步选择 + label 映射 | ✅ V0–V2.1 已完成（133 tests）；见 [VAULT.md](../sync/VAULT.md) |
+| **Vault V3** | 设备级插件快照 + 跨设备版本矩阵 + 一键匹配 | ✅ 基本完成：`device/profile.plugins`、对端 Vault 读取、registry 最新列与图标、安装/升级逐项确认；降级/移除仍只给手工命令，不做会话 producer |
+| **Vault V4** | 本机工具链 + L3 笔记/保留策略 | 🟡 工具链完成（`get_env` + `authored`，只在本机）；L3 笔记与压缩/保留暂缓，不阻塞发布 |
 | **附件同步** | 会话附件（图片/文件）的跨设备同步 | ✅ 已完成（服务端 0.1.5 + 插件 0.1.5）：端到端加密、批次索引、拉取前补齐、「检查附件」修复；实测推送 → 跨设备拉取 → 删对象后修复通过。不做分片；内容损坏的修复待做（设计稿 §17） |
 | **M5** | 公共多租户公益服 | ❌ 不在当前范围；独立 package/仓库，只共享插件对接协议 |
 
-> **当前优先级**：插件 0.1.5 与服务端 0.1.5 已发布，附件同步完成（实测见设计稿 §16）；下一步是 Vault V3/V4 与 0.2.0 的协议瘦身。M5 公益服不塞进自部署包。
+> **当前优先级**：V3 可发布部分与 V4 工具链已完成；下一步是 0.2.0 的协议瘦身、文档收口与发布。L3 笔记/保留策略不阻塞当前发布。
 >
-> **未发布的插件改动**：拉取预热覆盖全部拉取任务——新会话、追加、已追平但缓存落后都会刷新
-> `title` 与 `sessionListMetadata`（列表排序用的最后消息时间）；升级前落后的旧缓存由 scan 排
-> 一次性补热任务。另新增本机环境工具（`get_env` → `this_env` → `dscs_env` 取第一个可用名）与
-> `agent/pre-step` 的设备切换提示（提示只在用户下一条消息准入时落盘）。实测见 SYNC-SAFETY §3
-> 流程第 7 步与 VAULT.md §3.7。
+> **未发布的插件改动**：跨设备插件版本同步（设备快照、版本矩阵、registry 最新/图标）、本机环境工具
+> （`get_env` → `this_env` → `dscs_env`）、`authored` 工具链、设备切换提示、租约错误文案规范化、
+> 拉取预热覆盖全部拉取任务。实测见 SYNC-SAFETY §3、VAULT.md §3.7/§7。
 
 ## 当前阶段的验收
 
 - **M3**：本机 → 本地假服务 → 第二临时 home 拉取，同一来源链的**事件前缀**一致；断网只降级不报错；开放尾只备份，远端只 apply 到 `safeThroughSeq`；强杀后靠 apply journal 在启动时补完。跨设备“历史是否同源”的 raw 前缀校验已实现（push/pull 的 `verifySharedPrefix`）；对账 UX 仍见 [RECONCILE.md](../sync/RECONCILE.md)。
 - **M4**：每个故障有确定性行为与 UI 文案；分叉双侧内容都保留；同步中的会话不能被误 resume 或误分叉。
+- **V3**：两台设备插件快照不同时矩阵可见；安装/升级经用户确认、逐项汇报；降级/删除只给手工命令。
+- **V4**：工具链 `get_env` 不覆盖 `authored`；工具链与路径不上行 Vault；L3 笔记/保留不在本轮验收。
 
 ## 文档地图
 
 - [DESIGN.md](../architecture/DESIGN.md)：范围、数据分层、传输单位、并发、加密、兼容边界。
-- [VAULT.md](../sync/VAULT.md)：L2/L3 加密附加数据层、多工作区映射、设备台账与插件版本匹配（V0–V2.1 已实现，V3+ 设计稿）。
+- [VAULT.md](../sync/VAULT.md)：L2/L3 加密附加数据层、多工作区映射、设备台账与插件版本匹配（V0–V3 已实现；V4 工具链已做，笔记/保留暂缓）。
 - [CWD.md](../architecture/CWD.md)：header canonical、事件 raw、接收端 cwd 修正。
 - [DECISIONS.md](DECISIONS.md)：cwd/Canonical 反复讨论后的最终决策记录。
 - [PROMPT-GUIDANCE.md](../guides/PROMPT-GUIDANCE.md)：agent 提示词规划：尽量不把会话 cwd 切到工作区外。

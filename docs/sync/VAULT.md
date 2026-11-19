@@ -1,6 +1,6 @@
 # 加密附加数据层（Vault）与工作区映射
 
-> 状态：**V2 已完成，V3+ 设计稿**（2026-10-22 起草；2026-11-10 按插件 0.1.4 的当前代码校正）。
+> 状态：**V2–V3 已完成；V4 工具链已实现，L3 笔记/保留暂缓**（2026-10-22 起草；2026-11-19 校正）。
 > 本文件承接 [DESIGN.md](../architecture/DESIGN.md) 的 L2 设备台账 / L3 agent 笔记；M4 的单一
 > `workspacePath` 已由本文的工作区绑定替换。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
 > 会话内部的 cwd 处理另见 [CWD.md](../architecture/CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
@@ -17,10 +17,10 @@ Vault 负责同步**会话事件之外**的加密数据：
 - L2 设备台账：设备名、OS、DSH 版本与 profile、会话格式版本、已加载插件与版本、最后在线；
 - 工作区身份与「远端工作区 → 本地工作区」绑定；
 - L3 agent 笔记（append-only）；
-- 设备级 `plugins` 快照，用于跨设备兼容性提示和「一键匹配版本」（V3+ 设计）。
+- 设备级 `plugins` 快照，用于跨设备兼容性提示和「一键匹配版本」（V3 已实现）。
 
-当前实现只有最小 `device/profile`（不含插件）与 `workspace/profile`（见 §3.3）；
-L3 笔记与插件版本匹配的其余部分仍是 V3+/V4 设计。
+当前实现包含最小 `device/profile`（含 `plugins` 快照）与 `workspace/profile`（见 §3.3）；
+V3 的设备级插件匹配已实现；L3 笔记与压缩/保留策略仍是 V4 后续项。
 
 **本机环境（`get_env` 工具、工具链版本/路径、本机路径）不在 Vault 范围内**：它只在本机
 读取、只在本机展示，不上行服务端（见 §3.7）。设备台账只保留同步/兼容性需要的身份与版本。
@@ -142,7 +142,7 @@ device/<deviceId>
 }
 ```
 
-当前代码只写上述字段（`vault-sync.ts`）：`plugins` 是下一步（V3 插件版本匹配）才写入；
+当前代码写上述字段（`vault-sync.ts`）：`plugins` 已接入设备级插件快照；
 `os` 供设备列表展示。`workspaces`、`dshHome`、Node 版本、工具链版本/路径**不写入**
 `device/profile`——工作区列表由每工作区一条 `workspace/profile` 承载（见 §3.4），
 工具链只由本机环境工具读取（见 §3.7）。
@@ -503,7 +503,7 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 统一小写、`\` 归一为 `/`，但 HMAC 输入保留一份确定的平台规范形式。跨平台不同根目录不做
 自动换算，走别名绑定。
 
-## 7. 插件版本匹配与一键切换（V3+ 设计，部分实现）
+## 7. 插件版本匹配与一键切换（V3 已实现，设备级）
 
 ### 7.1 版本来源
 
@@ -560,15 +560,16 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
   其他设备/registry 列按 registry 的 `icon` 字段从 CDN 读取并缓存，取不到时回退首字母；
 - 服务端改动不写进插件发版 tag：插件先发版并带着门控，服务端后续声明能力即可生效。
 
-## 8. 工具链识别（V4 设计，未实现）
+## 8. 工具链识别（V4，本机已实现；笔记/保留未实现）
 
 沿用既有 L2 设计：
 
 - `auto`：按配置的允许列表采集（node、npm、pnpm、git、python、uv 等），
   只执行带超时的 `--version` / `which` 类调用，不拼 shell，不读环境变量值；
-- `authored`：agent/用户通过工具维护，可带 `sessionId`、note、来源；
-- 自动刷新不得覆盖 `authored`；同名渲染时 `authored` 优先并标来源；
-- 记录 `path`、`version`、`source`、`at`；
+- `authored`：本机 config 的 `toolchainAuthored: [{name, path, version?}]`，用于不在 PATH 里的工具；
+  `path` 不执行、`version` 手填，自动探测跳过同名命令；
+- 自动刷新不得覆盖 `authored`；同名渲染时 `authored` 优先并标 `[authored]`；
+- 记录 `path`、`version`、`source`（`auto`/`authored`），不落 Vault；
 - 工具链路径用于换设备提示和排障，不自动改 PATH、不自动执行安装；
 - 采集命令、超时、并发上限应在配置里可调，默认保守。
 
@@ -581,8 +582,8 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 - **跨设备插件**：表格形式，行是插件，列是本机/其他设备/registry 最新；版本显示为卡片，可拖到本机列，点设备列头全部采用该设备版本；顶部「应用变更」「清空暂存」；有变更的行用琥珀色，不可执行用红色；
 - **笔记**：按工作区/设备分组，agent 写入入口在后续里程碑。
 
-当前设置页只有连接、凭据、上传范围、工作区映射、同步行为与性能面板
-（`client/index.js`）；设备台账 / 版本匹配 / 笔记三个面板属于 V3+/V4 设计。
+当前设置页已有连接、凭据、上传范围、工作区映射、跨设备插件、同步行为与性能面板
+（`client/index.js`）；设备台账与笔记面板仍属于后续设计。
 
 首启和设置页都可以设置工作区映射：
 
@@ -608,10 +609,13 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 | V0 | Vault 密钥域、记录信封、加密/链测试 | 篡改/重放/跨设备挪记录被拒 |
 | V1 | Vault 服务端 append/cursor + 最小设备台账 + `workspace/profile` | 两台设备各自写 stream，互不覆盖 |
 | V2 | `workspaceKey` manifest 扩展 + 一次性绑定 + 未映射阻断 | 多工作区各自落地；未映射不 apply；绑定不可改 |
-| V3 | 设备级插件快照 + 插件版本检测 + 一键匹配 | 精确 spec、用户确认、失败可回退 |
-| V4 | 工具链采集 + L3 笔记 + 压缩/保留策略 | 自动不覆盖 authored；笔记只追加 |
+| V3 | 设备级插件快照 + 插件版本检测 + 一键匹配 | 精确 spec、用户确认、失败可回退（已实现；降级/移除手工） |
+| V4 | 工具链采集 + L3 笔记 + 压缩/保留策略 | 自动不覆盖 authored；笔记只追加（工具链已实现；笔记/保留暂缓） |
 
 V2 已完成工作区落点替换，不需要迁移分支。
+
+> V3 已完成（2026-11-19）：设备级 `plugins` 快照、Vault 对端读取、跨设备版本矩阵、
+> registry 最新版本/图标、安装与升级；降级/移除仍只给手工命令，不做 session producer。
 
 > V0 已完成（2026-10-22）：`shared/vault.ts` 的 vaultKey/workspaceKey 派生、确定性
 > AES-GCM 封帧、AAD、recordHash、链校验与 5 组篡改/重放测试。
