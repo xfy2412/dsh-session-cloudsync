@@ -83,7 +83,10 @@ export function lastDeviceChangeDeviceId(events: readonly SessionEventLike[]): s
     if (source === null || typeof source !== 'object') continue
     const record = source as Record<string, unknown>
     if (record['kind'] !== DEVICE_CHANGE_SOURCE_KIND) continue
-    return typeof record['deviceId'] === 'string' ? record['deviceId'] : undefined
+    const deviceId = typeof record['deviceId'] === 'string' ? record['deviceId'] : undefined
+    // 笔记摘要也复用 session-cloudsync 的 source.kind，但没有 deviceId；跳过它继续找。
+    if (deviceId === undefined) continue
+    return deviceId
   }
   return undefined
 }

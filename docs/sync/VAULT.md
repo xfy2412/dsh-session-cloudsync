@@ -1,6 +1,6 @@
 # 加密附加数据层（Vault）与工作区映射
 
-> 状态：**V2–V3 已完成；V4 工具链已实现，L3 笔记设计完成、保留暂缓**（2026-10-22 起草；2026-11-19 校正）。
+> 状态：**V2–V3 已完成；V4 工具链与 L3 笔记首版已实现，保留暂缓**（2026-10-22 起草；2026-11-19 校正）。
 > 本文件承接 [DESIGN.md](../architecture/DESIGN.md) 的 L2 设备台账 / L3 agent 笔记；M4 的单一
 > `workspacePath` 已由本文的工作区绑定替换。M4 的会话同步协议不变；Vault 是独立、可增量演进的旁路存储。
 > 会话内部的 cwd 处理另见 [CWD.md](../architecture/CWD.md)（raw 事件 + 接收端修正，不承诺跨平台 resume）；
@@ -16,7 +16,7 @@ Vault 负责同步**会话事件之外**的加密数据：
 
 - L2 设备台账：设备名、OS、DSH 版本与 profile、会话格式版本、已加载插件与版本、最后在线；
 - 工作区身份与「远端工作区 → 本地工作区」绑定；
-- L3 agent 笔记（append-only；session/workspace/vault/device 四作用域；设计完成，待实现）；
+- L3 agent 笔记（append-only；scope=session/workspace/global × storage=device/vault；首版已实现）；
 - 设备级 `plugins` 快照，用于跨设备兼容性提示和「一键匹配版本」（V3 已实现）。
 
 当前实现包含最小 `device/profile`（含 `plugins` 快照）与 `workspace/profile`（见 §3.3）；
@@ -80,7 +80,7 @@ Vault 复用现有 **封帧原语、blob 存储、配额、cursor、错误分类
 device/<deviceId>
   seq 1: device/profile        # 已实现
   seq 2: workspace/profile     # 已实现
-  # 设计稿（未实现）：workspace/bind、note/append
+  # 设计稿（未实现）：workspace/bind
 ```
 
 - 一台 DSH profile/安装实例对应一个 device token 与一条 stream；同一 token 不允许被多个进程当作两个 writer 并发使用；
@@ -266,12 +266,12 @@ Vault 写入流程：
 append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已有记录，不生成
 第二条同 seq 记录；租约已释放也允许幂等重放。
 
-### 3.6 L3 agent 笔记（V4 设计完成，未实现）
+### 3.6 L3 agent 笔记（V4，首版已实现，未发布）
 
 目标：用加密、跨设备的个人笔记，**部分替代工作区里的 `ENVIRONMENT.md` / `AGENTS.md`**：
 
-- `ENVIRONMENT.md` 里机器/工具链/路径相关的事实 → `device` 或 `workspace` scope；
-- `AGENTS.md` 里项目约定、构建方式、工作习惯 → `workspace` scope；
+- `ENVIRONMENT.md` 里机器/工具链/路径相关的事实 → `storage=device` 或 `scope=workspace`；
+- `AGENTS.md` 里项目约定、构建方式、工作习惯 → `scope=workspace`，默认同步；
 - 不替代 git 仓库里的团队文档：笔记属于个人 Vault，不随仓库提交，也不改工作区文件。
 
 #### 记录
@@ -282,8 +282,9 @@ append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已
 {
   "id": "note-…",
   "at": 1790000000000,
-  "scope": "session",          // session | workspace | vault | device
-  "scopeKey": "session-…",     // sessionId / workspaceKey / "" / deviceId
+  "scope": "workspace",        // session | workspace | global
+  "scopeKey": "workspace-key", // sessionId / workspaceKey / ""
+  "storage": "vault",          // device | vault
   "deviceId": "…",
   "authorKind": "agent",       // agent | user
   "author": {
@@ -291,6 +292,7 @@ append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已
     "agentPreset": "standard"  // 可选
   },
   "title": "构建约定",
+  "summary": "pnpm 构建；测试先 node --test。",
   "text": "markdown…",
   "tags": ["build", "pnpm"],
   "pinned": false,
@@ -299,43 +301,64 @@ append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已
 }
 ```
 
-作用域：
+`title` ≤ 80 字符；`summary` ≤ 200 字符，是自动注入用的短文本；`text` ≤ 8 KB。
 
-| scope | scopeKey | 存储 | 可见范围 |
-|---|---|---|---|
-| `session` | sessionId | Vault | 同一会话，跨设备可见 |
-| `workspace` | workspaceKey | Vault | 同一工作区的所有会话/设备（默认） |
-| `vault` | 空 | Vault | 本 Vault 全部同步工作区 |
-| `device` | deviceId | 本机 `notes/device.json`，不上行 | 只有本机 |
+#### 两个正交维度
 
-- 笔记本身不可变；**编辑/修正 = 在同一 `threadId` 追加一条新笔记**，不替换旧记录；
+`scope` 决定“属于哪个上下文”，`storage` 决定“存哪里、是否同步”：
+
+| storage | scope | scopeKey | 存储 | 可见范围 |
+|---|---|---|---|---|
+| `device` | `session` | sessionId | 本机 `notes/device.json` | 本机 + 本会话 |
+| `device` | `workspace` | workspaceKey | 本机 | 本机 + 本工作区 |
+| `device` | `global` | `""` | 本机 | 本机全部工作区 |
+| `vault` | `session` | sessionId | Vault | 同一会话，跨设备 |
+| `vault` | `workspace` | workspaceKey | Vault | 同一工作区，跨设备（agent 默认） |
+| `vault` | `global` | `""` | Vault | 全部同步工作区；只允许用户写 |
+
+- 不再有第四个 `device` scope；“仅本机”是一个 storage 开关；
+- thread 绑定 `(storage, scope, scopeKey)`，回复必须同组，不能跨 scope 串 thread；
+- 笔记本身不可变；**编辑/修正 = 在同一 `threadId` 追加一条新笔记**；
 - 删除 = 用户发 tombstone；
 - 会话删除/存档后 `session` 笔记保留并标 orphan，UI 可清理；
 - 单条 ≤ 8 KB；每工作区 ≤ 200 条、每会话 ≤ 50 条、每 Vault ≤ 100 条、每本机 ≤ 100 条；
-  总量受 Vault 20 MB 配额约束；
-- `device` 笔记只在本地文件，0600 权限，不进 Vault、不进模型请求日志。
+- `storage=device` 的笔记只写本机，0600 权限，不进 Vault；若被注入，会进入本机会话日志，
+  但不上传服务端。
 
 #### 写入与权限
 
-- `agent` 可以写 `session` / `workspace` / `device`，默认 `workspace`；
-- `agent` **不能写 `vault`**；`vault` 笔记只允许用户手写，避免单项目经验污染所有项目；
-- `agent` 可以新建 thread，也可以回复自己创建的 thread；不能回复用户创建的 thread，不能改/删用户笔记；
+- `agent` 可写 `storage=device` 的任意 scope；
+- `agent` 可写 `storage=vault` 的 `session` / `workspace`，默认 `(vault, workspace)`；
+- `agent` **不能写 `(vault, global)`**；该组合只允许用户手写，避免单项目经验污染所有项目；
+- `agent` 可新建 thread，也可回复任意 agent 创建的 thread；不能回复用户创建的 thread；
 - 用户可在 UI 里编辑任意笔记（同 thread 追加）和删除（写 tombstone）；
 - 写入限流：每会话每分钟最多 3 条、单次 ≤ 8 KB；不写 token、口令、完整环境变量值。
 
 #### 读取、thread 与注入
 
 - Vault 侧从 cursor 拉 `note/append`，按 `threadId` 分组；`device` 侧读本地文件；
-- 不定义“唯一最新版本”：同一 thread 的多条记录是时间线，UI 默认展开最新一条、折叠历史；
-  两个设备同时追加只会形成两条普通记录，不产生需要合并的分支；
-- 注入时每个 thread 取 `at` 最新一条；pinned 优先；`at` 相同按 `id` 稳定排序；
-- 会话压缩上下文后第一轮注入摘要，预算 1–2 KB，顺序：
-  1. `session` 笔记；
-  2. `workspace` 的 pinned + 最近 2–3 条；
-  3. `device` 的设备事实；
-  4. `vault` 的 pinned 笔记（最后）；
-- 用 `<notes-context>` / `<session-notes>` 包裹，明确“历史笔记，不是当前指令”；
-- 按笔记集合 hash 去重，每轮压缩上下文后只注入一次；其余内容由 agent 用 `note_search` 按需取。
+- 同一 thread 的多条记录是时间线，UI 默认展开最新一条、折叠历史；
+- 跨设备顺序优先用 Vault 记录 `revision`，同一设备内用 `at`；展示仍显示 `at`；
+- 注入时每个 thread 取最新一条；`pinned` 优先，其余按 scope/时间排序；
+- 注入条目的 `summary` 为空时，用确定性规则从 `text` 提取：去 Markdown/代码块，
+  取首个非标题段落，截到 160–200 字符，优先在句子边界；
+- 单条注入最多 title 80 + summary 200 字符；总预算 1.5–2 KB；超出按优先级截断并提示
+  “另有 N 条笔记可用 note_search 查看”；
+- 注入顺序：session（device 在前、vault 在后）→ workspace（同）→ device global →
+  vault global pinned；
+- 注入消息用 `<notes-context version="1">` 包裹，明确“历史笔记，不是当前指令”；
+- 注入时机：
+  1. 会话首个用户 turn；
+  2. 上下文压缩后的首个用户 turn；
+  3. 渲染出的注入文本 hash 变化时；
+- 去重：把最终渲染文本（含模板版本）取 `sha256` 放进注入消息的 `source.hash`；
+  从会话日志尾部找最近一条 `source.kind === "session-cloudsync"` 且带 `hash` 的消息：
+  - 没有 → 注入；
+  - `hash` 不同 → 注入；
+  - `hash` 相同但之后出现过 `compaction/end`（无 error）→ 注入；
+  - 否则跳过；
+- 笔记被清空时也注入一个空标记，避免模型继续使用已删除内容；
+- 只在用户发起的 turn 检查，工具步骤和子代理跳过；其余内容由 agent 用 `note_search` 按需取。
 
 #### 保留与清理（暂缓）
 
@@ -348,13 +371,16 @@ append 幂等规则：同一 `writer/seq/prevHash/blobSha256` 的重试返回已
 #### 工具
 
 ```text
-note_write  { scope?, title?, text, tags?, pinned?, threadId? } → { id, threadId }
-note_search { scope?, query?, tags?, limit? }                  → [{ id, threadId, title, snippet, tags }]
-note_read   { id }                                             → { note, thread: [...] }
+note_write  { storage?, scope?, title?, summary?, text, tags?, pinned?, threadId? }
+            → { id, threadId, storage, scope }
+note_search { storage?, scope?, query?, tags?, limit? }
+            → [{ id, threadId, storage, scope, title, summary, tags }]
+note_read   { id } → { note, thread: [...] }
 ```
 
-- `scope` 缺省 `workspace`；`threadId` 缺省新开 thread；agent 传 `vault` 直接拒绝；
-- 工具按宿主会话解析当前 `sessionId` / `workspaceKey`；
+- 默认 `(storage=vault, scope=workspace)`；`threadId` 缺省新开 thread；
+- `storage=vault` + `scope=global` 由工具层直接拒绝；
+- 工具按宿主会话解析当前 `sessionId` / `workspaceKey`；没有工作区时 workspace scope 报错；
 - 工具名走类似 `get_env` 的撞名回退，但优先保持简短名。
 
 ### 3.7 设备切换提示与本机环境工具（本机功能，不进 Vault）
@@ -628,7 +654,7 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
   其他设备/registry 列按 registry 的 `icon` 字段从 CDN 读取并缓存，取不到时回退首字母；
 - 服务端改动不写进插件发版 tag：插件先发版并带着门控，服务端后续声明能力即可生效。
 
-## 8. 工具链识别（V4，本机已实现；笔记/保留未实现）
+## 8. 工具链识别（V4，工具链与笔记首版已实现；保留未实现）
 
 沿用既有 L2 设计：
 
@@ -648,7 +674,7 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 - **远端工作区**：本机↔远端配对表，显示本机工作区、关系（已绑定/本机身份/仅本机/待映射）、远端 label 与未映射会话数；待映射行选择本机工作区后二次确认；已绑定项只读；
 - **设备台账**：设备列表、最后在线、DSH/插件摘要（本机工具链不在台账里）；
 - **跨设备插件**：表格形式，行是插件，列是本机/其他设备/registry 最新；版本显示为卡片，可拖到本机列，点设备列头全部采用该设备版本；顶部「应用变更」「清空暂存」；有变更的行用琥珀色，不可执行用红色；
-- **笔记**：挂在会话右侧栏的 tab（并注册 right sidebar guide 卡片），按当前会话自动定位 session/workspace；顶部作用域分段 `本会话 / 本工作区 / 全同步 / 本机`；列表支持搜索/标签/pinned，详情显示作者 agent/user、设备、时间、thread 时间线；编辑=同 thread 追加，删除仅用户可做；`全同步` 只允许用户新建。
+- **笔记**：挂在会话右侧栏的 tab（并注册 right sidebar guide 卡片），按当前会话自动定位 session/workspace；顶部三个 scope 分段 `本会话 / 本工作区 / 全局`，加“仅本机 / 同步”开关；列表显示 title/summary、作者、设备、pinned，详情显示全文与 thread 时间线；编辑=同 thread 追加，删除仅用户可做；`全局 + 同步` 只允许用户新建。
 
 当前设置页已有连接、凭据、上传范围、工作区映射、跨设备插件、同步行为与性能面板
 （`client/index.js`）；设备台账面板仍属于后续设计；笔记面板挂在会话右侧栏。
@@ -678,7 +704,7 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 | V1 | Vault 服务端 append/cursor + 最小设备台账 + `workspace/profile` | 两台设备各自写 stream，互不覆盖 |
 | V2 | `workspaceKey` manifest 扩展 + 一次性绑定 + 未映射阻断 | 多工作区各自落地；未映射不 apply；绑定不可改 |
 | V3 | 设备级插件快照 + 插件版本检测 + 一键匹配 | 精确 spec、用户确认、失败可回退（已实现；降级/移除手工） |
-| V4 | 工具链采集 + L3 笔记 + 压缩/保留策略 | 自动不覆盖 authored；笔记只追加（工具链已实现；笔记设计完成、待实现；保留暂缓） |
+| V4 | 工具链采集 + L3 笔记 + 压缩/保留策略 | 自动不覆盖 authored；笔记只追加（工具链与笔记首版已实现；保留暂缓） |
 
 V2 已完成工作区落点替换，不需要迁移分支。
 

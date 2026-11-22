@@ -32,6 +32,7 @@ import {
   type VaultRecordRef,
 } from '../../shared/src/vault.ts'
 import { sanitizePluginSnapshots, type PluginVersionSnapshot } from './plugin-versions.ts'
+import { sanitizeNoteRecord, type NoteEntry, type NoteRecord } from './notes.ts'
 
 /** Vault 同步配置。 */
 export interface VaultSyncConfig {
@@ -48,6 +49,8 @@ export interface VaultSyncConfig {
   readonly dshProfile?: string
   /** 本机已安装 bundle 快照；用于跨设备插件版本比较。 */
   readonly plugins?: readonly PluginVersionSnapshot[]
+  /** 待上行的本机笔记（storage=vault）。 */
+  readonly notes?: readonly NoteRecord[]
 }
 
 /** Vault 同步日志接口。 */
@@ -62,6 +65,8 @@ export interface VaultSyncResult {
   readonly configured: boolean
   readonly writer: string | null
   readonly appended: number
+  /** 已确认在 Vault 链里的笔记 id；宿主据此清 outbox。 */
+  readonly notesSynced?: readonly string[]
   readonly reason?: string
 }
 
@@ -75,6 +80,8 @@ interface VaultState {
   readonly workspaces: Record<string, string>
   /** workspaceKey → 已写过的来源路径；用于判断是否需要补写 path。 */
   readonly workspacePaths: Record<string, string>
+  /** 已写入过的最新笔记 id；用于避免 outbox 重试产生重复记录。 */
+  readonly noteIds?: readonly string[]
 }
 
 interface DeviceMe {
@@ -135,7 +142,13 @@ export async function syncVault(
       ...config.plugins === undefined ? {} : { plugins: sanitizePluginSnapshots(config.plugins) },
     }
     const digest = sha256(stableStringify(payload))
-    const pending: Array<{ kind: string; entity: string; data: unknown }> = []
+    type PendingEntry = {
+      readonly kind: string
+      readonly entity: string
+      readonly data: unknown
+      readonly at?: number
+    }
+    const pending: PendingEntry[] = []
     if (state.deviceDigest !== digest) {
       pending.push({ kind: 'device/profile', entity: writer, data: { ...payload, lastSeenAt: now } })
     }
@@ -158,18 +171,28 @@ export async function syncVault(
         },
       })
     }
+    const knownNotes = new Set(state.noteIds ?? [])
+    const knownSyncedNotes = (config.notes ?? [])
+      .filter((note) => note.storage === 'vault' && knownNotes.has(note.id))
+      .map((note) => note.id)
+    for (const note of config.notes ?? []) {
+      if (note.storage !== 'vault' || knownNotes.has(note.id)) continue
+      pending.push({ kind: 'note/append', entity: note.id, data: note, at: note.at })
+    }
 
     if (pending.length === 0) {
       await writeState(statePath, { ...state, deviceDigest: digest })
-      return { configured: true, writer, appended: 0 }
+      return { configured: true, writer, appended: 0, notesSynced: knownSyncedNotes }
     }
 
+    const syncedNotes: string[] = [...knownSyncedNotes]
     await acquireWriterLease(base, config.token, config.clientId, timedFetch)
     try {
       let nextState: VaultState = {
         ...state,
         deviceDigest: state.deviceDigest,
         workspaces: { ...state.workspaces },
+        noteIds: [...knownNotes],
       }
       // 先按本地链规划所有记录，再批量上传 blob，最后逐条 append；append 失败时
       // 已上传的 blob 成为可去重的孤儿，但不会把半条记录索引写进服务端。
@@ -184,7 +207,7 @@ export async function syncVault(
           createdAt: Date.now(),
           kind: entry.kind,
           entity: entry.entity,
-          at: Date.now(),
+          at: entry.at ?? Date.now(),
           data: entry.data,
           vaultKey,
         })
@@ -220,6 +243,10 @@ export async function syncVault(
           nextWorkspaces[entry.entity] = String(data.label ?? '')
           if (typeof data.path === 'string' && data.path !== '') nextWorkspacePaths[entry.entity] = data.path
         }
+        const nextNoteIds = entry.kind === 'note/append'
+          ? [...(nextState.noteIds ?? []), entry.entity].slice(-500)
+          : nextState.noteIds
+        if (entry.kind === 'note/append') syncedNotes.push(entry.entity)
         nextState = {
           version: 1,
           writer,
@@ -228,6 +255,7 @@ export async function syncVault(
           deviceDigest: entry.kind === 'device/profile' ? digest : nextState.deviceDigest,
           workspaces: nextWorkspaces,
           workspacePaths: nextWorkspacePaths,
+          noteIds: nextNoteIds ?? [],
         }
         await writeState(statePath, nextState)
       }
@@ -235,7 +263,7 @@ export async function syncVault(
       await releaseWriterLease(base, config.token, config.clientId, timedFetch).catch(() => undefined)
     }
     logger?.info(`dsh-session-cloudsync: Vault 已追加 ${appended} 条`)
-    return { configured: true, writer, appended }
+    return { configured: true, writer, appended, notesSynced: syncedNotes }
   })
 }
 
@@ -272,7 +300,16 @@ async function reconcileHead(
     from = last.seq + 1
   }
   if (last === undefined) {
-    return { version: 1, writer, seq: 0, prevHash: null, deviceDigest: null, workspaces: {}, workspacePaths: {} }
+    return {
+      version: 1,
+      writer,
+      seq: 0,
+      prevHash: null,
+      deviceDigest: null,
+      workspaces: {},
+      workspacePaths: {},
+      noteIds: previous?.writer === writer ? previous.noteIds ?? [] : [],
+    }
   }
   if (previous !== undefined && previous.writer === writer && previous.seq === last.seq && previous.prevHash === last.recordHash) {
     return previous
@@ -285,6 +322,7 @@ async function reconcileHead(
     deviceDigest: previous?.writer === writer ? previous.deviceDigest : null,
     workspaces: previous?.writer === writer ? previous.workspaces : {},
     workspacePaths: previous?.writer === writer ? previous.workspacePaths : {},
+    noteIds: previous?.writer === writer ? previous.noteIds ?? [] : [],
   }
 }
 
@@ -323,6 +361,9 @@ async function readState(path: string): Promise<VaultState | undefined> {
         if (typeof value === 'string' && value !== '') workspacePaths[key] = value
       }
     }
+    const noteIds = Array.isArray(parsed['noteIds'])
+      ? parsed['noteIds'].filter((id): id is string => typeof id === 'string' && id !== '').slice(-500)
+      : []
     return {
       version: 1,
       writer: parsed['writer'],
@@ -331,6 +372,7 @@ async function readState(path: string): Promise<VaultState | undefined> {
       deviceDigest: parsed['deviceDigest'] as string | null,
       workspaces: parsed['workspaces'] as Record<string, string>,
       workspacePaths,
+      noteIds,
     }
   } catch {
     return undefined
@@ -510,6 +552,8 @@ export interface WorkspaceProfileLabels {
   readonly paths: Record<string, string>
   /** 各设备最新的 device/profile 快照（含插件列表）。 */
   readonly devices: readonly PeerDeviceProfile[]
+  /** 跨设备 Vault 笔记；order 为 Vault record.revision。 */
+  readonly notes: readonly NoteEntry[]
   readonly revision: number
 }
 
@@ -529,6 +573,7 @@ export async function readWorkspaceProfileLabels(
   const vaultKey = vaultKeyOf(masterKeyOf(config, base))
   const labels: Record<string, { label: string; path?: string; at: number }> = {}
   const devices: Record<string, { name: string; plugins: readonly PluginVersionSnapshot[]; at: number }> = {}
+  const notes: NoteEntry[] = []
   let since = 0
   for (let page = 0; page < 50; page += 1) {
     const cursor = await requestJson(base, `/v2/vault/cursor?since=${since}&limit=500`, config.token, fetchImpl, { method: 'GET' })
@@ -558,6 +603,14 @@ export async function readWorkspaceProfileLabels(
         const bytes = blobs.get(record.blobSha256)
         if (bytes === undefined) continue
         const payload = openVaultRecord({ ref: record, bytes }, vaultKey)
+        if (payload.kind === 'note/append') {
+          const note = sanitizeNoteRecord(payload.data)
+          if (note !== undefined && note.storage === 'vault') {
+            const revision = (record as VaultRecordRef & { readonly revision?: number }).revision ?? record.createdAt
+            notes.push({ note, order: revision })
+          }
+          continue
+        }
         if (payload.kind === 'device/profile') {
           const data = payload.data as {
             readonly deviceName?: unknown
@@ -604,6 +657,7 @@ export async function readWorkspaceProfileLabels(
     devices: Object.entries(devices)
       .map(([deviceId, value]) => ({ deviceId, name: value.name, plugins: value.plugins }))
       .sort((left, right) => left.name.localeCompare(right.name)),
+    notes,
     revision: since,
   }
 }

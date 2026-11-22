@@ -66,6 +66,23 @@ import {
   type PluginVersionsSnapshot,
 } from './plugin-versions.ts'
 import { workspaceKeyOf as deriveWorkspaceKey } from '../../shared/src/vault.ts'
+import {
+  clipOneLine,
+  foldNoteThreads,
+  NOTE_LIMITS,
+  renderNotesContext,
+  sanitizeNoteRecord,
+  summaryOf,
+  visibleNoteThreads,
+  type NoteEntry,
+  type NoteRecord,
+  type NoteScope,
+  type NoteStorage,
+} from './notes.ts'
+import { NotesStore } from './notes-store.ts'
+import { noteContextMessage, prependNotes, shouldInjectNotes } from './note-notice.ts'
+import { registerNotesTools } from './notes-tool.ts'
+import type { NoteThreadView, NoteWriteInput, NotesSnapshot } from './host-api.ts'
 import type { SessionScopeResult, SetupInfo, SyncConfigSnapshot, SyncSessionCandidate, SyncTaskView, SyncWorkspaceCandidate, SyncWorkspaceList } from './status.ts'
 
 /** 插件在加载器里的名字。 */
@@ -192,6 +209,8 @@ export interface Config {
   debug?: boolean
   /** 开发控制台日志接收地址，例如 `http://127.0.0.1:3092/api/log/a`。 */
   devLogUrl?: string
+  /** 是否启用 L3 笔记（工具、注入与右侧栏）；默认 true。 */
+  notes?: boolean
 }
 
 /** 配置 schema；非敏感字段可被 DSH 设置页直接编辑并热更新。 */
@@ -218,6 +237,7 @@ export const Config = z.object({
   })).default([]).volatile(),
   debug: z.boolean().default(false).volatile(),
   devLogUrl: z.string().default('').volatile(),
+  notes: z.boolean().default(true).volatile(),
 })
 
 /** 活动的会话类型（由 ctx.sessions 推导，避免手写 DSH 内部类型）。 */
@@ -359,6 +379,7 @@ export function apply(ctx: Context, config: Config): void {
   let batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
   let requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
   let envToolEnabled = readVolatile<boolean>(config.envTool) !== false
+  let notesEnabled = readVolatile<boolean>(config.notes) !== false
   let toolchainCommands = sanitizeCommandList(readVolatile<unknown>(config.toolchainCommands))
   let toolchainAuthored = sanitizeAuthoredToolchain(readVolatile<unknown>(config.toolchainAuthored))
   // 每次 DSH 进程启动生成一次；同一进程内 lease/append 复用，重启后换新值。
@@ -436,6 +457,7 @@ export function apply(ctx: Context, config: Config): void {
     batchBytes = readVolatile<number>(config.batchBytes) ?? 256 * 1024
     requestTimeoutMs = readVolatile<number>(config.requestTimeoutMs) ?? 10_000
     envToolEnabled = readVolatile<boolean>(config.envTool) !== false
+  notesEnabled = readVolatile<boolean>(config.notes) !== false
     toolchainCommands = sanitizeCommandList(readVolatile<unknown>(config.toolchainCommands))
     toolchainAuthored = sanitizeAuthoredToolchain(readVolatile<unknown>(config.toolchainAuthored))
     debug = envDevLogUrl !== '' || readVolatile<boolean>(config.debug) === true
@@ -594,6 +616,15 @@ export function apply(ctx: Context, config: Config): void {
 
   let bindings: WorkspaceBindings = emptyBindings()
   const bindingsDir = statePath === undefined ? undefined : join(dirname(statePath), 'vault')
+  const notesDir = statePath === undefined ? undefined : join(dirname(statePath), 'notes')
+  const notesStore = notesDir === undefined ? undefined : new NotesStore(notesDir)
+  let vaultNoteEntries: readonly NoteEntry[] = []
+  let deviceNoteEntries: readonly NoteEntry[] = []
+  if (notesStore !== undefined) {
+    void notesStore.deviceEntries().then((entries) => { deviceNoteEntries = entries }).catch((error: unknown) => {
+      logger.warn(`dsh-session-cloudsync: 读取本机笔记失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
   const refreshBindings = async (): Promise<void> => {
     bindings = bindingsDir === undefined ? emptyBindings() : await readBindings(bindingsDir)
   }
@@ -616,11 +647,11 @@ export function apply(ctx: Context, config: Config): void {
   const remoteLastSeq = new Map<string, number>()
   /** 旧服务端摘要没有 parent/origin 时，从加密头补读的缓存。 */
   const remoteMetaCache = new Map<string, { readonly headChainHash: string; readonly meta: RemoteSessionMeta }>()
-  const refreshWorkspaceLabels = async (): Promise<void> => {
+  const refreshWorkspaceLabels = async (force = false): Promise<void> => {
     if (statePath === undefined || bindingsDir === undefined) return
     if (engineConfig.token.trim() === '' || engineConfig.passphrase === '') return
     const identity = `${serverUrl}\u0000${engineConfig.token}\u0000${engineConfig.passphrase}\u0000${engineConfig.salt ?? ''}`
-    if (identity === labelsIdentity && Date.now() - labelsFetchedAt < 60_000) return
+    if (!force && identity === labelsIdentity && Date.now() - labelsFetchedAt < 60_000) return
     try {
       const result = await readWorkspaceProfileLabels({
         serverUrl,
@@ -636,6 +667,7 @@ export function apply(ctx: Context, config: Config): void {
       workspaceLabels = result.labels
       workspacePaths = result.paths
       peerDevices = result.devices
+      vaultNoteEntries = result.notes
       labelsIdentity = identity
       labelsFetchedAt = Date.now()
     } catch (error: unknown) {
@@ -767,6 +799,278 @@ export function apply(ctx: Context, config: Config): void {
     if (bound !== undefined) return bound
     const vaultKey = currentVaultKey()
     return vaultKey === undefined ? undefined : deriveWorkspaceKey(vaultKey, localPath)
+  }
+
+  /** 笔记写入频率：每个会话每分钟最多 3 条 agent 写入。 */
+  const noteWriteTimes = new Map<string, number[]>()
+  const noteWriteAllowed = (sessionId: string): boolean => {
+    const now = Date.now()
+    const recent = (noteWriteTimes.get(sessionId) ?? []).filter((at) => now - at < 60_000)
+    if (recent.length >= 3) return false
+    recent.push(now)
+    noteWriteTimes.set(sessionId, recent)
+    return true
+  }
+
+  interface NoteSessionContext {
+    readonly sessionId: string
+    readonly cwd: string
+    readonly workspaceKey?: string
+  }
+
+  const noteSessionContext = async (sessionId: string): Promise<NoteSessionContext> => {
+    let header: { readonly id?: unknown; readonly cwd?: unknown } | undefined
+    const live = ctx.sessions.get(sessionId as SessionId)
+    if (live !== undefined) header = live.header as unknown as { readonly id?: unknown; readonly cwd?: unknown }
+    if (header === undefined) {
+      const snapshot = await ctx.sessionPersistence.stat(sessionId as SessionId)
+      header = snapshot?.header as unknown as { readonly id?: unknown; readonly cwd?: unknown } | undefined
+    }
+    if (header === undefined) throw new Error(`会话不存在：${sessionId}`)
+    const cwd = typeof header.cwd === 'string' ? header.cwd : ''
+    const workspaceKey = workspaceKeyForCwd(sessionId, cwd)
+    return {
+      sessionId,
+      cwd,
+      ...workspaceKey === undefined ? {} : { workspaceKey },
+    }
+  }
+
+  const allNoteEntries = async (): Promise<readonly NoteEntry[]> => {
+    if (notesStore === undefined) return vaultNoteEntries
+    const [device, pending] = await Promise.all([notesStore.deviceEntries(), notesStore.pending()])
+    deviceNoteEntries = device
+    return [
+      ...device,
+      ...vaultNoteEntries,
+      ...pending.map((note) => ({ note, order: note.at })),
+    ]
+  }
+
+  const noteScopeKey = (context: NoteSessionContext, scope: NoteScope): string => {
+    if (scope === 'session') return context.sessionId
+    if (scope === 'workspace') {
+      if (context.workspaceKey === undefined || context.workspaceKey === '') {
+        throw new Error('当前会话没有可用的工作区，不能写 workspace 笔记')
+      }
+      return context.workspaceKey
+    }
+    return ''
+  }
+
+  const noteLimit = (storage: NoteStorage, scope: NoteScope): number =>
+    storage === 'device' ? NOTE_LIMITS.device : scope === 'session' ? NOTE_LIMITS.session : scope === 'workspace' ? NOTE_LIMITS.workspace : NOTE_LIMITS.global
+
+  const assertNoteRoom = async (
+    entries: readonly NoteEntry[],
+    storage: NoteStorage,
+    scope: NoteScope,
+    scopeKey: string,
+  ): Promise<void> => {
+    const active = foldNoteThreads(entries)
+    const count = active.filter((thread) => thread.storage === storage && thread.scope === scope && thread.scopeKey === scopeKey).length
+    if (count >= noteLimit(storage, scope)) throw new Error('笔记数量已达上限，请先删除一些笔记')
+  }
+
+  const noteThreadOf = (entries: readonly NoteEntry[], threadId: string): ReturnType<typeof foldNoteThreads>[number] | undefined =>
+    foldNoteThreads(entries).find((thread) => thread.threadId === threadId)
+
+  const replayThread = (
+    entries: readonly NoteEntry[],
+    threadId: string | undefined,
+    storage: NoteStorage,
+    scope: NoteScope,
+    scopeKey: string,
+    authorKind: 'agent' | 'user',
+  ): string | undefined => {
+    if (threadId === undefined) return undefined
+    const thread = noteThreadOf(entries, threadId)
+    if (thread === undefined) throw new Error('笔记 thread 不存在')
+    if (thread.storage !== storage || thread.scope !== scope || thread.scopeKey !== scopeKey) {
+      throw new Error('笔记 thread 的作用域不一致')
+    }
+    if (authorKind === 'agent' && thread.notes.some((entry) => entry.note.authorKind === 'user')) {
+      throw new Error('agent 不能回复用户创建的 thread')
+    }
+    return thread.latest.id
+  }
+
+  const makeNote = (input: {
+    readonly sessionId: string
+    readonly storage: NoteStorage
+    readonly scope: NoteScope
+    readonly scopeKey: string
+    readonly authorKind: 'agent' | 'user'
+    readonly title?: string
+    readonly summary?: string
+    readonly text: string
+    readonly tags?: readonly string[]
+    readonly pinned?: boolean
+    readonly threadId?: string
+    readonly replyTo?: string
+    readonly deleted?: boolean
+  }): NoteRecord => {
+    const identity = deviceIdentity.snapshot()
+    const id = `note-${randomUUID()}`
+    const note = sanitizeNoteRecord({
+      id,
+      at: Date.now(),
+      scope: input.scope,
+      scopeKey: input.scopeKey,
+      storage: input.storage,
+      deviceId: identity?.deviceId ?? 'local',
+      authorKind: input.authorKind,
+      author: { sessionId: input.sessionId },
+      title: input.title ?? '',
+      summary: input.summary ?? '',
+      text: input.text,
+      tags: input.tags ?? [],
+      pinned: input.pinned === true,
+      threadId: input.threadId ?? id,
+      ...input.replyTo === undefined ? {} : { replyTo: input.replyTo },
+      ...input.deleted === true ? { deleted: true } : {},
+    })
+    if (note === undefined) throw new Error('笔记内容不合法（标题/摘要/正文超限或字段无效）')
+    return note
+  }
+
+  const writeNoteRecord = async (note: NoteRecord): Promise<NoteRecord> => {
+    if (notesStore === undefined) throw new Error('本机状态目录不可用')
+    if (note.storage === 'device') {
+      await notesStore.appendDevice(note)
+      deviceNoteEntries = await notesStore.deviceEntries()
+      return note
+    }
+    await notesStore.enqueue(note)
+    void runVault().catch((error: unknown) => {
+      logger.warn(`dsh-session-cloudsync: 笔记 Vault 同步失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+    return note
+  }
+
+  const writeUserNote = async (input: NoteWriteInput): Promise<NoteRecord> => {
+    const context = await noteSessionContext(input.sessionId)
+    const scopeKey = noteScopeKey(context, input.scope)
+    const entries = await allNoteEntries()
+    const replyTo = replayThread(entries, input.threadId, input.storage, input.scope, scopeKey, 'user')
+    if (input.threadId === undefined) await assertNoteRoom(entries, input.storage, input.scope, scopeKey)
+    const note = makeNote({ ...input, scopeKey, authorKind: 'user', ...replyTo === undefined ? {} : { replyTo } })
+    return writeNoteRecord(note)
+  }
+
+  const deleteUserNote = async (sessionId: string, id: string): Promise<void> => {
+    const context = await noteSessionContext(sessionId)
+    const entries = await allNoteEntries()
+    const target = entries.find((entry) => entry.note.id === id)
+    if (target === undefined) throw new Error('笔记不存在')
+    const note = target.note
+    const scopeKey = note.scopeKey
+    const tombstone = makeNote({
+      sessionId,
+      storage: note.storage,
+      scope: note.scope,
+      scopeKey,
+      authorKind: 'user',
+      text: '',
+      threadId: note.threadId,
+      replyTo: id,
+      deleted: true,
+    })
+    await writeNoteRecord(tombstone)
+  }
+
+  const writeAgentNote = async (input: Omit<NoteWriteInput, 'storage' | 'scope'> & {
+    readonly storage?: NoteStorage
+    readonly scope?: NoteScope
+  }): Promise<NoteRecord> => {
+    const storage = input.storage ?? 'vault'
+    const scope = input.scope ?? 'workspace'
+    if (storage === 'vault' && scope === 'global') throw new Error('agent 不能写全局同步笔记')
+    if (!noteWriteAllowed(input.sessionId)) throw new Error('笔记写入太频繁，请稍后再试')
+    const context = await noteSessionContext(input.sessionId)
+    const scopeKey = noteScopeKey(context, scope)
+    const entries = await allNoteEntries()
+    const replyTo = replayThread(entries, input.threadId, storage, scope, scopeKey, 'agent')
+    if (input.threadId === undefined) await assertNoteRoom(entries, storage, scope, scopeKey)
+    const note = makeNote({
+      ...input,
+      storage,
+      scope,
+      scopeKey,
+      authorKind: 'agent',
+      ...replyTo === undefined ? {} : { replyTo },
+    })
+    return writeNoteRecord(note)
+  }
+
+  const notesSnapshot = async (sessionId: string): Promise<NotesSnapshot> => {
+    try {
+      await refreshWorkspaceLabels(true)
+    } catch {
+      // Vault 不可达时仍可查看本机笔记。
+    }
+    const context = await noteSessionContext(sessionId)
+    const entries = await allNoteEntries()
+    const identity = deviceIdentity.snapshot()
+    const threads = visibleNoteThreads(entries, sessionId, context.workspaceKey)
+    const pending = notesStore === undefined ? 0 : (await notesStore.pending()).length
+    return {
+      sessionId,
+      ...context.workspaceKey === undefined ? {} : { workspaceKey: context.workspaceKey },
+      deviceId: identity?.deviceId ?? '',
+      threads: threads.map((thread): NoteThreadView => ({
+        threadId: thread.threadId,
+        scope: thread.scope,
+        scopeKey: thread.scopeKey,
+        storage: thread.storage,
+        latest: thread.latest,
+        notes: thread.notes.map((entry) => entry.note),
+      })),
+      pending,
+    }
+  }
+
+  const noteSearch = async (input: {
+    readonly sessionId: string
+    readonly scope?: NoteScope
+    readonly storage?: NoteStorage
+    readonly query?: string
+    readonly tags?: readonly string[]
+    readonly limit?: number
+  }): Promise<readonly NoteThreadView[]> => {
+    const snapshot = await notesSnapshot(input.sessionId)
+    const query = input.query?.trim().toLowerCase() ?? ''
+    const tags = input.tags?.map((tag) => tag.toLowerCase()).filter((tag) => tag !== '') ?? []
+    return snapshot.threads
+      .filter((thread) => input.scope === undefined || thread.scope === input.scope)
+      .filter((thread) => input.storage === undefined || thread.storage === input.storage)
+      .filter((thread) => tags.length === 0 || tags.every((tag) => thread.latest.tags.some((value) => value.toLowerCase() === tag)))
+      .filter((thread) => query === ''
+        || thread.latest.title.toLowerCase().includes(query)
+        || summaryOf(thread.latest).toLowerCase().includes(query)
+        || thread.latest.text.toLowerCase().includes(query))
+      .slice(0, Math.max(1, Math.min(50, input.limit ?? 20)))
+  }
+
+  const noteRead = async (sessionId: string, id: string): Promise<NoteThreadView> => {
+    const snapshot = await notesSnapshot(sessionId)
+    const thread = snapshot.threads.find((item) => item.notes.some((note) => note.id === id))
+    if (thread === undefined) throw new Error('笔记不存在或不可见')
+    return thread
+  }
+
+  if (notesEnabled) {
+    ctx.inject(['tools'], (toolsCtx) => {
+      const tools = toolsCtx.get('tools') as unknown as Parameters<typeof registerNotesTools>[0]
+      const registered = registerNotesTools(tools, {
+        write: writeAgentNote,
+        search: noteSearch,
+        read: noteRead,
+      }, logger)
+      if (registered === undefined) return
+      logger.info(`dsh-session-cloudsync: 笔记工具已注册（${registered.names.write}/${registered.names.search}/${registered.names.read}）`)
+      toolsCtx.effect(() => () => registered.dispose(), 'dsh-session-cloudsync: notes tools')
+    })
   }
 
   /**
@@ -954,6 +1258,7 @@ export function apply(ctx: Context, config: Config): void {
     } catch (error: unknown) {
       logger.warn(`dsh-session-cloudsync: 读取 Vault 工作区失败：${error instanceof Error ? error.message : String(error)}`)
     }
+    const pendingNotes = notesStore === undefined ? [] : await notesStore.pending()
     const result = await syncVault({
       serverUrl,
       token: engineConfig.token,
@@ -965,9 +1270,14 @@ export function apply(ctx: Context, config: Config): void {
       stateDir: join(dirname(statePath), 'vault'),
       workspaces,
       plugins: await localPluginSnapshot(),
+      notes: pendingNotes,
       ...process.env.DSH_VERSION === undefined ? {} : { dshVersion: process.env.DSH_VERSION },
       ...process.env.DSH_PROFILE === undefined ? {} : { dshProfile: process.env.DSH_PROFILE },
     }, logger)
+    if (notesStore !== undefined && result.notesSynced !== undefined && result.notesSynced.length > 0) {
+      await notesStore.removePending(result.notesSynced)
+      labelsIdentity = undefined
+    }
     if (result.appended > 0) labelsIdentity = undefined
   }
 
@@ -1087,6 +1397,7 @@ export function apply(ctx: Context, config: Config): void {
           readonly id: string
           readonly createdAt: number
           readonly version: number
+          readonly cwd?: string
           readonly origin?: string
           readonly parentSession?: string
         }
@@ -1121,7 +1432,7 @@ export function apply(ctx: Context, config: Config): void {
       header = snapshot.header
     }
     const decision = await next() as PreStepDecisionLike
-    return withDeviceChangeNotice(payload, decision)
+    return withNotesNotice(payload, withDeviceChangeNotice(payload, decision))
   })
 
   /**
@@ -1144,7 +1455,7 @@ export function apply(ctx: Context, config: Config): void {
     const session = payload.agent.session
     const sessionHeader = session.header
     if (sessionHeader.origin === 'subagent' || sessionHeader.parentSession !== undefined) return decision
-    const human = decision.messages.some((message) => {
+    const human = (decision.messages ?? []).some((message) => {
       if (message === null || typeof message !== 'object') return false
       const source = (message as { readonly source?: unknown }).source
       return source !== null && typeof source === 'object'
@@ -1162,6 +1473,47 @@ export function apply(ctx: Context, config: Config): void {
       decision,
       deviceChangeMessage({ deviceId: identity.deviceId, name: identity.name }, toolName),
     )
+  }
+
+  /**
+   * 把一个有界的笔记摘要插到用户 turn 前面。
+   *
+   * 只在用户发起的 step 注入；`source.hash` 由渲染文本算出，日志里已有同 hash 且
+   * 之后没有 `compaction/end` 就跳过。没有笔记且从未注入过时不写空消息。
+   */
+  async function withNotesNotice(
+    payload: PreStepPayloadLike,
+    decision: PreStepDecisionLike,
+  ): Promise<PreStepDecisionLike> {
+    if (!notesEnabled || decision.kind !== 'enter') return decision
+    const session = payload.agent.session
+    const sessionHeader = session.header
+    if (sessionHeader.origin === 'subagent' || sessionHeader.parentSession !== undefined) return decision
+    const human = (decision.messages ?? []).some((message) => {
+      if (message === null || typeof message !== 'object') return false
+      const source = (message as { readonly source?: unknown }).source
+      return source !== null && typeof source === 'object'
+        && (source as { readonly kind?: unknown }).kind === 'user'
+    })
+    if (!human) return decision
+    try {
+      // 用户 turn 前刷新一次远端笔记；最多等 1.2 秒，慢网时先用缓存，避免卡住 pre-step。
+      await Promise.race([
+        refreshWorkspaceLabels(true).catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 1_200)),
+      ])
+      const context = await noteSessionContext(sessionHeader.id)
+      const entries = await allNoteEntries()
+      const threads = visibleNoteThreads(entries, sessionHeader.id, context.workspaceKey)
+      const rendered = renderNotesContext(threads)
+      const events = typeof session.snapshotEvents === 'function' ? session.snapshotEvents() : undefined
+      if (events === undefined || !shouldInjectNotes(events, rendered.hash, threads.length > 0)) return decision
+      return prependNotes(decision, noteContextMessage(rendered))
+    } catch (error: unknown) {
+      // 笔记注入永不影响会话继续。
+      logger.warn(`dsh-session-cloudsync: 笔记注入跳过：${error instanceof Error ? error.message : String(error)}`)
+      return decision
+    }
   }
 
   /**
@@ -2395,6 +2747,9 @@ export function apply(ctx: Context, config: Config): void {
       }
       return results
     },
+    notes: notesSnapshot,
+    writeNote: writeUserNote,
+    deleteNote: deleteUserNote,
     test: async (serverUrl: string) => testConnection(serverUrl, fetch, engineConfig.requestTimeoutMs),
     probe: async (serverUrl: string, token: string): Promise<ServerProbeResult> => {
       // 设置页没有裸 token；留空时回退到已解析的凭据，避免为了看状态再输一遍。

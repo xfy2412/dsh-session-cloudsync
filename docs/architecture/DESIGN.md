@@ -16,12 +16,12 @@
 |---|---|---|---|
 | L1 会话数据 | 同步会话事件与附件：`sessions/**` 的事件（每会话只取最高格式代际）→ 封好的 header + 事件批次链；附件（`attachments/v1/**`）用会话密钥派生密钥加密，索引随批次走。**未实现**：`storages/workspace.json`、`profiles/*/cordis.patch.yml` + `package.json` | 百 MB 级（取决于历史） | 会话要全局写租约 |
 | L2 设备台账 | 每设备一条 `device/profile`：设备名、OS、DSH 版本与 profile、会话格式版本、已加载插件版本、最后在线；另有每工作区一条 `workspace/profile`。本机工具链/路径只由 `get_env` 本机读取，不进台账 | KB 级 | 按 deviceId 分槽，天然无冲突 |
-| L3 agent 笔记 | append-only 笔记：session/workspace/vault/device 四作用域；右侧栏 tab；用于部分替代 `ENVIRONMENT.md`/`AGENTS.md` | KB–MB 级 | 只追加，天然无冲突；**设计完成，未实现**（VAULT.md 的 V4） |
+| L3 agent 笔记 | append-only 笔记：scope=session/workspace/global × storage=device/vault；右侧栏 tab；用于部分替代 `ENVIRONMENT.md`/`AGENTS.md` | KB–MB 级 | 只追加，天然无冲突；**首版已实现，未发布**（VAULT.md 的 V4） |
 
 实际写入的台账字段见 `packages/plugin/src/vault-sync.ts`（`device/profile`、`workspace/profile`）；`plugins` 已接入设备级插件快照，本机工具链不进台账。
 代际闸门不在台账上：同步前按会话比较远端 manifest/header 与本地 header 的 `createdAt`/`formatVersion`，
 不一致就标 blocked（`packages/plugin/src/sync-plan.ts:234-250`、`engine.ts:1094`）。
-工具链的 `auto`/`authored` 双源属于 VAULT.md 的 V3，本仓库没有实现。
+工具链的 `auto`/`authored` 双源已实现（VAULT.md 的 V4），属于本机环境工具，不写入设备台账。
 L2 的加密存储、工作区 key 与绑定见 [VAULT.md](../sync/VAULT.md)。
 
 ## 传输单位：事件批次

@@ -192,6 +192,46 @@ test('Vault 设备快照带插件列表，读端返回其他设备的 plugins', 
   }
 })
 
+test('Vault 笔记走 note/append，读端按 revision 返回且重试不重复', async () => {
+  const temp = createTempHome('plugin-vault-notes')
+  try {
+    const server = fakeServer()
+    const workspaces = [{ path: 'D:/work/a', title: 'alpha' }]
+    const note = {
+      id: 'note-vault-1',
+      at: 1790000000000,
+      scope: 'workspace',
+      scopeKey: 'ws-note',
+      storage: 'vault',
+      deviceId: WRITER,
+      authorKind: 'agent',
+      title: '构建约定',
+      summary: 'pnpm 构建',
+      text: '构建用 pnpm。',
+      tags: ['build'],
+      pinned: false,
+      threadId: 'note-vault-1',
+    }
+    const first = await syncVault({ ...config(temp, workspaces), notes: [note] }, undefined, server.fetchImpl)
+    assert.equal(first.configured, true)
+    assert.deepEqual(first.notesSynced, [note.id])
+
+    const result = await readWorkspaceProfileLabels(config(temp, workspaces), server.fetchImpl)
+    assert.equal(result.notes.length, 1)
+    assert.equal(result.notes[0].note.id, note.id)
+    assert.equal(result.notes[0].note.title, '构建约定')
+    assert.ok(result.notes[0].order > 0)
+
+    const before = server.records.length
+    const again = await syncVault({ ...config(temp, workspaces), notes: [note] }, undefined, server.fetchImpl)
+    assert.equal(again.appended, 0)
+    assert.deepEqual(again.notesSynced, [note.id])
+    assert.equal(server.records.length, before)
+  } finally {
+    temp.dispose()
+  }
+})
+
 test('Vault writer 租约冲突时整轮失败且不写新记录', async () => {
   const temp = createTempHome('plugin-vault-conflict')
   try {

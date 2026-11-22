@@ -83,6 +83,15 @@ function control(overrides = {}) {
     applyPluginVersions: overrides.applyPluginVersions ?? (async (items) => items.map((item) => ({
       name: item.name, version: item.version, action: item.action, ok: true,
     }))),
+    notes: overrides.notes ?? (async (sessionId) => ({
+      sessionId, deviceId: 'dev-1', threads: [], pending: 0,
+    })),
+    writeNote: overrides.writeNote ?? (async (input) => ({
+      id: 'note-1', at: 1, scope: input.scope, scopeKey: 'ws', storage: input.storage,
+      deviceId: 'dev-1', authorKind: 'user', title: '', summary: '', text: input.text,
+      tags: [], pinned: false, threadId: 'note-1',
+    })),
+    deleteNote: overrides.deleteNote ?? (async () => undefined),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
     cwdDecision: overrides.cwdDecision ?? (async () => ({ ok: true, status: 'corrected' })),
     repairAttachments: overrides.repairAttachments ?? (async (sessionId) => ({
@@ -154,6 +163,7 @@ test('宿主 API：注册全部精确路由', () => {
     ['/api/session-cloudsync/directory/pick', ['POST'], 'buffered'],
     ['/api/session-cloudsync/plugin-versions', ['GET'], 'buffered'],
     ['/api/session-cloudsync/plugin-versions/apply', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/notes', ['GET', 'POST'], 'buffered'],
     ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
     ['/api/session-cloudsync/session-scope', ['POST'], 'buffered'],
     ['/api/session-cloudsync/attachments/repair', ['POST'], 'buffered'],
@@ -194,6 +204,37 @@ test('宿主 API：plugin-versions 返回快照，apply 只接受合法 items', 
       method: 'POST', body: JSON.stringify({ items: [{ name: 'a' }] }),
     }),
   )
+  assert.equal(bad.status, 400)
+})
+
+test('宿主 API：notes GET/POST 走同一个精确路由', async () => {
+  const routes = createHostApi(control({
+    notes: async (sessionId) => ({
+      sessionId, deviceId: 'dev-1', workspaceKey: 'ws-1',
+      threads: [{
+        threadId: 'note-1', scope: 'workspace', scopeKey: 'ws-1', storage: 'vault',
+        latest: {
+          id: 'note-1', at: 1, scope: 'workspace', scopeKey: 'ws-1', storage: 'vault',
+          deviceId: 'dev-1', authorKind: 'user', title: 't', summary: 's', text: 'x',
+          tags: [], pinned: false, threadId: 'note-1',
+        },
+        notes: [],
+      }],
+      pending: 0,
+    }),
+  }))
+  const entry = route(routes, '/api/session-cloudsync/notes')
+  assert.deepEqual([...entry.methods], ['GET', 'POST'])
+  const get = await bodyOf(await entry.fetch(new Request('http://host/api/session-cloudsync/notes?sessionId=s-1')))
+  assert.equal(get.value.threads[0].threadId, 'note-1')
+  const post = await bodyOf(await entry.fetch(new Request('http://host/api/session-cloudsync/notes', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 's-1', action: 'write', storage: 'vault', scope: 'workspace', text: 'hello' }),
+  })))
+  assert.equal(post.value.text, 'hello')
+  const bad = await entry.fetch(new Request('http://host/api/session-cloudsync/notes', {
+    method: 'POST', body: JSON.stringify({ sessionId: 's-1', action: 'write' }),
+  }))
   assert.equal(bad.status, 400)
 })
 

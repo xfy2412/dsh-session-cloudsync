@@ -14,6 +14,40 @@ import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { PerfSnapshot } from './perf.ts'
 import type { PluginVersionApplyItem, PluginVersionApplyResult, PluginVersionsSnapshot } from './plugin-versions.ts'
+import type { NoteRecord, NoteScope, NoteStorage, NoteThread } from './notes.ts'
+
+/** UI 用的 thread 视图。 */
+export interface NoteThreadView {
+  readonly threadId: string
+  readonly scope: NoteScope
+  readonly scopeKey: string
+  readonly storage: NoteStorage
+  readonly latest: NoteRecord
+  readonly notes: readonly NoteRecord[]
+}
+
+/** 当前会话可见的笔记。 */
+export interface NotesSnapshot {
+  readonly sessionId: string
+  readonly workspaceKey?: string
+  readonly deviceId: string
+  readonly threads: readonly NoteThreadView[]
+  /** 还在 outbox 里等待 Vault append 的条数。 */
+  readonly pending: number
+}
+
+/** 用户新建/编辑笔记。 */
+export interface NoteWriteInput {
+  readonly sessionId: string
+  readonly storage: NoteStorage
+  readonly scope: NoteScope
+  readonly title?: string
+  readonly summary?: string
+  readonly text: string
+  readonly tags?: readonly string[]
+  readonly pinned?: boolean
+  readonly threadId?: string
+}
 import type { SessionScopeResult, SessionSyncView, SetupInfo, SyncConfigSnapshot, SyncStatus, SyncWorkspaceList } from './status.ts'
 
 /** 宿主注入的控制面。 */
@@ -36,6 +70,12 @@ export interface SyncControl {
   pluginVersions(): Promise<PluginVersionsSnapshot>
   /** 应用选中的安装/升级项；逐项返回结果。 */
   applyPluginVersions(items: readonly PluginVersionApplyItem[]): Promise<readonly PluginVersionApplyResult[]>
+  /** 当前会话可见的笔记 thread。 */
+  notes(sessionId: string): Promise<NotesSnapshot>
+  /** 用户新建/编辑一条笔记。 */
+  writeNote(input: NoteWriteInput): Promise<NoteRecord>
+  /** 用户删除一个 thread（写 tombstone）。 */
+  deleteNote(sessionId: string, id: string): Promise<void>
   /** 测试给定服务端地址是否可达；不读取配置、不携带 token。 */
   test(serverUrl: string): Promise<SyncTestResult>
   /** 手动触发一轮同步；已在运行时返回 `already-running`。 */
@@ -426,6 +466,57 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             return json({ ok: false, error: { code: 'bad-request', message: '没有合法的插件变更项' } }, 400)
           }
           return json({ ok: true, value: await control.applyPluginVersions(items) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/notes',
+      methods: ['GET', 'POST'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          if (request.method === 'POST') {
+            const body = await request.json() as Record<string, unknown>
+            const sessionId = typeof body['sessionId'] === 'string' ? body['sessionId'].trim() : ''
+            if (sessionId === '') {
+              return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId' } }, 400)
+            }
+            if (body['action'] === 'delete') {
+              const id = typeof body['id'] === 'string' ? body['id'].trim() : ''
+              if (id === '') return json({ ok: false, error: { code: 'bad-request', message: '需要 id' } }, 400)
+              await control.deleteNote(sessionId, id)
+              return json({ ok: true, value: { deleted: true } })
+            }
+            const storage = body['storage'] === 'device' ? 'device' : 'vault'
+            const scope = body['scope'] === 'session' || body['scope'] === 'workspace' || body['scope'] === 'global'
+              ? body['scope']
+              : undefined
+            if (scope === undefined || typeof body['text'] !== 'string') {
+              return json({ ok: false, error: { code: 'bad-request', message: 'storage/scope/text 不完整' } }, 400)
+            }
+            const note = await control.writeNote({
+              sessionId,
+              storage,
+              scope,
+              ...typeof body['title'] === 'string' ? { title: body['title'] } : {},
+              ...typeof body['summary'] === 'string' ? { summary: body['summary'] } : {},
+              text: body['text'],
+              ...Array.isArray(body['tags'])
+                ? { tags: body['tags'].filter((tag): tag is string => typeof tag === 'string') }
+                : {},
+              ...typeof body['pinned'] === 'boolean' ? { pinned: body['pinned'] } : {},
+              ...typeof body['threadId'] === 'string' ? { threadId: body['threadId'] } : {},
+            })
+            return json({ ok: true, value: note })
+          }
+          const sessionId = new URL(request.url).searchParams.get('sessionId') ?? ''
+          if (sessionId.trim() === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId' } }, 400)
+          }
+          return json({ ok: true, value: await control.notes(sessionId) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({ ok: false, error: { code: classified.kind, message: classified.message } }, 500)

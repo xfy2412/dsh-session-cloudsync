@@ -350,8 +350,9 @@ window.__ModuleLoader__.load({
       '.dssync-pv-cell{display:flex;align-items:center;gap:7px;min-width:0;padding:9px 10px;border-left:1px solid var(--dssync-line)}',
       '.dssync-pv-cell:first-child{border-left:0}',
       '.dssync-pv-name{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 10px;position:sticky;left:0;z-index:1;background:var(--dsw-alias-bg-primary,#151a20)}',
-      '.dssync-pv-ico{display:grid;place-items:center;width:28px;height:28px;flex:0 0 auto;border-radius:7px;background:linear-gradient(145deg,#8cc8ff,#4f7cc4);color:#0d1014;font-size:9px;font-weight:700;overflow:hidden}',
-      '.dssync-pv-ico img{width:100%;height:100%;object-fit:cover;border-radius:7px}',
+      '.dssync-pv-ico{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;flex:0 0 auto;padding:4px;border:0.5px solid var(--dsw-alias-border-l3,var(--dssync-line));border-radius:var(--dsw-radius-lg,10px);background:transparent;color:var(--dsw-alias-label-secondary,var(--dssync-muted));overflow:hidden;box-sizing:border-box}',
+      '.dssync-pv-ico img,.dssync-pv-ico svg{display:block;width:100%;height:100%;object-fit:contain}',
+      '.dssync-pv-ico img{border-radius:5px}',
       '.dssync-pv-nm{min-width:0}.dssync-pv-nm b{display:block;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dssync-pv-nm span{display:block;font-size:10px;color:var(--dssync-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
       '.dssync-pv-dev{display:flex;flex-direction:column;gap:1px;min-width:0;font-size:12px;font-weight:600}',
       '.dssync-pv-dev small{font-weight:400;font-size:10px;color:var(--dssync-faint)}',
@@ -369,6 +370,31 @@ window.__ModuleLoader__.load({
       '.dssync-pv-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.dssync-pv-msg{font-size:11px;color:var(--dssync-muted)}',
       '.dssync-pv-msg.bad{color:#ff8f8f}',
+      '.dssync-notes{display:flex;flex-direction:column;gap:10px;min-height:0;height:100%;padding:12px;color:var(--dssync-text);font-size:13px}',
+      '.dssync-notes-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.dssync-notes-title{font-size:14px;font-weight:600;margin-right:auto}',
+      '.dssync-notes-seg{display:flex;gap:2px;padding:2px;border-radius:7px;background:rgba(127,127,127,.12)}',
+      '.dssync-notes-seg button{border:0;background:transparent;color:var(--dssync-muted);font:11px/1.4 inherit;padding:4px 8px;border-radius:5px;cursor:pointer}',
+      '.dssync-notes-seg button.on{background:var(--dsw-alias-bg-primary,#151a20);color:var(--dssync-text);box-shadow:0 1px 2px rgba(0,0,0,.2)}',
+      '.dssync-notes-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.dssync-notes-tools input{flex:1 1 120px;min-width:80px;padding:5px 7px;border:1px solid var(--dssync-line);border-radius:6px;background:transparent;color:inherit;font:inherit}',
+      '.dssync-notes-body{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto}',
+      '.dssync-notes-card{display:flex;flex-direction:column;gap:4px;padding:8px 9px;border:1px solid var(--dssync-line);border-radius:8px;background:rgba(255,255,255,.02);cursor:pointer}',
+      '.dssync-notes-card:hover{border-color:var(--dssync-line-strong)}',
+      '.dssync-notes-card.on{border-color:var(--dssync-accent);background:var(--dssync-accent-soft)}',
+      '.dssync-notes-card b{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dssync-notes-card p{margin:0;font-size:11px;line-height:1.45;color:var(--dssync-muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}',
+      '.dssync-notes-meta{display:flex;gap:6px;flex-wrap:wrap;font-size:10px;color:var(--dssync-faint)}',
+      '.dssync-notes-badge{padding:1px 5px;border:1px solid var(--dssync-line);border-radius:99px;font-size:9px}',
+      '.dssync-notes-detail{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--dssync-line-strong);border-radius:8px}',
+      '.dssync-notes-text{white-space:pre-wrap;word-break:break-word;font:12px/1.55 inherit;max-height:45vh;overflow:auto}',
+      '.dssync-notes-form{display:flex;flex-direction:column;gap:6px}',
+      '.dssync-notes-form input,.dssync-notes-form textarea,.dssync-notes-form select{width:100%;padding:5px 7px;border:1px solid var(--dssync-line);border-radius:6px;background:transparent;color:inherit;font:12px/1.45 inherit}',
+      '.dssync-notes-form textarea{min-height:120px;resize:vertical;font-family:ui-monospace,Consolas,monospace}',
+      '.dssync-notes-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}',
+      '.dssync-notes-empty{padding:18px 8px;text-align:center;color:var(--dssync-faint);font-size:12px}',
+      '.dssync-notes-msg{font-size:11px;color:var(--dssync-muted)}.dssync-notes-msg.bad{color:#ff8f8f}',
+      '.dssync-notes-thread{border-top:1px dashed var(--dssync-line);padding-top:6px;font-size:11px;color:var(--dssync-muted)}',
     ].join('')
 
     /* ---------- 小工具 ---------- */
@@ -1833,6 +1859,42 @@ window.__ModuleLoader__.load({
       return { kind: 'update', version: remotePlugin.version }
     }
 
+    /** 与官方插件列表一致：36 视图框、圆角描边外框、图片 contain。 */
+    function PluginFallbackArtwork() {
+      return h('svg', { viewBox: '0 0 36 36', 'aria-hidden': 'true', focusable: 'false' },
+        h('path', {
+          d: 'M18 5.8 29.2 12.1v13.6L18 31.9 6.8 25.7V12.1L18 5.8Z',
+          fill: '#658EFF',
+        }),
+        h('path', {
+          d: 'M18 5.8 29.2 12.1 18 18.4 6.8 12.1 18 5.8Z',
+          fill: '#54ECE7',
+        }),
+        h('path', {
+          d: 'M18 18.4v13.5',
+          stroke: '#FFFFFF',
+          strokeOpacity: '0.35',
+          strokeWidth: '1.5',
+        }))
+    }
+
+    /**
+     * 插件图标：使用本机 meta.icon 或 registry data URL；解码失败回退官方风格的默认图形。
+     * 不裁剪图片，保持官方列表的 contain + 圆角描边框。
+     */
+    function PluginIcon(props) {
+      var source = props.src
+      var failedPair = useState(false)
+      var failed = failedPair[0]
+      var setFailed = failedPair[1]
+      useEffect(function () { setFailed(false) }, [source])
+      if (typeof source !== 'string' || source === '' || failed) return h(PluginFallbackArtwork, null)
+      return h('img', {
+        src: source, alt: '', draggable: false,
+        onError: function () { setFailed(true) },
+      })
+    }
+
     function PluginVersionsPanel() {
       var statePair = useState({ loading: true, snapshot: null, error: null })
       var state = statePair[0]
@@ -2022,9 +2084,7 @@ window.__ModuleLoader__.load({
                 style: { gridTemplateColumns: columns },
               },
                 h('div', { className: 'dssync-pv-name' },
-                  h('span', { className: 'dssync-pv-ico' }, iconOf(pluginName) === undefined
-                    ? pluginName.slice(0, 3)
-                    : h('img', { src: iconOf(pluginName), alt: '' })),
+                  h('span', { className: 'dssync-pv-ico' }, h(PluginIcon, { src: iconOf(pluginName) })),
                   h('div', { className: 'dssync-pv-nm' }, h('b', { title: pluginName }, pluginName),
                     h('span', null, localPlugin === undefined ? '本机未安装' : ('本机 ' + localPlugin.version)))),
                 h('div', {
@@ -4780,6 +4840,239 @@ window.__ModuleLoader__.load({
 
     /* ---------- 插件入口 ---------- */
 
+    /* ---------- 会话右侧栏笔记 ---------- */
+
+    var NOTES_TAB_ID = 'dsh-session-cloudsync/notes'
+
+    function NotesGuideIcon() {
+      return h('span', { 'aria-hidden': 'true', style: { fontSize: '14px', lineHeight: 1 } }, '✎')
+    }
+
+    function NotesTitle() {
+      return h('span', null, '笔记')
+    }
+
+    /**
+     * 右侧栏笔记面板：三个 scope 分段 + 仅本机/同步切换。
+     * 数据来自 Host API；不在浏览器里直接解 Vault。
+     */
+    function NotesPane(props) {
+      var sessionId = props && props.sessionId
+        ? String(props.sessionId)
+        : props && props.session && props.session.sessionId
+          ? String(props.session.sessionId)
+          : ''
+      var statePair = useState({ loading: sessionId !== '', data: null, error: sessionId === '' ? '没有当前会话' : null })
+      var state = statePair[0]
+      var setState = statePair[1]
+      var scopePair = useState('session')
+      var scope = scopePair[0]
+      var setScope = scopePair[1]
+      var localPair = useState(false)
+      var local = localPair[0]
+      var setLocal = localPair[1]
+      var queryPair = useState('')
+      var query = queryPair[0]
+      var setQuery = queryPair[1]
+      var selectedPair = useState('')
+      var selectedId = selectedPair[0]
+      var setSelectedId = selectedPair[1]
+      var formPair = useState(null)
+      var form = formPair[0]
+      var setForm = formPair[1]
+      var busyPair = useState(false)
+      var busy = busyPair[0]
+      var setBusy = busyPair[1]
+      var messagePair = useState(null)
+      var message = messagePair[0]
+      var setMessage = messagePair[1]
+
+      function load(showLoading) {
+        if (sessionId === '') {
+          setState({ loading: false, data: null, error: '没有当前会话' })
+          return
+        }
+        if (showLoading) setState(function (previous) { return { loading: true, data: previous.data, error: null } })
+        fetchJson('/notes?sessionId=' + encodeURIComponent(sessionId)).then(function (data) {
+          setState({ loading: false, data: data, error: null })
+        }, function (error) {
+          setState(function (previous) { return { loading: false, data: previous.data, error: error.message } })
+        })
+      }
+
+      useEffect(function () { load(true) }, [sessionId])
+
+      var data = state.data
+      var all = data && Array.isArray(data.threads) ? data.threads : []
+      var threads = all.filter(function (thread) {
+        if (thread.scope !== scope) return false
+        if (thread.storage !== (local ? 'device' : 'vault')) return false
+        if (query === '') return true
+        var needle = query.toLowerCase()
+        var latest = thread.latest || {}
+        return String(latest.title || '').toLowerCase().indexOf(needle) >= 0
+          || String(latest.summary || '').toLowerCase().indexOf(needle) >= 0
+          || String(latest.text || '').toLowerCase().indexOf(needle) >= 0
+      })
+      var selected = null
+      for (var index = 0; index < all.length; index += 1) {
+        if (all[index].threadId === selectedId) { selected = all[index]; break }
+      }
+
+      function startNew() {
+        setForm({ threadId: '', title: '', summary: '', text: '', pinned: false })
+        setMessage(null)
+      }
+
+      function startEdit(thread) {
+        var latest = thread.latest || {}
+        setForm({
+          threadId: thread.threadId,
+          title: String(latest.title || ''),
+          summary: String(latest.summary || ''),
+          text: String(latest.text || ''),
+          pinned: latest.pinned === true,
+        })
+        setMessage(null)
+      }
+
+      function save() {
+        if (form === null || busy) return
+        if (String(form.text || '').trim() === '') { setMessage({ bad: true, text: '正文不能为空' }); return }
+        var editing = selected !== null && form.threadId !== ''
+        var storage = editing ? selected.storage : (local ? 'device' : 'vault')
+        var noteScope = editing ? selected.scope : scope
+        if (storage === 'vault' && noteScope === 'global' && editing === false && local === false) {
+          // 用户允许写全局同步笔记；这里只做提示，不阻止。
+        }
+        setBusy(true)
+        setMessage(null)
+        fetchJson('/notes', {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: sessionId,
+            action: 'write',
+            storage: storage,
+            scope: noteScope,
+            title: form.title,
+            summary: form.summary,
+            text: form.text,
+            pinned: form.pinned === true,
+            ...(form.threadId === '' ? {} : { threadId: form.threadId }),
+          }),
+        }).then(function (note) {
+          setForm(null)
+          setSelectedId(note.threadId || note.id)
+          setMessage({ bad: false, text: '已保存，等待同步' })
+          load(false)
+        }, function (error) {
+          setMessage({ bad: true, text: '保存失败：' + error.message })
+        }).then(function () { setBusy(false) })
+      }
+
+      function remove(thread) {
+        if (thread === null || busy) return
+        if (typeof window.confirm === 'function' && !window.confirm('删除这个笔记 thread？会追加一条墓碑记录。')) return
+        setBusy(true)
+        fetchJson('/notes', {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: sessionId, action: 'delete', id: thread.latest.id }),
+        }).then(function () {
+          setMessage({ bad: false, text: '已删除' })
+          setSelectedId('')
+          setForm(null)
+          load(false)
+        }, function (error) {
+          setMessage({ bad: true, text: '删除失败：' + error.message })
+        }).then(function () { setBusy(false) })
+      }
+
+      var scopeButtons = h('div', { className: 'dssync-notes-seg' },
+        [['session', '本会话'], ['workspace', '本工作区'], ['global', '全局']].map(function (item) {
+          return h('button', {
+            key: item[0], type: 'button', className: scope === item[0] ? 'on' : '',
+            onClick: function () { setScope(item[0]); setSelectedId(''); setForm(null) },
+          }, item[1])
+        }))
+
+      return h('div', { className: 'dssync dssync-notes' },
+        h('div', { className: 'dssync-notes-head' },
+          h('span', { className: 'dssync-notes-title' }, '笔记'),
+          h('button', { className: 'dssync-mini', type: 'button', disabled: busy, onClick: function () { load(true) } }, '刷新'),
+          h('button', { className: 'dssync-mini', type: 'button', disabled: busy || sessionId === '', onClick: startNew }, '新建')),
+        h('div', { className: 'dssync-notes-tools' },
+          scopeButtons,
+          h('button', {
+            className: 'dssync-pill' + (local ? ' primary' : ''), type: 'button',
+            onClick: function () { setLocal(!local); setSelectedId(''); setForm(null) },
+          }, local ? '仅本机' : '同步'),
+          h('input', {
+            value: query, placeholder: '搜索标题/摘要/正文',
+            onChange: function (event) { setQuery(event.target.value) },
+          })),
+        state.error !== null ? h('div', { className: 'dssync-notes-msg bad' }, state.error) : null,
+        data !== null && data.pending > 0 ? h('div', { className: 'dssync-notes-msg' }, '有 ' + data.pending + ' 条笔记等待同步') : null,
+        message !== null ? h('div', { className: 'dssync-notes-msg' + (message.bad ? ' bad' : '') }, message.text) : null,
+        form !== null
+          ? h('div', { className: 'dssync-notes-form' },
+            h('input', {
+              value: form.title, placeholder: '标题（可选，≤80 字）', maxLength: 80,
+              onChange: function (event) { setForm(Object.assign({}, form, { title: event.target.value })) },
+            }),
+            h('input', {
+              value: form.summary, placeholder: '摘要（可选，≤200 字；不填从正文提取）', maxLength: 200,
+              onChange: function (event) { setForm(Object.assign({}, form, { summary: event.target.value })) },
+            }),
+            h('textarea', {
+              value: form.text, placeholder: '正文（markdown，≤8 KB）',
+              onChange: function (event) { setForm(Object.assign({}, form, { text: event.target.value })) },
+            }),
+            h('div', { className: 'dssync-notes-actions' },
+              h('label', { style: { display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px' } },
+                h('input', {
+                  type: 'checkbox', checked: form.pinned === true,
+                  onChange: function (event) { setForm(Object.assign({}, form, { pinned: event.target.checked })) },
+                }), '置顶'),
+              h('span', { className: 'spacer', style: { flex: '1 1 auto' } }),
+              h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { setForm(null) } }, '取消'),
+              h('button', { className: 'dssync-pill primary', type: 'button', disabled: busy, onClick: save }, busy ? '保存中…' : '保存')),
+            h('div', { className: 'dssync-notes-msg' }, form.threadId === '' ? '新建后先写本机，再后台同步到 Vault。' : '编辑会在同一个 thread 追加新版本。'))
+          : null,
+        selected !== null && form === null
+          ? h('div', { className: 'dssync-notes-detail' },
+            h('div', { className: 'dssync-notes-meta' },
+              h('span', { className: 'dssync-notes-badge' }, selected.scope),
+              h('span', { className: 'dssync-notes-badge' }, selected.storage === 'device' ? '本机' : '同步'),
+              h('span', null, (selected.latest.authorKind === 'agent' ? 'agent' : 'user')),
+              selected.latest.pinned === true ? h('span', null, '置顶') : null),
+            h('b', null, selected.latest.title || '未命名笔记'),
+            h('div', { className: 'dssync-notes-text' }, selected.latest.text || ''),
+            selected.notes.length > 1 ? h('div', { className: 'dssync-notes-thread' }, 'thread 共 ' + selected.notes.length + ' 条；最新在上。') : null,
+            h('div', { className: 'dssync-notes-actions' },
+              h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { startEdit(selected) } }, '编辑'),
+              h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { remove(selected) } }, '删除'),
+              h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { setSelectedId('') } }, '返回')))
+          : null,
+        state.loading && data === null ? h('div', { className: 'dssync-notes-empty' }, '读取笔记…') : null,
+        !state.loading && threads.length === 0
+          ? h('div', { className: 'dssync-notes-empty' }, sessionId === '' ? '打开一个会话后查看笔记' : '这个范围还没有笔记')
+          : null,
+        threads.map(function (thread) {
+          var latest = thread.latest || {}
+          return h('div', {
+            key: thread.threadId,
+            className: 'dssync-notes-card' + (selectedId === thread.threadId ? ' on' : ''),
+            onClick: function () { setSelectedId(thread.threadId); setForm(null) },
+          },
+            h('b', null, latest.title || '未命名笔记'),
+            h('p', null, String(latest.summary || latest.text || '').slice(0, 180)),
+            h('div', { className: 'dssync-notes-meta' },
+              h('span', { className: 'dssync-notes-badge' }, latest.authorKind === 'agent' ? 'agent' : 'user'),
+              latest.pinned === true ? h('span', { className: 'dssync-notes-badge' }, '置顶') : null,
+              h('span', null, String(latest.at ? new Date(latest.at).toLocaleString() : ''))))
+        }))
+    }
+
     function apply(ctx) {
       var model = createModel()
       /** 会话标题来自客户端 session list；取不到时气泡退回短 ID。 */
@@ -5045,6 +5338,43 @@ window.__ModuleLoader__.load({
           inject: function () { return { model: model } },
         }, ReplaceDialog)
       })
+
+      // 右侧栏笔记：guide 卡片 + tab 内容；老宿主没有 sidebarRightTabs 时跳过。
+      if (typeof ctx.inject === 'function') {
+        try {
+          ctx.inject(['sidebarRightTabs'], function (scope) {
+            var service = typeof scope.get === 'function' ? scope.get('sidebarRightTabs') : scope.sidebarRightTabs
+            if (service === undefined || service === null || typeof service.register !== 'function') return
+            var dispose = service.register({
+              id: NOTES_TAB_ID,
+              kind: NOTES_TAB_ID,
+              title: function () { return '笔记' },
+              guide: [{
+                id: NOTES_TAB_ID,
+                order: 35,
+                title: function () { return '笔记' },
+                description: function () { return '本会话、本工作区和全局的长期笔记'; },
+                icon: NotesGuideIcon,
+              }],
+            })
+            if (typeof scope.effect === 'function') {
+              scope.effect(function () { return dispose }, 'dsh-session-cloudsync: notes tab type')
+            }
+            ctx.slots.inject('sidebar.right.pane.tab', function () {
+              return ctx.slots.register({
+                name: 'sidebar.right.pane.tab', key: NOTES_TAB_ID,
+              }, NotesPane)
+            })
+            ctx.slots.inject('sidebar.right.pane.tab.title', function () {
+              return ctx.slots.register({
+                name: 'sidebar.right.pane.tab.title', key: NOTES_TAB_ID,
+              }, NotesTitle)
+            })
+          })
+        } catch (error) {
+          console.warn('dsh-session-cloudsync: 右侧栏笔记不可用', error)
+        }
+      }
     }
 
     return { inject: ['slots', 'sessions'], apply: apply }
