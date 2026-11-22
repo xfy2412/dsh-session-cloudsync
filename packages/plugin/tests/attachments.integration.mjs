@@ -5,7 +5,7 @@ import { createDevice } from '../../server/src/http.ts'
 import { openDatabase } from '../../server/src/db.ts'
 import { listenServer } from '../../server/tests/listen.mjs'
 import { createTempHome } from '../../../tests/helpers/tmp-home.mjs'
-import { syncOnce as syncOnceRaw, pullSessionTask, repairSessionAttachments } from '../src/engine.ts'
+import { syncOnce as syncOnceRaw, pullSessionTask, repairSessionAttachments, sessionAttachmentStatus } from '../src/engine.ts'
 
 const TEST_WORKSPACE_KEY = 'test-workspace-key-0001'
 const syncOnce = (deps) => syncOnceRaw({ workspaceKeyOf: () => TEST_WORKSPACE_KEY, ...deps })
@@ -319,6 +319,91 @@ test('超过单 blob 上限的附件只记 tooLarge，拉取端在 apply 前被�
       }, sessionId, false), /附件未同步完成/)
       assert.equal(target.sessions.has(sessionId), false)
       assert.equal(store.size, 0)
+    } finally {
+      await close()
+      db.close()
+    }
+  } finally {
+    temp.dispose()
+  }
+})
+
+test('历史无索引附件在下一次真实事件帧补传，老客户端仍解事件', async () => {
+  const temp = createTempHome('plugin-attachments-backfill')
+  try {
+    const db = openDatabase(temp.dataDir)
+    const device = createDevice(db, 'attachments-backfill')
+    const { base, close } = await listenServer(db, temp.dataDir)
+    try {
+      await holdLease(base, device)
+      const sessionId = 'session-attachments-backfill'
+      const imageBytes = Buffer.from('old-image')
+      const fileBytes = Buffer.from('old-file')
+      const { header, events, imageId, fileId } = sessionWithAttachments(sessionId, imageBytes, fileBytes)
+      const sourceStore = new Map([[imageId, imageBytes], [fileId, fileBytes]])
+      const source = fakeStore(header, events)
+
+      // 第一次推送没有附件桥：只推事件，不写附件索引。
+      const first = await syncOnce({
+        persistence: source,
+        sessions,
+        config: configOf(base, device.token),
+        isTailOpen: () => false,
+      })
+      assert.equal(first.sessions[0].status, 'pushed')
+
+      const before = await sessionAttachmentStatus({
+        config: configOf(base, device.token),
+        attachments: fakeBridge(sourceStore),
+        persistence: source,
+      }, sessionId)
+      assert.equal(before.localReferenced, 2)
+      assert.equal(before.serverIndexed, 0)
+      assert.equal(before.pendingBackfill, 2)
+
+      // 产生一条真实新事件，下一次推送才有帧可挂历史索引。
+      const record = source.sessions.get(sessionId)
+      const nextSeq = record.events[record.events.length - 1].seq + 1
+      record.events.push({
+        type: 'user/message', seq: nextSeq, time: 1003,
+        data: { content: [{ type: 'text', text: '新的真实事件' }] },
+      })
+      const second = await syncOnce({
+        persistence: source,
+        sessions,
+        config: configOf(base, device.token),
+        isTailOpen: () => false,
+        attachments: fakeBridge(sourceStore),
+      })
+      assert.equal(second.sessions[0].status, 'pushed', second.sessions[0].error)
+
+      const manifest = await call(base, `/v2/sessions/${sessionId}/manifest`, { token: device.token })
+      const lastFrame = manifest.body.value.manifest.batches.at(-1)
+      assert.ok(typeof lastFrame.attachmentIndexSha256 === 'string')
+      assert.equal(lastFrame.attachmentBlobs.length, 2)
+
+      // 目标设备拉取：新帧事件正常解开，附件由历史索引补齐。
+      const targetStore = new Map()
+      const target = fakeStore(undefined)
+      const pulled = await pullSessionTask({
+        persistence: target,
+        sessions,
+        config: configOf(base, device.token),
+        workspacePathOf: () => 'D:/mapped',
+        attach: async () => {},
+        attachments: fakeBridge(targetStore),
+      }, sessionId, false)
+      assert.equal(pulled.status, 'pulled')
+      assert.deepEqual(targetStore.get(imageId), imageBytes)
+      assert.deepEqual(targetStore.get(fileId), fileBytes)
+
+      const after = await sessionAttachmentStatus({
+        config: configOf(base, device.token),
+        attachments: fakeBridge(sourceStore),
+        persistence: source,
+      }, sessionId)
+      assert.equal(after.serverIndexed, 2)
+      assert.equal(after.pendingBackfill, 0)
     } finally {
       await close()
       db.close()

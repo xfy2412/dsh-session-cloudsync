@@ -29,6 +29,7 @@ import {
   readRemoteSessionMeta,
   probeServer,
   repairSessionAttachments,
+  sessionAttachmentStatus,
   verifyPassphrase as verifyRemotePassphrase,
   testConnection,
   warmSessionTask,
@@ -2625,6 +2626,11 @@ export function apply(ctx: Context, config: Config): void {
     syncSession,
     sessionScope,
     repairAttachments: (sessionId: string): Promise<AttachmentRepairReport> => repairSessionAttachments({
+      config: engineConfig,
+      ...attachmentsBridge === undefined ? {} : { attachments: attachmentsBridge },
+      persistence: { open: (id: string, access: 'read') => ctx.sessionPersistence.open(id as SessionId, access) },
+    }, sessionId),
+    attachmentStatus: (sessionId: string) => sessionAttachmentStatus({
       config: engineConfig,
       ...attachmentsBridge === undefined ? {} : { attachments: attachmentsBridge },
       persistence: { open: (id: string, access: 'read') => ctx.sessionPersistence.open(id as SessionId, access) },

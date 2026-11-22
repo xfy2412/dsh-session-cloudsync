@@ -4301,6 +4301,8 @@ window.__ModuleLoader__.load({
     // 底栏是 root 作用域拿不到会话，所以由 dock（会话作用域）发布当前会话 id。
     var activeSessionId = ''
     var activeSessionListeners = []
+    var activeSessionLocal = { sessionId: '', localLastSeq: null, tailOpen: false, live: false, revision: 0 }
+    var activeSessionLocalListeners = []
 
     /** 发布当前会话 id，通知所有订阅者。 */
     function publishActiveSession(next) {
@@ -4308,6 +4310,18 @@ window.__ModuleLoader__.load({
       if (value === activeSessionId) return
       activeSessionId = value
       activeSessionListeners.forEach(function (listener) { listener(value) })
+    }
+
+    /** 发布当前会话的官方本地事件状态（seq/tail/live）。 */
+    function publishActiveSessionLocal(next) {
+      if (next === null || typeof next !== 'object') return
+      if (next.sessionId === activeSessionLocal.sessionId
+        && next.localLastSeq === activeSessionLocal.localLastSeq
+        && next.tailOpen === activeSessionLocal.tailOpen
+        && next.live === activeSessionLocal.live
+        && next.revision === activeSessionLocal.revision) return
+      activeSessionLocal = next
+      activeSessionLocalListeners.forEach(function (listener) { listener(next) })
     }
 
     /** 订阅当前会话 id。 */
@@ -4325,13 +4339,33 @@ window.__ModuleLoader__.load({
       return pair[0]
     }
 
-    /** 不可见组件：把当前会话 id 发布给底栏。 */
+    /** 订阅官方本地事件状态。 */
+    function useActiveSessionLocal() {
+      var pair = React.useState(activeSessionLocal)
+      React.useEffect(function () {
+        function listener(value) { pair[1](value) }
+        activeSessionLocalListeners.push(listener)
+        listener(activeSessionLocal)
+        return function () {
+          var at = activeSessionLocalListeners.indexOf(listener)
+          if (at >= 0) activeSessionLocalListeners.splice(at, 1)
+        }
+      }, [])
+      return pair[0]
+    }
+
+    /** 不可见组件：把当前会话 id 和本地事件状态发布给底栏。 */
     function SessionSyncTracker(props) {
       var session = props.session
       var sessionId = session && session.sessionId ? String(session.sessionId) : ''
       React.useEffect(function () {
         publishActiveSession(sessionId)
-        return function () { publishActiveSession('') }
+        var stop = typeof props.observe === 'function' ? props.observe(sessionId, publishActiveSessionLocal) : undefined
+        return function () {
+          if (typeof stop === 'function') stop()
+          publishActiveSession('')
+          publishActiveSessionLocal({ sessionId: '', localLastSeq: null, tailOpen: false, live: false, revision: 0 })
+        }
       }, [sessionId])
       return null
     }
@@ -4388,6 +4422,7 @@ window.__ModuleLoader__.load({
     function SessionSyncBar(props) {
       var state = useModel(props.model)
       var sessionId = useActiveSession()
+      var local = useActiveSessionLocal()
       var viewPair = React.useState(null)
       var view = viewPair[0]
       var setView = viewPair[1]
@@ -4409,10 +4444,20 @@ window.__ModuleLoader__.load({
       var detailPair = React.useState(false)
       var showDetail = detailPair[0]
       var setShowDetail = detailPair[1]
+      var attachmentOpenPair = React.useState(false)
+      var attachmentOpen = attachmentOpenPair[0]
+      var setAttachmentOpen = attachmentOpenPair[1]
+      var attachmentStatePair = React.useState({ loading: false, data: null, error: null })
+      var attachmentState = attachmentStatePair[0]
+      var setAttachmentState = attachmentStatePair[1]
+      var attachmentNoticePair = React.useState(null)
+      var attachmentNotice = attachmentNoticePair[0]
+      var setAttachmentNotice = attachmentNoticePair[1]
 
       /** 收起/展开底栏，记住选择。 */
       function toggleCollapsed() {
         try { localStorage.setItem('dssync.bar.collapsed', collapsed ? '0' : '1') } catch (error) { /* 忽略 */ }
+        if (collapsed) setTick(tick + 1)
         setCollapsed(!collapsed)
       }
 
@@ -4430,13 +4475,46 @@ window.__ModuleLoader__.load({
           })
         }
         load()
-        // 单会话状态很便宜（宿主侧 2 秒缓存），轮询比多开一条 SSE 简单。
-        var timer = setInterval(load, 2000)
+        // 本地 seq/tail 由官方 eventSource/openTurn 推送；这里只在挂载、操作和
+        // 全局 SSE 状态变化时补远端规划字段，不再固定 2 秒轮询。
         return function () {
           cancelled = true
-          clearInterval(timer)
         }
       }, [sessionId, tick])
+
+      React.useEffect(function () {
+        setAttachmentOpen(false)
+        setAttachmentState({ loading: false, data: null, error: null })
+        setAttachmentNotice(null)
+      }, [sessionId])
+
+      React.useEffect(function () {
+        if (sessionId === '') return undefined
+        var version = state.status && typeof state.status.statusVersion === 'number'
+          ? state.status.statusVersion
+          : 0
+        if (version === 0) return undefined
+        var cancelled = false
+        var timer = setTimeout(function () {
+          fetchJson('/session-status?id=' + encodeURIComponent(sessionId)).then(function (value) {
+            if (!cancelled) setView(value || null)
+          }, function () {
+            if (!cancelled) setView(null)
+          })
+        }, 250)
+        return function () {
+          cancelled = true
+          clearTimeout(timer)
+        }
+      }, [sessionId, state.status && state.status.statusVersion])
+
+      if (view !== null && local.sessionId === sessionId) {
+        view = Object.assign({}, view, {
+          localLastSeq: local.live === true && local.localLastSeq !== null ? local.localLastSeq : view.localLastSeq,
+          tailOpen: local.live === true ? local.tailOpen === true : view.tailOpen,
+          live: local.live === true ? true : view.live,
+        })
+      }
 
       /** 重新拉一次状态（动作完成后）。 */
       function reload() { setTick(tick + 1) }
@@ -4496,6 +4574,32 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * 附件面板只在展开时查询；不参与底栏状态轮询。
+       */
+      function loadAttachmentStatus() {
+        if (sessionId === '') return
+        setAttachmentState(function (previous) {
+          return { loading: true, data: previous.data, error: null }
+        })
+        fetchJson('/attachments/status?sessionId=' + encodeURIComponent(sessionId)).then(function (data) {
+          setAttachmentState({ loading: false, data: data, error: null })
+        }, function (error) {
+          setAttachmentState(function (previous) {
+            return { loading: false, data: previous.data, error: error && error.message ? String(error.message) : '附件状态读取失败' }
+          })
+        })
+      }
+
+      function toggleAttachments() {
+        var next = !attachmentOpen
+        setAttachmentOpen(next)
+        if (next) {
+          setShowDetail(false)
+          loadAttachmentStatus()
+        }
+      }
+
+      /**
        * 检查并补齐本会话缺失的附件；结果用底栏弹层展示。
        */
       function repairAttachments() {
@@ -4507,17 +4611,18 @@ window.__ModuleLoader__.load({
         }).then(function (result) {
           setBusy(false)
           if (!result || typeof result.scanned !== 'number') {
-            setDialog({ status: 'error', message: '附件检查没有返回结果' })
+            setAttachmentNotice({ bad: true, text: '附件检查没有返回结果' })
             return
           }
           var failed = Array.isArray(result.failed) ? result.failed.length : 0
           var message = '附件扫描 ' + result.scanned + ' 个，缺失 ' + result.missing
             + ' 个，补齐 ' + result.downloaded + ' 个'
           if (failed > 0) message += '；' + failed + ' 个失败'
-          setDialog({ status: failed > 0 ? 'error' : 'info', message: message })
+          setAttachmentNotice({ bad: failed > 0, text: message })
+          loadAttachmentStatus()
         }, function (error) {
           setBusy(false)
-          setDialog({ status: 'error', message: error && error.message ? String(error.message) : '附件检查失败' })
+          setAttachmentNotice({ bad: true, text: '附件检查失败：' + (error && error.message ? String(error.message) : '未知错误') })
         })
       }
 
@@ -4581,13 +4686,13 @@ window.__ModuleLoader__.load({
             }, running ? { animation: 'dssync-pulse 1.1s ease-in-out infinite' } : {}),
           }),
           h('span', { style: { opacity: 0.8 } }, view === null ? '未纳入上传' : running ? '同步中…' : collapsedAligned ? '已同步' : '未同步'),
-          h('span', { style: SYNC_BAR_STYLE.id }, shortDisplaySessionId(sessionId)))
+          h('span', { style: SYNC_BAR_STYLE.id, title: '会话 ' + sessionId }, shortDisplaySessionId(sessionId)))
       }
       if (view === null) {
-        return h('div', { className: 'dssync-bar', style: SYNC_BAR_STYLE.bar, title: '会话 ' + sessionId },
+        return h('div', { className: 'dssync-bar', style: SYNC_BAR_STYLE.bar },
           h('span', { style: Object.assign({}, SYNC_BAR_STYLE.dot, { background: '#8a8f98' }) }),
           h('span', { style: SYNC_BAR_STYLE.label }, running ? '同步中…' : '未纳入上传'),
-          h('span', { style: SYNC_BAR_STYLE.id }, shortDisplaySessionId(sessionId)),
+          h('span', { style: SYNC_BAR_STYLE.id, title: '会话 ' + sessionId }, shortDisplaySessionId(sessionId)),
           scopeSwitch(false))
       }
       var localLast = typeof view.localLastSeq === 'number' ? view.localLastSeq : -1
@@ -4697,10 +4802,60 @@ window.__ModuleLoader__.load({
         detailRow('租约', leaseDetailText),
         view.blocked ? detailRow('阻塞', view.blocked) : null)
       }
-      return h('div', { className: 'dssync-bar', style: SYNC_BAR_STYLE.bar, title: blocked ? view.blocked : '会话 ' + sessionId },
+      var attachmentData = attachmentState.data
+      var attachmentAttention = attachmentData !== null
+        && attachmentData.attachmentIndexSupported !== false && (
+          (typeof attachmentData.localMissing === 'number' && attachmentData.localMissing > 0)
+          || (view.upload === true && typeof attachmentData.pendingBackfill === 'number' && attachmentData.pendingBackfill > 0)
+        )
+      function attachmentCard() {
+        var data = attachmentData
+        return h('div', {
+          style: {
+            position: 'fixed', right: '14px', bottom: '40px', width: '310px', zIndex: 2147483000,
+            padding: '10px 12px', borderRadius: '10px', background: 'var(--dsw-alias-bg-layer-1, #1b1b20)',
+            border: '1px solid var(--dsw-alias-border-l3, rgba(127,127,127,.3))',
+            boxShadow: '0 12px 32px rgba(0,0,0,.5)', fontSize: '11.5px', lineHeight: 1.6,
+            color: 'var(--dsw-alias-label-primary, #e6e8ec)', whiteSpace: 'normal',
+          },
+        },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' } },
+          h('b', null, '附件'),
+          attachmentState.loading ? h('span', { style: { opacity: 0.6, fontSize: '10px' } }, '读取中…') : null,
+          h('span', { style: { flex: '1 1 auto' } }),
+          h('button', {
+            type: 'button', disabled: busy,
+            onClick: repairAttachments,
+            style: Object.assign({}, SYNC_BAR_STYLE.button, { border: '1px solid rgba(127,127,127,.3)', background: 'transparent', color: 'inherit' }),
+          }, busy ? '检查中…' : '检查附件')),
+        attachmentState.error !== null ? h('div', { style: { color: '#ff8f8f', fontSize: '11px' } }, attachmentState.error) : null,
+        attachmentNotice !== null ? h('div', { style: { color: attachmentNotice.bad ? '#ff8f8f' : '#9ce8bc', fontSize: '11px', marginBottom: '4px' } }, attachmentNotice.text) : null,
+        data !== null && data.attachmentIndexSupported === false
+          ? h('div', { style: { color: '#f0c87a', marginBottom: '4px' } }, '服务端版本过低，附件索引未启用；本机附件不会被上传。')
+          : null,
+        data === null
+          ? h('div', { style: { opacity: 0.65 } }, '展开后读取本机与服务器附件差异。')
+          : h('div', null,
+            detailRow('本机引用', data.localReferenced),
+            detailRow('本机文件', data.localPresent + (data.localMissing > 0 ? '（缺 ' + data.localMissing + '）' : '')),
+            detailRow('服务器索引', data.serverIndexed + (data.serverTooLarge > 0 ? '（' + data.serverTooLarge + ' 个过大）' : '')),
+            detailRow('待补服务器', data.pendingBackfill),
+            data.localMissing > 0
+              ? h('div', { style: { color: '#f0c87a', marginTop: '3px' } }, '本机缺 ' + data.localMissing + ' 个，点「检查附件」从服务器补齐。')
+              : null,
+            data.attachmentIndexSupported !== false && data.pendingBackfill > 0
+              ? h('div', { style: { color: attachmentAttention ? '#f85149' : '#f0c87a', marginTop: '3px' } },
+                '本机有 ' + data.pendingBackfill + ' 个附件尚未登记到服务器；'
+                + (view.upload === true ? '下次由本机推送时补齐（发送任意消息可触发）。' : '先打开「上传本会话」。'))
+              : null,
+            data.localMissing === 0 && data.pendingBackfill === 0
+              ? h('div', { style: { opacity: 0.65, marginTop: '3px' } }, '本机与服务器附件索引一致。')
+              : null))
+      }
+      return h('div', { className: 'dssync-bar', style: SYNC_BAR_STYLE.bar },
         h('span', { style: Object.assign({}, SYNC_BAR_STYLE.dot, { background: dot }, running ? { animation: 'dssync-pulse 1.1s ease-in-out infinite' } : {}) }),
         h('span', { style: SYNC_BAR_STYLE.label }, label),
-        h('span', { style: SYNC_BAR_STYLE.id }, shortDisplaySessionId(sessionId)),
+        h('span', { style: SYNC_BAR_STYLE.id, title: '会话 ' + sessionId }, shortDisplaySessionId(sessionId)),
         syncMeterRows(localLast, remoteLast),
         h('span', { style: SYNC_BAR_STYLE.nums },
           h('span', null, '本地 ' + localLast),
@@ -4722,17 +4877,27 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           disabled: busy,
-          onClick: repairAttachments,
-          title: '检查本会话缺失的附件并从服务器补齐',
-          style: Object.assign({}, SYNC_BAR_STYLE.button, { border: '1px solid rgba(127,127,127,.3)', background: 'transparent', color: 'inherit' }),
-        }, '检查附件'),
+          onClick: toggleAttachments,
+          title: '查看本机与服务器附件差异',
+          style: Object.assign({}, SYNC_BAR_STYLE.button, {
+            border: '1px solid rgba(127,127,127,.3)', background: 'transparent', color: 'inherit',
+            position: 'relative',
+          }),
+        }, '附件' + (attachmentData === null ? '' : ' ' + attachmentData.localPresent + '/' + attachmentData.localReferenced),
+        attachmentAttention ? h('span', {
+          style: {
+            position: 'absolute', top: '1px', right: '2px', width: '6px', height: '6px',
+            borderRadius: '3px', background: '#f85149',
+          },
+        }) : null),
         h('button', {
           type: 'button',
-          onClick: function () { setShowDetail(!showDetail) },
+          onClick: function () { setShowDetail(!showDetail); setAttachmentOpen(false) },
           style: Object.assign({}, SYNC_BAR_STYLE.button, { border: '1px solid rgba(127,127,127,.3)', background: 'transparent', color: 'inherit' }),
         }, '详情 ' + (showDetail ? '▾' : '▸')),
         h('span', { style: { cursor: 'pointer', opacity: 0.55, fontSize: '11px' }, onClick: toggleCollapsed, title: '收起底栏' }, '收起'),
         showDetail ? detailCard() : null,
+        attachmentOpen ? attachmentCard() : null,
         dialog === null ? null : h('div', {
           style: {
             position: 'fixed', right: '14px', bottom: '40px', width: '320px', zIndex: 2147483000,
@@ -5270,6 +5435,103 @@ window.__ModuleLoader__.load({
         installOpenGuardFrom(ctx)
       }
 
+      /**
+       * 订阅官方 Session 的本地事件窗口和 openTurn，发布 localLastSeq/tailOpen。
+       * 这是底栏替代 /session-status 轮询的本地数据源。
+       */
+      function observeLocalSession(sessionId, publish) {
+        if (sessionId === '') return undefined
+        var binding
+        try {
+          binding = ctx.sessions && typeof ctx.sessions.binding === 'function'
+            ? ctx.sessions.binding(sessionId)
+            : undefined
+        } catch (error) {
+          binding = undefined
+        }
+        if (!binding || !binding.eventSource) {
+          publish({ sessionId: sessionId, localLastSeq: null, tailOpen: false, live: false, revision: 0 })
+          return undefined
+        }
+        var eventSource = binding.eventSource
+        var lastSeq = null
+        var tailOpen = false
+        var revision = 0
+        function conversationOf() {
+          try {
+            var service = ctx.get('uiConversation')
+            return service && typeof service.binding === 'function' ? service.binding(binding) : undefined
+          } catch (error) {
+            return undefined
+          }
+        }
+        function publishState() {
+          publish({
+            sessionId: sessionId,
+            localLastSeq: lastSeq,
+            tailOpen: tailOpen,
+            live: true,
+            revision: revision,
+          })
+        }
+        function readTail() {
+          var conversation = conversationOf()
+          try {
+            var open = conversation && conversation.openTurn
+              ? conversation.openTurn.getSnapshot()
+              : undefined
+            tailOpen = open !== undefined && open !== null
+          } catch (error) {
+            tailOpen = false
+          }
+        }
+        function readAll() {
+          var snapshot = eventSource.getSnapshot()
+          revision = typeof snapshot.revision === 'number' ? snapshot.revision : 0
+          lastSeq = null
+          var entries = Array.isArray(snapshot.entries) ? snapshot.entries : []
+          for (var index = entries.length - 1; index >= 0; index -= 1) {
+            var entry = entries[index]
+            if (entry && entry.type === 'event' && entry.event && typeof entry.event.seq === 'number') {
+              lastSeq = entry.event.seq
+              break
+            }
+          }
+          readTail()
+          publishState()
+        }
+        function onEvents() {
+          var snapshot = eventSource.getSnapshot()
+          revision = typeof snapshot.revision === 'number' ? snapshot.revision : revision
+          var change = snapshot.change
+          if (change && change.kind === 'append' && Array.isArray(change.entries)) {
+            for (var index = change.entries.length - 1; index >= 0; index -= 1) {
+              var entry = change.entries[index]
+              if (entry && entry.type === 'event' && entry.event && typeof entry.event.seq === 'number') {
+                lastSeq = entry.event.seq
+                break
+              }
+            }
+          } else {
+            readAll()
+            return
+          }
+          readTail()
+          publishState()
+        }
+        var stopEvents = eventSource.subscribe(onEvents)
+        var stopOpen
+        var conversation = conversationOf()
+        if (conversation && conversation.openTurn && typeof conversation.openTurn.subscribe === 'function') {
+          stopOpen = conversation.openTurn.subscribe(function () { readTail(); publishState() })
+        }
+        readAll()
+        return function () {
+          if (typeof stopOpen === 'function') stopOpen()
+          stopEvents()
+        }
+      }
+
       ctx.slots.inject('conversation.input.dock', function* () {
         yield ctx.slots.register({
           name: 'conversation.input.dock', id: 'session-cloudsync-guard', order: 90,
@@ -5278,7 +5540,7 @@ window.__ModuleLoader__.load({
         // 会话作用域的发布器：底栏靠它知道当前会话。
         yield ctx.slots.register({
           name: 'conversation.input.dock', id: 'session-cloudsync-active-session', order: 95,
-          inject: function () { return {} },
+          inject: function () { return { observe: observeLocalSession } },
         }, SessionSyncTracker)
       })
 

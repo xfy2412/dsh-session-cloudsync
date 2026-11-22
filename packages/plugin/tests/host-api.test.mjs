@@ -92,6 +92,11 @@ function control(overrides = {}) {
       tags: [], pinned: false, threadId: 'note-1',
     })),
     deleteNote: overrides.deleteNote ?? (async () => undefined),
+    attachmentStatus: overrides.attachmentStatus ?? (async (sessionId) => ({
+      sessionId, attachmentIndexSupported: true,
+      localReferenced: 0, localPresent: 0, localMissing: 0,
+      serverIndexed: 0, serverTooLarge: 0, pendingBackfill: 0,
+    })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
     cwdDecision: overrides.cwdDecision ?? (async () => ({ ok: true, status: 'corrected' })),
     repairAttachments: overrides.repairAttachments ?? (async (sessionId) => ({
@@ -166,6 +171,7 @@ test('宿主 API：注册全部精确路由', () => {
     ['/api/session-cloudsync/notes', ['GET', 'POST'], 'buffered'],
     ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
     ['/api/session-cloudsync/session-scope', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/attachments/status', ['GET'], 'buffered'],
     ['/api/session-cloudsync/attachments/repair', ['POST'], 'buffered'],
     ['/api/session-cloudsync/cwd', ['POST'], 'buffered'],
     ['/api/session-cloudsync/blocked', ['POST'], 'buffered'],
@@ -457,6 +463,30 @@ test('宿主 API：replace 按 sessionId 生成覆盖计划', async () => {
   assert.equal(response.status, 200)
   assert.equal(seen, 'session-replace')
   assert.equal((await bodyOf(response)).value.scriptPath, '/tmp/replace.mjs')
+})
+
+test('宿主 API：attachments/status 按 sessionId 返回只读对账', async () => {
+  let seen = ''
+  const routes = createHostApi(control({
+    attachmentStatus: async (sessionId) => {
+      seen = sessionId
+      return {
+        sessionId, attachmentIndexSupported: true,
+        localReferenced: 5, localPresent: 4, localMissing: 1,
+        serverIndexed: 3, serverTooLarge: 0, pendingBackfill: 1,
+      }
+    },
+  }))
+  const ok = await route(routes, '/api/session-cloudsync/attachments/status').fetch(
+    new Request('http://host/api/session-cloudsync/attachments/status?sessionId=session-attach'),
+  )
+  assert.equal(ok.status, 200)
+  assert.equal(seen, 'session-attach')
+  assert.equal((await bodyOf(ok)).value.pendingBackfill, 1)
+  const bad = await route(routes, '/api/session-cloudsync/attachments/status').fetch(
+    new Request('http://host/api/session-cloudsync/attachments/status'),
+  )
+  assert.equal(bad.status, 400)
 })
 
 test('宿主 API：attachments/repair 调用控制面并校验 sessionId', async () => {

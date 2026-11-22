@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { classifySyncError } from './engine.ts'
-import type { AttachmentRepairReport, CwdCorrectionResult, PassphraseCheck, ServerProbeResult, SyncTestResult } from './engine.ts'
+import type { AttachmentRepairReport, AttachmentStatusReport, CwdCorrectionResult, PassphraseCheck, ServerProbeResult, SyncTestResult } from './engine.ts'
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { PerfSnapshot } from './perf.ts'
@@ -86,6 +86,8 @@ export interface SyncControl {
   sessionScope(sessionId: string, enabled: boolean, choice?: 'create' | string): Promise<SessionScopeResult>
   /** 检查并补齐指定会话缺失的附件；幂等，可重复调用。 */
   repairAttachments(sessionId: string): Promise<AttachmentRepairReport>
+  /** 只读统计本机/服务器附件差异，不下载附件正文。 */
+  attachmentStatus(sessionId: string): Promise<AttachmentStatusReport>
   /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
   cwdDecision(sessionId: string, action: 'fix' | 'skip'): Promise<CwdCorrectionResult>
   /** 分叉会话的人工决定：ignore 不再自动提示；force 解除写入拦截；restore 恢复阻塞。 */
@@ -570,6 +572,26 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             ? 'create'
             : typeof body.choice === 'string' && body.choice.trim() !== '' ? body.choice.trim() : undefined
           return json({ ok: true, value: await control.sessionScope(sessionId, body.enabled, choice) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/attachments/status',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const sessionId = new URL(request.url).searchParams.get('sessionId') ?? ''
+          if (sessionId.trim() === '') {
+            return json({ ok: false, error: { code: 'bad-request', message: '需要 sessionId' } }, 400)
+          }
+          return json({ ok: true, value: await control.attachmentStatus(sessionId) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({

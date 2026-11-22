@@ -1,7 +1,14 @@
 # 会话底栏重构与附件补传设计
 
-> 状态：设计稿，2026-11-22。实现优先级见文末。
+> 状态：首版已实现（2026-11-22），待 GUI 回归。实现优先级见文末。
 > 关联：[ATTACHMENT-SYNC-DESIGN.md](ATTACHMENT-SYNC-DESIGN.md)、[ATTACHMENT-SYNC-SERVER-API.md](ATTACHMENT-SYNC-SERVER-API.md)、[ROADMAP.md](ROADMAP.md)。
+>
+> 首版完成：底栏本地 seq/tail 改用官方 `eventSource/openTurn`；移除 2 秒
+> `/session-status` 定时器；附件面板按需查询；历史索引在下一次真实帧补传；
+> 无服务端改动。
+>
+> 暂未完成：`SyncSessionStatus` 的远端字段扩展（底栏仍在挂载/同步状态变化时
+> 请求一次 `/session-status`）；自动补传的会话/附件/时间预算与状态展示；GUI 视觉回归。
 
 ## 1. 问题
 
@@ -67,6 +74,10 @@ Bubble 与底栏共享同一个 `model`，其 `state.status` 已经包含：
 这些不需要新接口，底栏可直接读同一份 store。
 
 ### 3.3 需要扩展 `SyncSessionStatus`
+
+首版实现暂未扩展 `SyncSessionStatus`：底栏在挂载、操作后和全局 SSE
+`statusVersion` 变化时请求一次 `/session-status`，本地字段由官方接口覆盖。
+后续可把下面的字段直接放进聚合状态，彻底去掉这次请求。
 
 气泡当前没有、底栏需要的字段：
 
@@ -195,8 +206,11 @@ GET  /v2/sessions/:id/attachment-indexes   → [sha256]
 
 ### 5.3 自动执行
 
-- 只在 `立即同步`/手动同步/启动首轮检测；
-- 每轮预算建议 ≤8 会话 / ≤64 附件 / ≤3 秒；
+首版在每次真实推送前检测缺失并在该会话的下一次真实帧补传；尚未实现跨会话
+的自动扫描预算与状态展示。后续计划：
+
+- 手动同步/启动首轮检测；
+- 每轮预算 ≤8 会话 / ≤64 附件 / ≤3 秒；
 - 只处理上传范围内会话；
 - 本机无原件记 `local-missing`，永久跳过，面板显示“不可修复”；
 - 失败隔离，不影响主同步；

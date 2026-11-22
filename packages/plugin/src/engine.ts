@@ -899,6 +899,75 @@ interface FrameAttachmentFields {
 }
 
 /**
+ * 读取远端所有附件索引，得到已登记/已标记 tooLarge 的附件 id。
+ *
+ * 仅用于“下一次真实帧顺带索引”的补传判断；单个坏索引不影响其它索引。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端基地址。
+ * @param token - 设备 token。
+ * @param sessionId - 会话 id。
+ * @param sessionKey - 会话密钥。
+ * @param remote - 远端 manifest。
+ * @returns 已覆盖的附件 id。
+ */
+async function remoteAttachmentCoverage(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  sessionId: string,
+  sessionKey: Buffer,
+  remote: RemoteManifest,
+): Promise<Set<string>> {
+  const covered = new Set<string>()
+  for (const frame of remote.frames) {
+    if (frame.attachmentIndexSha256 === undefined) continue
+    try {
+      const sealed = await downloadBlob(fetchImpl, base, token, frame.attachmentIndexSha256)
+      const index = openAttachmentIndex({
+        sessionKey,
+        bytes: sealed,
+        sessionId,
+        frameIndex: frame.index,
+        seqFrom: frame.seqFrom,
+        seqTo: frame.seqTo,
+      })
+      for (const attachmentId of Object.keys(index.entries)) covered.add(attachmentId)
+      for (const item of index.tooLarge ?? []) covered.add(item.attachmentId)
+    } catch {
+      // 坏索引不阻止本轮推送；下次再尝试。
+    }
+  }
+  return covered
+}
+
+/**
+ * 计算应从历史事件补传到下一次真实帧的附件。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端基地址。
+ * @param token - 设备 token。
+ * @param sessionId - 会话 id。
+ * @param sessionKey - 会话密钥。
+ * @param events - 本地完整事件。
+ * @param remote - 远端 manifest；新会话不补历史。
+ * @returns 尚未被远端索引覆盖的附件引用。
+ */
+async function attachmentBackfillRefs(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  sessionId: string,
+  sessionKey: Buffer,
+  events: readonly SyncEvent[],
+  remote: RemoteManifest | undefined,
+): Promise<AttachmentRef[]> {
+  if (remote === undefined) return []
+  const refs = collectAttachmentRefs(events)
+  if (refs.length === 0) return []
+  const covered = await remoteAttachmentCoverage(fetchImpl, base, token, sessionId, sessionKey, remote)
+  return refs.filter((ref) => !covered.has(ref.attachmentId))
+}
+
+/**
  * 收集一个批次事件引用的附件，加密上传并封出该批次的索引。
  *
  * 顺序要求：附件密文与索引都先上传，append 才可能通过；超过单 blob 上限的
@@ -974,6 +1043,130 @@ async function pushBatchAttachments(
   return {
     attachmentIndexSha256: sha256(sealedIndex),
     ...blobs.length === 0 ? {} : { attachmentBlobs: blobs },
+  }
+}
+
+/** 一个会话的附件对账统计；只读，不下载附件正文。 */
+export interface AttachmentStatusReport {
+  readonly sessionId: string
+  /** 服务端是否声明 attachment-index 能力。 */
+  readonly attachmentIndexSupported: boolean
+  /** 本机事件引用的唯一附件数。 */
+  readonly localReferenced: number
+  /** 本机实际存在的唯一附件数。 */
+  readonly localPresent: number
+  /** 本机缺失、但服务器可能补回的附件数。 */
+  readonly localMissing: number
+  /** 服务器索引登记的唯一附件数。 */
+  readonly serverIndexed: number
+  /** 服务器索引标记为 tooLarge 的附件数。 */
+  readonly serverTooLarge: number
+  /** 本机存在、服务器尚未登记，下一次真实推送可补传的数量。 */
+  readonly pendingBackfill: number
+}
+
+/** 远端索引的合并结果。 */
+interface RemoteAttachmentCatalog {
+  readonly entries: ReadonlyMap<string, AttachmentEntry>
+  readonly tooLarge: ReadonlySet<string>
+}
+
+/**
+ * 读取并合并一个会话的全部远端附件索引。
+ * @param fetchImpl - fetch 实现。
+ * @param base - 服务端基地址。
+ * @param token - 设备 token。
+ * @param sessionId - 会话 id。
+ * @param sessionKey - 会话密钥。
+ * @param remote - 远端 manifest。
+ * @returns attachmentId → 密文条目，以及 tooLarge 集合。
+ */
+async function readRemoteAttachmentCatalog(
+  fetchImpl: typeof fetch,
+  base: string,
+  token: string,
+  sessionId: string,
+  sessionKey: Buffer,
+  remote: RemoteManifest,
+): Promise<RemoteAttachmentCatalog> {
+  const entries = new Map<string, AttachmentEntry>()
+  const tooLarge = new Set<string>()
+  for (const frame of remote.frames) {
+    if (frame.attachmentIndexSha256 === undefined) continue
+    try {
+      const sealed = await downloadBlob(fetchImpl, base, token, frame.attachmentIndexSha256)
+      const index = openAttachmentIndex({
+        sessionKey,
+        bytes: sealed,
+        sessionId,
+        frameIndex: frame.index,
+        seqFrom: frame.seqFrom,
+        seqTo: frame.seqTo,
+      })
+      for (const [attachmentId, entry] of Object.entries(index.entries)) entries.set(attachmentId, entry)
+      for (const item of index.tooLarge ?? []) tooLarge.add(item.attachmentId)
+    } catch {
+      // 坏索引跳过；下次修复重试。
+    }
+  }
+  return { entries, tooLarge }
+}
+
+/**
+ * 统计一个会话的附件本机/服务器差异；不下载附件正文。
+ * @param deps - 附件依赖。
+ * @param sessionId - 会话 id。
+ * @returns 对账统计。
+ */
+export async function sessionAttachmentStatus(
+  deps: AttachmentRepairDeps,
+  sessionId: string,
+): Promise<AttachmentStatusReport> {
+  const bridge = deps.attachments
+  if (bridge === undefined) throw new AttachmentSyncError('宿主没有附件服务，无法查询附件状态')
+  const handle = await deps.persistence.open(sessionId, 'read')
+  let events: readonly SyncEvent[]
+  try {
+    events = (await handle.read()).events
+  } finally {
+    await handle.close()
+  }
+  const refs = collectAttachmentRefs(events)
+  let localPresent = 0
+  const present = new Set<string>()
+  for (const ref of refs) {
+    if (await bridge.exists(ref)) {
+      localPresent += 1
+      present.add(ref.attachmentId)
+    }
+  }
+
+  const base = normalizeBase(deps.config.serverUrl)
+  if (base === '') throw new Error('serverUrl 非法')
+  const master = await deriveMasterKeyCached(deps.config.passphrase, resolveSalt(deps.config, base))
+  const sessionKey = sessionKeyOf(master, sessionId)
+  const fetchImpl = withRequestTimeout(deps.fetch ?? fetch, deps.config.requestTimeoutMs)
+  const attachmentIndexSupported = await healthCapabilities(fetchImpl, base, deps.config.token)
+    .then((capabilities) => capabilities.includes('attachment-index'))
+    .catch(() => false)
+  const remote = await readManifest(fetchImpl, base, deps.config.token, sessionId)
+  if (remote === undefined) throw new Error(`远端没有会话 ${sessionId}`)
+  const catalog = await readRemoteAttachmentCatalog(fetchImpl, base, deps.config.token, sessionId, sessionKey, remote)
+  const covered = new Set([...catalog.entries.keys(), ...catalog.tooLarge])
+  const localMissing = refs.length - localPresent
+  let pendingBackfill = 0
+  for (const ref of refs) {
+    if (present.has(ref.attachmentId) && !covered.has(ref.attachmentId)) pendingBackfill += 1
+  }
+  return {
+    sessionId,
+    attachmentIndexSupported,
+    localReferenced: refs.length,
+    localPresent,
+    localMissing,
+    serverIndexed: catalog.entries.size,
+    serverTooLarge: catalog.tooLarge.size,
+    pendingBackfill,
   }
 }
 
@@ -1794,6 +1987,17 @@ async function syncSession<Session>(
     && (await healthCapabilities(fetchImpl, base, deps.config.token)).includes('attachment-index')
   const attachmentRun = new Map<string, AttachmentRunEntry>()
   const frameAttachments = new Map<number, FrameAttachmentFields>()
+  // 历史缺失附件：只在下一次真实事件帧上补一次索引；不伪造空帧或改尾帧。
+  let backfillRefs: AttachmentRef[] = []
+  if (attachmentsEnabled && remote !== undefined) {
+    try {
+      backfillRefs = await attachmentBackfillRefs(
+        fetchImpl, base, deps.config.token, sessionId, sessionKey, events, remote,
+      )
+    } catch (error: unknown) {
+      deps.logger?.warn(`附件索引补传检测失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
 
   let lastYieldAt = Date.now()
   for (const batch of iterateEventBatches(events, startAfterSeq, batchOptions(deps.config))) {
@@ -1809,12 +2013,16 @@ async function syncSession<Session>(
       blocking: true,
     })
     if (attachmentsEnabled && attachmentBridge !== undefined) {
-      const refs = collectAttachmentRefs(batch.events)
+      const batchRefs = collectAttachmentRefs(batch.events)
+      const capacity = Math.max(0, 256 - batchRefs.length)
+      const extra = backfillRefs.slice(0, capacity)
+      const refs = [...batchRefs, ...extra]
       const fields = await pushBatchAttachments(
         fetchImpl, base, deps.config.token, sessionId, sessionKey, attachmentBridge, refs,
         attachmentRun, entry.ref.index, batch.seqFrom, batch.seqTo, deps.logger,
       )
       if (fields !== undefined) frameAttachments.set(entry.ref.index, fields)
+      if (extra.length > 0) backfillRefs = backfillRefs.slice(extra.length)
     }
     await upload(entry, batch.events.length)
     index += 1
