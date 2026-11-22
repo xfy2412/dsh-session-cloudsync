@@ -315,3 +315,15 @@ UI 在会话底栏的快捷操作栏：「检查附件」；结果用底栏弹�
 
 以后有需要时改成完整性校验：图片走 `readImage`、文件走 `readFileStream`，校验失败按缺失处理；
 代价是修复要把该会话引用的附件读一遍。修复报告的 `reason` 也可以据此新增 `corrupt` 一类。
+
+## 18. 索引补传（2026-11-22 设计）
+
+历史帧没有附件索引时，当前没有回填通道。设计结论：
+
+- 不追加空批次帧：链连续性、`lastSeq` 与 `openEventBatch` 都不允许；
+- 不替换尾帧：同一批事件的 `chainHash` 会变，已追平设备会判 `diverged`；
+- 在**下一次有真实事件的新帧**上挂历史缺失附件的索引；索引条目可以来自旧帧，读取端按 `attachmentId` 合并；
+- 插件侧即可完成，不新增服务端端点；静止会话的补传留给后续服务端索引清单方案。
+
+详见 [SESSION-BAR-ATTACHMENT-BACKFILL.md](SESSION-BAR-ATTACHMENT-BACKFILL.md)。
+

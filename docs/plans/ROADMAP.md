@@ -18,9 +18,10 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 | **Vault V3** | 设备级插件快照 + 跨设备版本矩阵 + 一键匹配 | ✅ 基本完成：`device/profile.plugins`、对端 Vault 读取、registry 最新列与图标、安装/升级逐项确认；降级/移除仍只给手工命令，不做会话 producer |
 | **Vault V4** | 本机工具链 + L3 笔记/保留策略 | 🟡 工具链完成；L3 笔记首版已实现（右侧栏 tab、scope=session/workspace/global × storage=device/vault、注入、工具）；保留策略暂缓 |
 | **附件同步** | 会话附件（图片/文件）的跨设备同步 | ✅ 已完成（服务端 0.1.5 + 插件 0.1.5）：端到端加密、批次索引、拉取前补齐、「检查附件」修复；实测推送 → 跨设备拉取 → 删对象后修复通过。不做分片；内容损坏的修复待做（设计稿 §17） |
+| **附件索引补传** | 历史 `no-index` 附件的自愈与底栏附件面板 | 🟡 设计完成，待实现：下一次真实事件帧顺带索引（插件侧，无服务端改动）；底栏附件面板展开时按需查询；见 [SESSION-BAR-ATTACHMENT-BACKFILL.md](SESSION-BAR-ATTACHMENT-BACKFILL.md) |
 | **M5** | 公共多租户公益服 | ❌ 不在当前范围；独立 package/仓库，只共享插件对接协议 |
 
-> **当前优先级**：V3 可发布部分、V4 工具链与 L3 笔记首版已完成；下一步是 0.2.0 的协议瘦身、文档收口与发布。保留策略不阻塞当前发布。
+> **当前优先级**：V3 可发布部分、V4 工具链与 L3 笔记首版已完成；附件索引补传与底栏重构为当前插队项（设计已定，见 [SESSION-BAR-ATTACHMENT-BACKFILL.md](SESSION-BAR-ATTACHMENT-BACKFILL.md)）；随后是 0.2.0 的协议瘦身、文档收口与发布。保留策略不阻塞当前发布。
 >
 > **未发布的插件改动**：跨设备插件版本同步（设备快照、版本矩阵、registry 最新/图标）、本机环境工具
 > （`get_env` → `this_env` → `dscs_env`）、`authored` 工具链、设备切换提示、租约错误文案规范化、
@@ -38,6 +39,8 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 
 - [DESIGN.md](../architecture/DESIGN.md)：范围、数据分层、传输单位、并发、加密、兼容边界。
 - [VAULT.md](../sync/VAULT.md)：L2/L3 加密附加数据层、多工作区映射、设备台账与插件版本匹配（V0–V3 已实现；V4 工具链与笔记首版已做，保留暂缓）。
+- [SESSION-BAR-ATTACHMENT-BACKFILL.md](SESSION-BAR-ATTACHMENT-BACKFILL.md)：会话底栏事件驱动重构、附件面板、历史附件索引补传。
+- [ATTACHMENT-SYNC-DESIGN.md](ATTACHMENT-SYNC-DESIGN.md)：附件同步、索引与修复设计。
 - [CWD.md](../architecture/CWD.md)：header canonical、事件 raw、接收端 cwd 修正。
 - [DECISIONS.md](DECISIONS.md)：cwd/Canonical 反复讨论后的最终决策记录。
 - [PROMPT-GUIDANCE.md](../guides/PROMPT-GUIDANCE.md)：agent 提示词规划：尽量不把会话 cwd 切到工作区外。
