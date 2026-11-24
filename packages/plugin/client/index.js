@@ -1941,6 +1941,7 @@ window.__ModuleLoader__.load({
 
       var snapshot = state.snapshot
       var peers = snapshot === null ? [] : snapshot.peers
+      var emptyPeers = snapshot === null || typeof snapshot.emptyPeers !== 'number' ? 0 : snapshot.emptyPeers
       var local = snapshot === null ? null : snapshot.local
       var names = {}
       if (local !== null) local.plugins.forEach(function (plugin) { names[plugin.name] = true })
@@ -2069,6 +2070,9 @@ window.__ModuleLoader__.load({
           right: h('div', { className: 'dssync-actions' },
             h('button', { className: 'dssync-mini', type: 'button', disabled: busy || state.loading, onClick: refresh }, state.loading ? '刷新中…' : '刷新')),
         }),
+        snapshot !== null && emptyPeers > 0
+          ? h('div', { className: 'dssync-note' }, '有 ' + emptyPeers + ' 个设备档案没有插件记录，未在表格中显示。')
+          : null,
         body,
         snapshot === null ? null : h('div', { className: 'dssync-pv-toolbar' },
           h('button', { className: 'dssync-pill primary', type: 'button', disabled: busy || pendingCount === 0, onClick: apply }, busy ? '正在应用…' : '应用变更 ' + pendingCount),

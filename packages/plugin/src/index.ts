@@ -2669,7 +2669,11 @@ export function apply(ctx: Context, config: Config): void {
       await refreshWorkspaceLabels()
       const identity = deviceIdentity.snapshot()
       const plugins = await localPluginSnapshot()
-      const peers = peerDevices.filter((device) => device.deviceId !== identity?.deviceId)
+      // 空 profile 快照（旧版本/测试设备）只会生成没有内容的幽灵列；
+      // 插件版本表只展示确实上报过插件的对端。
+      const allPeers = peerDevices.filter((device) => device.deviceId !== identity?.deviceId)
+      const peers = allPeers.filter((device) => device.plugins.length > 0)
+      const emptyPeers = allPeers.length - peers.length
       const names = [
         ...plugins.map((plugin) => plugin.name),
         ...peers.flatMap((device) => device.plugins.map((plugin) => plugin.name)),
@@ -2716,6 +2720,7 @@ export function apply(ctx: Context, config: Config): void {
           plugins,
         },
         peers: peers.map((device) => ({ ...device, plugins: attachIcons(device.plugins) })),
+        emptyPeers,
         registry,
         registryIcons,
       }

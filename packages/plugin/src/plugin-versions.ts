@@ -37,6 +37,8 @@ export interface PluginVersionsSnapshot {
     readonly name: string
     readonly plugins: readonly PluginVersionView[]
   }[]
+  /** 没有插件记录的设备档案数；不渲染成空列，只在表头提示。 */
+  readonly emptyPeers: number
   /** plugin name → registry 上 `latest` 的版本；查不到时省略。 */
   readonly registry: Readonly<Record<string, string>>
   /** plugin name → registry latest 的图标 data URL；查不到时省略。 */

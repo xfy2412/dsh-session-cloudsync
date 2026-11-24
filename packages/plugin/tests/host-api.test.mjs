@@ -79,6 +79,7 @@ function control(overrides = {}) {
       generatedAt: 1,
       local: { deviceId: 'dev-1', name: 'dev', plugins: [] },
       peers: [],
+      emptyPeers: 0,
     })),
     applyPluginVersions: overrides.applyPluginVersions ?? (async (items) => items.map((item) => ({
       name: item.name, version: item.version, action: item.action, ok: true,
@@ -187,6 +188,7 @@ test('宿主 API：plugin-versions 返回快照，apply 只接受合法 items', 
       generatedAt: 2,
       local: { deviceId: 'dev-1', name: 'dev', plugins: [{ name: 'a', version: '1.0.0', enabled: true }] },
       peers: [{ deviceId: 'dev-2', name: 'peer', plugins: [{ name: 'a', version: '2.0.0', source: 'a@2.0.0', enabled: true }] }],
+      emptyPeers: 2,
     }),
     applyPluginVersions: async (items) => items.map((item) => ({
       name: item.name, version: item.version, action: item.action, ok: true,
