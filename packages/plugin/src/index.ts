@@ -648,11 +648,11 @@ export function apply(ctx: Context, config: Config): void {
   const remoteLastSeq = new Map<string, number>()
   /** 旧服务端摘要没有 parent/origin 时，从加密头补读的缓存。 */
   const remoteMetaCache = new Map<string, { readonly headChainHash: string; readonly meta: RemoteSessionMeta }>()
-  const refreshWorkspaceLabels = async (force = false): Promise<void> => {
-    if (statePath === undefined || bindingsDir === undefined) return
-    if (engineConfig.token.trim() === '' || engineConfig.passphrase === '') return
+  const refreshWorkspaceLabels = async (force = false): Promise<boolean> => {
+    if (statePath === undefined || bindingsDir === undefined) return false
+    if (engineConfig.token.trim() === '' || engineConfig.passphrase === '') return false
     const identity = `${serverUrl}\u0000${engineConfig.token}\u0000${engineConfig.passphrase}\u0000${engineConfig.salt ?? ''}`
-    if (!force && identity === labelsIdentity && Date.now() - labelsFetchedAt < 60_000) return
+    if (!force && identity === labelsIdentity && Date.now() - labelsFetchedAt < 60_000) return true
     try {
       const result = await readWorkspaceProfileLabels({
         serverUrl,
@@ -671,10 +671,12 @@ export function apply(ctx: Context, config: Config): void {
       vaultNoteEntries = result.notes
       labelsIdentity = identity
       labelsFetchedAt = Date.now()
+      return true
     } catch (error: unknown) {
       labelsIdentity = identity
       labelsFetchedAt = Date.now()
       logger.warn(`dsh-session-cloudsync: 读取 Vault 工作区 label 失败：${error instanceof Error ? error.message : String(error)}`)
+      return false
     }
   }
   /**
@@ -1276,8 +1278,14 @@ export function apply(ctx: Context, config: Config): void {
       ...process.env.DSH_PROFILE === undefined ? {} : { dshProfile: process.env.DSH_PROFILE },
     }, logger)
     if (notesStore !== undefined && result.notesSynced !== undefined && result.notesSynced.length > 0) {
+      // 先刷新 Vault 笔记缓存，再清 outbox：避免“已经不在 outbox、旧缓存里也没有”
+      // 的空窗，让刚写的笔记在保存后的同一次读取里就能看到。
+      const refreshed = await refreshWorkspaceLabels(true)
+      if (!refreshed) {
+        logger.warn('dsh-session-cloudsync: 笔记已上行但刷新 Vault 失败；保留 outbox 以便下次重试')
+        return
+      }
       await notesStore.removePending(result.notesSynced)
-      labelsIdentity = undefined
     }
     if (result.appended > 0) labelsIdentity = undefined
   }

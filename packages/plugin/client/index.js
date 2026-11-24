@@ -376,12 +376,15 @@ window.__ModuleLoader__.load({
       '.dssync-notes-seg{display:flex;gap:2px;padding:2px;border-radius:7px;background:rgba(127,127,127,.12)}',
       '.dssync-notes-seg button{border:0;background:transparent;color:var(--dssync-muted);font:11px/1.4 inherit;padding:4px 8px;border-radius:5px;cursor:pointer}',
       '.dssync-notes-seg button.on{background:var(--dsw-alias-bg-primary,#151a20);color:var(--dssync-text);box-shadow:0 1px 2px rgba(0,0,0,.2)}',
+      '.dssync-notes-count{display:inline-flex;align-items:center;justify-content:center;min-width:14px;height:14px;margin-left:3px;padding:0 4px;border-radius:99px;background:rgba(127,127,127,.16);font-size:9px;line-height:1;color:var(--dssync-faint)}',
+      '.dssync-notes-seg button.on .dssync-notes-count{background:rgba(127,127,127,.12);color:var(--dssync-muted)}',
       '.dssync-notes-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.dssync-notes-tools input{flex:1 1 120px;min-width:80px;padding:5px 7px;border:1px solid var(--dssync-line);border-radius:6px;background:transparent;color:inherit;font:inherit}',
-      '.dssync-notes-body{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto}',
+      '.dssync-notes-body{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto;flex:1 1 auto}',
       '.dssync-notes-card{display:flex;flex-direction:column;gap:4px;padding:8px 9px;border:1px solid var(--dssync-line);border-radius:8px;background:rgba(255,255,255,.02);cursor:pointer}',
       '.dssync-notes-card:hover{border-color:var(--dssync-line-strong)}',
       '.dssync-notes-card.on{border-color:var(--dssync-accent);background:var(--dssync-accent-soft)}',
+      '.dssync-notes-card.expanded,.dssync-notes-card.editing,.dssync-notes-new{cursor:default}',
       '.dssync-notes-card b{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dssync-notes-card p{margin:0;font-size:11px;line-height:1.45;color:var(--dssync-muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}',
       '.dssync-notes-meta{display:flex;gap:6px;flex-wrap:wrap;font-size:10px;color:var(--dssync-faint)}',
@@ -395,6 +398,19 @@ window.__ModuleLoader__.load({
       '.dssync-notes-empty{padding:18px 8px;text-align:center;color:var(--dssync-faint);font-size:12px}',
       '.dssync-notes-msg{font-size:11px;color:var(--dssync-muted)}.dssync-notes-msg.bad{color:#ff8f8f}',
       '.dssync-notes-thread{border-top:1px dashed var(--dssync-line);padding-top:6px;font-size:11px;color:var(--dssync-muted)}',
+      '.dssync-notes-editor{display:flex;flex-direction:column;gap:6px;overflow:hidden;transform-origin:top center}',
+      '.dssync-notes-editor-head{display:flex;align-items:center;gap:5px;flex-wrap:wrap}',
+      '.dssync-notes-editor input,.dssync-notes-editor textarea{width:100%;padding:5px 7px;border:1px solid var(--dssync-line);border-radius:6px;background:transparent;color:inherit;font:12px/1.45 inherit}',
+      '.dssync-notes-editor textarea{min-height:120px;resize:vertical;font-family:ui-monospace,Consolas,monospace}',
+      '.dssync-notes-editor.is-new{animation:dssync-notes-in .22s cubic-bezier(.22,1,.36,1)}',
+      '.dssync-notes-card .dssync-notes-detail{border:0;border-top:1px dashed var(--dssync-line);border-radius:0;padding:6px 0 0;gap:6px}',
+      '.dssync-notes-reveal{display:grid;grid-template-rows:1fr;overflow:hidden;animation:dssync-notes-reveal .2s cubic-bezier(.22,1,.36,1)}',
+      '.dssync-notes-reveal>*{min-height:0;overflow:hidden}',
+      '.dssync-notes-reveal.closing{animation:dssync-notes-hide .17s ease-in forwards}',
+      '@keyframes dssync-notes-reveal{from{grid-template-rows:0fr;opacity:0;transform:translateY(-2px)}to{grid-template-rows:1fr;opacity:1;transform:none}}',
+      '@keyframes dssync-notes-hide{from{grid-template-rows:1fr;opacity:1}to{grid-template-rows:0fr;opacity:0}}',
+      '@keyframes dssync-notes-in{from{opacity:0;transform:translateY(-8px) scale(.985)}to{opacity:1;transform:none}}',
+      '@media (prefers-reduced-motion: reduce){.dssync-notes-reveal,.dssync-notes-editor.is-new{animation:none!important}}',
     ].join('')
 
     /* ---------- 小工具 ---------- */
@@ -5051,6 +5067,21 @@ window.__ModuleLoader__.load({
       var messagePair = useState(null)
       var message = messagePair[0]
       var setMessage = messagePair[1]
+      var closingPair = useState('')
+      var closing = closingPair[0]
+      var setClosing = closingPair[1]
+      var closeTimer = React.useRef(null)
+
+      function clearCloseTimer() {
+        if (closeTimer.current !== null) {
+          clearTimeout(closeTimer.current)
+          closeTimer.current = null
+        }
+      }
+
+      useEffect(function () {
+        return function () { clearCloseTimer() }
+      }, [])
 
       function load(showLoading) {
         if (sessionId === '') {
@@ -5066,6 +5097,15 @@ window.__ModuleLoader__.load({
       }
 
       useEffect(function () { load(true) }, [sessionId])
+
+      useEffect(function () {
+        setSelectedId('')
+        setForm(null)
+        setClosing('')
+        setMessage(null)
+        setQuery('')
+        clearCloseTimer()
+      }, [sessionId])
 
       var data = state.data
       var all = data && Array.isArray(data.threads) ? data.threads : []
@@ -5084,13 +5124,103 @@ window.__ModuleLoader__.load({
         if (all[index].threadId === selectedId) { selected = all[index]; break }
       }
 
+      // 上行完成、待同步计数归零后，清除“已保存，等待同步”这类成功提示。
+      useEffect(function () {
+        var pending = data !== null && typeof data.pending === 'number' ? data.pending : null
+        if (pending === null) return undefined
+        if (message === null || message.bad === true || pending !== 0) return undefined
+        var timer = setTimeout(function () { setMessage(null) }, 300)
+        return function () { clearTimeout(timer) }
+      }, [data && data.pending, message])
+
+      function threadOf(threadId) {
+        for (var index = 0; index < all.length; index += 1) {
+          if (all[index].threadId === threadId) return all[index]
+        }
+        return null
+      }
+
+      function draftDirty() {
+        if (form === null) return false
+        var text = String(form.text || '')
+        var title = String(form.title || '')
+        var summary = String(form.summary || '')
+        if (form.threadId === '') {
+          return text.trim() !== '' || title.trim() !== '' || summary.trim() !== '' || form.pinned === true
+        }
+        var thread = threadOf(form.threadId)
+        var latest = thread && thread.latest ? thread.latest : {}
+        return title !== String(latest.title || '')
+          || summary !== String(latest.summary || '')
+          || text !== String(latest.text || '')
+          || form.pinned !== (latest.pinned === true)
+      }
+
+      function confirmDiscard() {
+        if (!draftDirty()) return true
+        return typeof window.confirm !== 'function' || window.confirm('放弃未保存的笔记修改？')
+      }
+
+      function animateClose(key, after) {
+        if (closing !== '') return
+        clearCloseTimer()
+        setClosing(key)
+        closeTimer.current = setTimeout(function () {
+          closeTimer.current = null
+          setClosing('')
+          after()
+        }, 170)
+      }
+
+      function closeEditor() {
+        if (form === null) return
+        if (!confirmDiscard()) return
+        var wasNew = form.threadId === ''
+        animateClose(wasNew ? 'new' : form.threadId, function () {
+          setForm(null)
+          if (wasNew) setSelectedId('')
+        })
+      }
+
+      function closeCard(threadId) {
+        if (selectedId !== threadId) return
+        animateClose(threadId, function () { setSelectedId('') })
+      }
+
+      function openThread(thread) {
+        if (form !== null) {
+          if (form.threadId === thread.threadId) {
+            closeEditor()
+            return
+          }
+          if (!confirmDiscard()) return
+          setForm(null)
+        }
+        if (selectedId === thread.threadId) closeCard(thread.threadId)
+        else {
+          setSelectedId(thread.threadId)
+          setMessage(null)
+        }
+      }
+
       function startNew() {
-        setForm({ threadId: '', title: '', summary: '', text: '', pinned: false })
+        if (busy) return
+        if (!confirmDiscard()) return
+        setSelectedId('')
+        setQuery('')
         setMessage(null)
+        setClosing('')
+        setForm({ threadId: '', title: '', summary: '', text: '', pinned: false })
       }
 
       function startEdit(thread) {
+        if (busy || thread === null) return
+        if (!confirmDiscard()) return
         var latest = thread.latest || {}
+        setSelectedId(thread.threadId)
+        setQuery('')
+        setMessage(null)
+        setClosing('')
         setForm({
           threadId: thread.threadId,
           title: String(latest.title || ''),
@@ -5098,18 +5228,34 @@ window.__ModuleLoader__.load({
           text: String(latest.text || ''),
           pinned: latest.pinned === true,
         })
-        setMessage(null)
+      }
+
+      function switchScope(next) {
+        if (next === scope) return
+        if (busy) return
+        if (!confirmDiscard()) return
+        setScope(next)
+        setSelectedId('')
+        setForm(null)
+        setClosing('')
+      }
+
+      function switchLocal() {
+        if (busy) return
+        if (!confirmDiscard()) return
+        setLocal(!local)
+        setSelectedId('')
+        setForm(null)
+        setClosing('')
       }
 
       function save() {
         if (form === null || busy) return
         if (String(form.text || '').trim() === '') { setMessage({ bad: true, text: '正文不能为空' }); return }
-        var editing = selected !== null && form.threadId !== ''
-        var storage = editing ? selected.storage : (local ? 'device' : 'vault')
-        var noteScope = editing ? selected.scope : scope
-        if (storage === 'vault' && noteScope === 'global' && editing === false && local === false) {
-          // 用户允许写全局同步笔记；这里只做提示，不阻止。
-        }
+        var thread = form.threadId === '' ? null : threadOf(form.threadId)
+        var editing = thread !== null
+        var storage = editing ? thread.storage : (local ? 'device' : 'vault')
+        var noteScope = editing ? thread.scope : scope
         setBusy(true)
         setMessage(null)
         fetchJson('/notes', {
@@ -5128,6 +5274,7 @@ window.__ModuleLoader__.load({
         }).then(function (note) {
           setForm(null)
           setSelectedId(note.threadId || note.id)
+          setClosing('')
           setMessage({ bad: false, text: '已保存，等待同步' })
           load(false)
         }, function (error) {
@@ -5137,7 +5284,7 @@ window.__ModuleLoader__.load({
 
       function remove(thread) {
         if (thread === null || busy) return
-        if (typeof window.confirm === 'function' && !window.confirm('删除这个笔记 thread？会追加一条墓碑记录。')) return
+        if (typeof window.confirm === 'function' && !window.confirm('删除这条笔记？')) return
         setBusy(true)
         fetchJson('/notes', {
           method: 'POST',
@@ -5146,19 +5293,130 @@ window.__ModuleLoader__.load({
           setMessage({ bad: false, text: '已删除' })
           setSelectedId('')
           setForm(null)
+          setClosing('')
           load(false)
         }, function (error) {
           setMessage({ bad: true, text: '删除失败：' + error.message })
         }).then(function () { setBusy(false) })
       }
 
+      function stopEvent(event) {
+        event.stopPropagation()
+      }
+
       var scopeButtons = h('div', { className: 'dssync-notes-seg' },
         [['session', '本会话'], ['workspace', '本工作区'], ['global', '全局']].map(function (item) {
+          var count = 0
+          for (var index = 0; index < all.length; index += 1) {
+            if (all[index].scope === item[0] && all[index].storage === (local ? 'device' : 'vault')) count += 1
+          }
           return h('button', {
             key: item[0], type: 'button', className: scope === item[0] ? 'on' : '',
-            onClick: function () { setScope(item[0]); setSelectedId(''); setForm(null) },
-          }, item[1])
+            title: '该范围共 ' + count + ' 条笔记',
+            onClick: function () { switchScope(item[0]) },
+          }, item[1], h('span', { className: 'dssync-notes-count' }, String(count)))
         }))
+
+      function renderEditor(thread) {
+        var isNew = thread === null
+        var editorClosing = closing === (isNew ? 'new' : thread.threadId)
+        var storageLabel = isNew
+          ? (local ? '仅本机' : '同步')
+          : (thread.storage === 'device' ? '本机' : '同步')
+        var scopeLabel = isNew ? scope : thread.scope
+        var scopeText = scopeLabel === 'workspace' ? '本工作区' : scopeLabel === 'global' ? '全局' : '本会话'
+        return h('div', {
+          className: 'dssync-notes-reveal' + (editorClosing ? ' closing' : ''),
+        },
+        h('div', {
+          className: 'dssync-notes-editor' + (isNew ? ' is-new' : ''),
+          onClick: stopEvent,
+        },
+          h('div', { className: 'dssync-notes-editor-head' },
+            h('b', null, isNew ? '新建笔记' : '编辑笔记'),
+            h('span', { className: 'dssync-notes-badge' }, scopeText),
+            h('span', { className: 'dssync-notes-badge' }, storageLabel)),
+          message !== null ? h('div', { className: 'dssync-notes-msg' + (message.bad ? ' bad' : '') }, message.text) : null,
+          h('input', {
+            value: form.title, placeholder: '标题（可选，≤80 字）', maxLength: 80,
+            onChange: function (event) { setForm(Object.assign({}, form, { title: event.target.value })) },
+          }),
+          h('input', {
+            value: form.summary, placeholder: '摘要（可选，≤200 字；不填从正文提取）', maxLength: 200,
+            onChange: function (event) { setForm(Object.assign({}, form, { summary: event.target.value })) },
+          }),
+          h('textarea', {
+            value: form.text, placeholder: '正文（markdown，≤8 KB）',
+            onChange: function (event) { setForm(Object.assign({}, form, { text: event.target.value })) },
+          }),
+          h('div', { className: 'dssync-notes-actions' },
+            h('label', { style: { display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px' } },
+              h('input', {
+                type: 'checkbox', checked: form.pinned === true,
+                onChange: function (event) { setForm(Object.assign({}, form, { pinned: event.target.checked })) },
+              }), '置顶'),
+            h('span', { style: { flex: '1 1 auto' } }),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: closeEditor }, '取消'),
+            h('button', { className: 'dssync-pill primary', type: 'button', disabled: busy, onClick: save }, busy ? '保存中…' : '保存')),
+          h('div', { className: 'dssync-notes-msg' },
+            isNew ? '保存后先写本机，再后台同步。' : '编辑会更新这条笔记的当前内容。')))
+      }
+
+      function renderDetail(thread) {
+        var latest = thread.latest || {}
+        var detailClosing = closing === thread.threadId
+        return h('div', {
+          key: 'detail',
+          className: 'dssync-notes-reveal' + (detailClosing ? ' closing' : ''),
+          onClick: stopEvent,
+        },
+        h('div', { className: 'dssync-notes-detail' },
+          h('div', { className: 'dssync-notes-text' }, latest.text || ''),
+          thread.notes.length > 1
+            ? h('div', { className: 'dssync-notes-thread' }, '共 ' + thread.notes.length + ' 个版本；最新在上。')
+            : null,
+          h('div', { className: 'dssync-notes-actions' },
+            h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { startEdit(thread) } }, '编辑'),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { remove(thread) } }, '删除'),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { closeCard(thread.threadId) } }, '收起'))))
+      }
+
+      function renderCard(thread) {
+        var latest = thread.latest || {}
+        var editing = form !== null && form.threadId === thread.threadId
+        var expanded = form === null && selectedId === thread.threadId
+        var className = 'dssync-notes-card'
+          + (expanded ? ' on expanded' : '')
+          + (editing ? ' editing' : '')
+        if (editing) {
+          return h('div', {
+            key: thread.threadId, className: className, onClick: stopEvent,
+          }, renderEditor(thread))
+        }
+        var children = [
+          h('b', { key: 'title' }, latest.title || '未命名笔记'),
+          h('p', { key: 'summary' }, String(latest.summary || latest.text || '').slice(0, 180)),
+          h('div', { key: 'meta', className: 'dssync-notes-meta' },
+            h('span', { className: 'dssync-notes-badge' }, latest.authorKind === 'agent' ? 'agent' : 'user'),
+            latest.pinned === true ? h('span', { className: 'dssync-notes-badge' }, '置顶') : null,
+            h('span', null, String(latest.at ? new Date(latest.at).toLocaleString() : ''))),
+        ]
+        if (expanded) children.push(renderDetail(thread))
+        return h('div', {
+          key: thread.threadId,
+          className: className,
+          onClick: expanded ? undefined : function () { openThread(thread) },
+        }, children)
+      }
+
+      var newEditor = form !== null && form.threadId === ''
+        ? h('div', { key: 'new-editor', className: 'dssync-notes-card dssync-notes-new' }, renderEditor(null))
+        : null
+      var viewThreads = threads
+      if (form !== null && form.threadId !== '' && !threads.some(function (thread) { return thread.threadId === form.threadId })) {
+        var editingThread = threadOf(form.threadId)
+        if (editingThread !== null) viewThreads = [editingThread].concat(threads)
+      }
 
       return h('div', { className: 'dssync dssync-notes' },
         h('div', { className: 'dssync-notes-head' },
@@ -5169,7 +5427,7 @@ window.__ModuleLoader__.load({
           scopeButtons,
           h('button', {
             className: 'dssync-pill' + (local ? ' primary' : ''), type: 'button',
-            onClick: function () { setLocal(!local); setSelectedId(''); setForm(null) },
+            onClick: switchLocal,
           }, local ? '仅本机' : '同步'),
           h('input', {
             value: query, placeholder: '搜索标题/摘要/正文',
@@ -5177,65 +5435,14 @@ window.__ModuleLoader__.load({
           })),
         state.error !== null ? h('div', { className: 'dssync-notes-msg bad' }, state.error) : null,
         data !== null && data.pending > 0 ? h('div', { className: 'dssync-notes-msg' }, '有 ' + data.pending + ' 条笔记等待同步') : null,
-        message !== null ? h('div', { className: 'dssync-notes-msg' + (message.bad ? ' bad' : '') }, message.text) : null,
-        form !== null
-          ? h('div', { className: 'dssync-notes-form' },
-            h('input', {
-              value: form.title, placeholder: '标题（可选，≤80 字）', maxLength: 80,
-              onChange: function (event) { setForm(Object.assign({}, form, { title: event.target.value })) },
-            }),
-            h('input', {
-              value: form.summary, placeholder: '摘要（可选，≤200 字；不填从正文提取）', maxLength: 200,
-              onChange: function (event) { setForm(Object.assign({}, form, { summary: event.target.value })) },
-            }),
-            h('textarea', {
-              value: form.text, placeholder: '正文（markdown，≤8 KB）',
-              onChange: function (event) { setForm(Object.assign({}, form, { text: event.target.value })) },
-            }),
-            h('div', { className: 'dssync-notes-actions' },
-              h('label', { style: { display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px' } },
-                h('input', {
-                  type: 'checkbox', checked: form.pinned === true,
-                  onChange: function (event) { setForm(Object.assign({}, form, { pinned: event.target.checked })) },
-                }), '置顶'),
-              h('span', { className: 'spacer', style: { flex: '1 1 auto' } }),
-              h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { setForm(null) } }, '取消'),
-              h('button', { className: 'dssync-pill primary', type: 'button', disabled: busy, onClick: save }, busy ? '保存中…' : '保存')),
-            h('div', { className: 'dssync-notes-msg' }, form.threadId === '' ? '新建后先写本机，再后台同步到 Vault。' : '编辑会在同一个 thread 追加新版本。'))
-          : null,
-        selected !== null && form === null
-          ? h('div', { className: 'dssync-notes-detail' },
-            h('div', { className: 'dssync-notes-meta' },
-              h('span', { className: 'dssync-notes-badge' }, selected.scope),
-              h('span', { className: 'dssync-notes-badge' }, selected.storage === 'device' ? '本机' : '同步'),
-              h('span', null, (selected.latest.authorKind === 'agent' ? 'agent' : 'user')),
-              selected.latest.pinned === true ? h('span', null, '置顶') : null),
-            h('b', null, selected.latest.title || '未命名笔记'),
-            h('div', { className: 'dssync-notes-text' }, selected.latest.text || ''),
-            selected.notes.length > 1 ? h('div', { className: 'dssync-notes-thread' }, 'thread 共 ' + selected.notes.length + ' 条；最新在上。') : null,
-            h('div', { className: 'dssync-notes-actions' },
-              h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { startEdit(selected) } }, '编辑'),
-              h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { remove(selected) } }, '删除'),
-              h('button', { className: 'dssync-pill', type: 'button', disabled: busy, onClick: function () { setSelectedId('') } }, '返回')))
-          : null,
-        state.loading && data === null ? h('div', { className: 'dssync-notes-empty' }, '读取笔记…') : null,
-        !state.loading && threads.length === 0
-          ? h('div', { className: 'dssync-notes-empty' }, sessionId === '' ? '打开一个会话后查看笔记' : '这个范围还没有笔记')
-          : null,
-        threads.map(function (thread) {
-          var latest = thread.latest || {}
-          return h('div', {
-            key: thread.threadId,
-            className: 'dssync-notes-card' + (selectedId === thread.threadId ? ' on' : ''),
-            onClick: function () { setSelectedId(thread.threadId); setForm(null) },
-          },
-            h('b', null, latest.title || '未命名笔记'),
-            h('p', null, String(latest.summary || latest.text || '').slice(0, 180)),
-            h('div', { className: 'dssync-notes-meta' },
-              h('span', { className: 'dssync-notes-badge' }, latest.authorKind === 'agent' ? 'agent' : 'user'),
-              latest.pinned === true ? h('span', { className: 'dssync-notes-badge' }, '置顶') : null,
-              h('span', null, String(latest.at ? new Date(latest.at).toLocaleString() : ''))))
-        }))
+        form === null && message !== null ? h('div', { className: 'dssync-notes-msg' + (message.bad ? ' bad' : '') }, message.text) : null,
+        h('div', { className: 'dssync-notes-body' },
+          newEditor,
+          state.loading && data === null ? h('div', { className: 'dssync-notes-empty' }, '读取笔记…') : null,
+          !state.loading && threads.length === 0 && form === null
+            ? h('div', { className: 'dssync-notes-empty' }, sessionId === '' ? '打开一个会话后查看笔记' : '这个范围还没有笔记')
+            : null,
+          viewThreads.map(renderCard)))
     }
 
     function apply(ctx) {
