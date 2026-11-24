@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { classifySyncError } from './engine.ts'
 import type { AttachmentRepairReport, AttachmentStatusReport, CwdCorrectionResult, PassphraseCheck, ServerProbeResult, SyncTestResult } from './engine.ts'
+import type { EnvironmentFacts } from './device-info.ts'
 import type { ReplacePlan } from './replace.ts'
 import type { SyncRunResult } from './controller.ts'
 import type { PerfSnapshot } from './perf.ts'
@@ -88,6 +89,8 @@ export interface SyncControl {
   repairAttachments(sessionId: string): Promise<AttachmentRepairReport>
   /** 只读统计本机/服务器附件差异，不下载附件正文。 */
   attachmentStatus(sessionId: string): Promise<AttachmentStatusReport>
+  /** 读取本机环境事实；`refresh` 强制重探工具链。 */
+  environmentFacts(refresh?: boolean): Promise<EnvironmentFacts>
   /** 接收端 cwd 决策：fix 追加修正并推送；skip 直接挂载原会话。 */
   cwdDecision(sessionId: string, action: 'fix' | 'skip'): Promise<CwdCorrectionResult>
   /** 分叉会话的人工决定：ignore 不再自动提示；force 解除写入拦截；restore 恢复阻塞。 */
@@ -572,6 +575,23 @@ export function createHostApi(control: SyncControl): readonly HostFetchRoute[] {
             ? 'create'
             : typeof body.choice === 'string' && body.choice.trim() !== '' ? body.choice.trim() : undefined
           return json({ ok: true, value: await control.sessionScope(sessionId, body.enabled, choice) })
+        } catch (error: unknown) {
+          const classified = classifySyncError(error)
+          return json({
+            ok: false,
+            error: { code: classified.kind, message: classified.message },
+          }, 500)
+        }
+      },
+    },
+    {
+      path: '/api/session-cloudsync/toolchain',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (request: Request) => {
+        try {
+          const refresh = new URL(request.url).searchParams.get('refresh') === '1'
+          return json({ ok: true, value: await control.environmentFacts(refresh) })
         } catch (error: unknown) {
           const classified = classifySyncError(error)
           return json({

@@ -2643,6 +2643,7 @@ export function apply(ctx: Context, config: Config): void {
       ...attachmentsBridge === undefined ? {} : { attachments: attachmentsBridge },
       persistence: { open: (id: string, access: 'read') => ctx.sessionPersistence.open(id as SessionId, access) },
     }, sessionId),
+    environmentFacts: (refresh?: boolean) => localEnvironment.facts(refresh === true ? { refresh: true } : {}),
     perf: () => perf.snapshot(),
     config: async (): Promise<SyncConfigSnapshot> => {
       const setupInfo = await setup()

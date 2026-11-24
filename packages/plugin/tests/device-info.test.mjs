@@ -33,7 +33,7 @@ function fakeShell(handler) {
       return request
     },
     async execute(spec) {
-      return { result: async () => handler(spec.command) }
+      return { result: async () => handler(spec.command, spec) }
     },
   }
 }
@@ -234,6 +234,31 @@ test('工具链：探测失败/超时的命令被跳过，缓存 TTL 内不重�
   assert.deepEqual(retried.toolchain.map((tool) => tool.name), ['node', 'git'], '超时失败 30 秒后自动重试')
   const third = await environment.facts({ refresh: true })
   assert.deepEqual(third.toolchain.map((tool) => tool.name), ['node', 'git'], 'refresh 后 node 恢复')
+})
+
+test('工具链：sandbox 后端不可用时对固定探测命令降级重试', async () => {
+  const shell = fakeShell((command, spec) => {
+    if (spec.sandboxPolicy && spec.sandboxPolicy.mode === 'workspace-write') {
+      return {
+        exitCode: 1,
+        stderr: 'windows-acl-run: no sandbox backend is usable; refusing to run the command unconfined',
+      }
+    }
+    return command.includes('--version') ? { stdout: 'node v24.20.0\n' } : { stdout: 'C:/node/node.exe\n' }
+  })
+  const { options } = environmentOf({
+    shell: () => shell,
+    commands: () => ['node'],
+  })
+  const facts = await new LocalEnvironment(options).facts({
+    sandboxPolicy: { mode: 'workspace-write', workspaceRoot: 'C:/Users/Administrator' },
+  })
+  assert.equal(facts.toolchain[0].name, 'node')
+  assert.equal(facts.toolchain[0].version, 'v24.20.0')
+  assert.equal(
+    shell.requests.some((request) => request.sandboxPolicy?.mode === 'danger-full-access'),
+    true,
+  )
 })
 
 test('工具链：宿主没有 shell 服务时给出明确原因', async () => {

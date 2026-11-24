@@ -98,6 +98,11 @@ function control(overrides = {}) {
       localReferenced: 0, localPresent: 0, localMissing: 0,
       serverIndexed: 0, serverTooLarge: 0, pendingBackfill: 0,
     })),
+    environmentFacts: overrides.environmentFacts ?? (async () => ({
+      os: { platform: 'win32', arch: 'x64', release: '10.0' },
+      dsh: { version: '0.2.2', profile: 'web', sessionFormatVersion: 4 },
+      node: 'v24.20.0', workspaces: [], toolchain: [],
+    })),
     syncNow: overrides.syncNow ?? (async () => ({ ok: true, status: { running: false } })),
     cwdDecision: overrides.cwdDecision ?? (async () => ({ ok: true, status: 'corrected' })),
     repairAttachments: overrides.repairAttachments ?? (async (sessionId) => ({
@@ -172,6 +177,7 @@ test('宿主 API：注册全部精确路由', () => {
     ['/api/session-cloudsync/notes', ['GET', 'POST'], 'buffered'],
     ['/api/session-cloudsync/sync', ['POST'], 'buffered'],
     ['/api/session-cloudsync/session-scope', ['POST'], 'buffered'],
+    ['/api/session-cloudsync/toolchain', ['GET'], 'buffered'],
     ['/api/session-cloudsync/attachments/status', ['GET'], 'buffered'],
     ['/api/session-cloudsync/attachments/repair', ['POST'], 'buffered'],
     ['/api/session-cloudsync/cwd', ['POST'], 'buffered'],
@@ -465,6 +471,28 @@ test('宿主 API：replace 按 sessionId 生成覆盖计划', async () => {
   assert.equal(response.status, 200)
   assert.equal(seen, 'session-replace')
   assert.equal((await bodyOf(response)).value.scriptPath, '/tmp/replace.mjs')
+})
+
+test('宿主 API：toolchain 返回环境事实并透传 refresh', async () => {
+  let seen = null
+  const routes = createHostApi(control({
+    environmentFacts: async (refresh) => {
+      seen = refresh
+      return {
+        os: { platform: 'win32', arch: 'x64', release: '10.0' },
+        dsh: { version: '0.2.2', profile: 'web', sessionFormatVersion: 4 },
+        node: 'v24.20.0',
+        workspaces: [],
+        toolchain: [{ name: 'node', version: 'v24.20.0', path: 'C:/node.exe', source: 'auto' }],
+      }
+    },
+  }))
+  const response = await route(routes, '/api/session-cloudsync/toolchain').fetch(
+    new Request('http://host/api/session-cloudsync/toolchain?refresh=1'),
+  )
+  assert.equal(response.status, 200)
+  assert.equal(seen, true)
+  assert.equal((await bodyOf(response)).value.toolchain[0].name, 'node')
 })
 
 test('宿主 API：attachments/status 按 sessionId 返回只读对账', async () => {

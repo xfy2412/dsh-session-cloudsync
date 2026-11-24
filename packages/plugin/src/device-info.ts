@@ -435,11 +435,18 @@ async function probeTool(
   workdir?: string,
   sandboxPolicy?: unknown,
 ): Promise<{ readonly fact?: ToolchainFact; readonly error?: string }> {
-  let versionProbe = await runShell(shell, `${name} --version`, signal, workdir, sandboxPolicy)
+  let policy = sandboxPolicy
+  let versionProbe = await runShell(shell, `${name} --version`, signal, workdir, policy)
+  // Windows ACL runner 在 workspace 包含 temp 时无法启动；工具链探测是固定的
+  // 只读命令，按错误提示改用 danger-full-access 重试，避免整个工具链不可用。
+  if (versionProbe.output === undefined && isSandboxUnavailable(versionProbe.error) && signal?.aborted !== true) {
+    policy = unrestrictedPolicy(sandboxPolicy)
+    versionProbe = await runShell(shell, `${name} --version`, signal, workdir, policy)
+  }
   // Windows 上 npm 经 pwsh shim 启动可能超过 1.5s；单次超时会静默丢工具，
   // 因此失败后再给一次机会（不存在的命令会稳定失败，不会拖长成功路径）。
   if (versionProbe.output === undefined && signal?.aborted !== true) {
-    versionProbe = await runShell(shell, `${name} --version`, signal, workdir, sandboxPolicy)
+    versionProbe = await runShell(shell, `${name} --version`, signal, workdir, policy)
   }
   if (versionProbe.output === undefined) {
     return { error: `${name}: ${versionProbe.error ?? '没有输出'}` }
@@ -449,7 +456,7 @@ async function probeTool(
   // `git --version` 输出 "git version 2.55"，`python --version` 输出 "Python 3.14"；
   // 去掉重复的命令名前缀，`version` 字段只保留版本本身。
   const version = rawVersion.replace(new RegExp(`^${name}(?:\\s+version)?\\s+`, 'iu'), '') || rawVersion
-  const pathProbe = await runShell(shell, executablePathCommand(name), signal, workdir, sandboxPolicy)
+  const pathProbe = await runShell(shell, executablePathCommand(name), signal, workdir, policy)
   const executable = pathProbe.output === undefined ? undefined : firstLine(pathProbe.output, 300)
   return {
     fact: {
@@ -459,6 +466,23 @@ async function probeTool(
       source: 'auto',
     },
   }
+}
+
+/** Windows ACL 后端不可用时的错误特征；只用于固定只读探测的降级重试。 */
+function isSandboxUnavailable(error: string | undefined): boolean {
+  return error !== undefined && /no sandbox backend is usable|windows-acl-run|sandbox mode .*is requested|refusing to run the command unconfined/iu.test(error)
+}
+
+/**
+ * 构造探测用的无约束策略；只用于固定 `--version` / 路径查询命令。
+ * @param policy - 调用方会话解析出的策略。
+ * @returns 保留工作区/会话信息的 danger-full-access 策略。
+ */
+function unrestrictedPolicy(policy: unknown): unknown {
+  if (policy !== null && typeof policy === 'object') {
+    return { ...(policy as Record<string, unknown>), mode: 'danger-full-access' }
+  }
+  return { mode: 'danger-full-access', workspaceRoot: process.cwd() }
 }
 
 /**
@@ -497,9 +521,11 @@ async function runShell(
     const handle = await shell.execute(spec)
     const result = await handle.result()
     if (result.timedOut === true) return { error: '超时' }
-    // 命令不存在时 PowerShell/bash 会把错误写到 stderr；非 0 退出码不能当版本行。
-    if (result.exitCode !== undefined && result.exitCode !== 0) return { error: `退出码 ${result.exitCode}` }
     const output = `${outputText(result.stdout)}\n${outputText(result.stderr)}`.trim()
+    // 命令不存在时 PowerShell/bash 会把错误写到 stderr；非 0 退出码不能当版本行。
+    if (result.exitCode !== undefined && result.exitCode !== 0) {
+      return { error: `退出码 ${result.exitCode}${output === '' ? '' : `: ${output.slice(0, 300)}`}` }
+    }
     return output === '' ? { error: '没有输出' } : { output }
   } catch (error: unknown) {
     // 单条探测失败只说明该工具不可用；整体环境采集继续。

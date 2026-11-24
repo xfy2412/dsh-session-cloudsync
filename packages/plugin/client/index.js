@@ -30,6 +30,43 @@ window.__ModuleLoader__.load({
       { ms: 60000, label: '1 分钟' },
       { ms: 300000, label: '5 分钟' },
     ]
+    var DEFAULT_TOOLCHAIN_COMMANDS = ['node', 'npm', 'pnpm', 'git', 'python', 'uv']
+    var TOOLCHAIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/
+
+    /** 与宿主 sanitizeAuthoredToolchain 保持同一套约束；错误抛给设置页显示。 */
+    function normalizeAuthoredToolchain(value) {
+      if (!Array.isArray(value)) return []
+      var seen = Object.create(null)
+      var out = []
+      value.forEach(function (item, index) {
+        if (item === null || typeof item !== 'object') return
+        var name = typeof item.name === 'string' ? item.name.trim() : ''
+        var path = typeof item.path === 'string' ? item.path.trim() : ''
+        if (name === '' && path === '') return
+        if (!TOOLCHAIN_NAME_RE.test(name)) throw new Error('第 ' + (index + 1) + ' 个自定义工具名称不合法')
+        if (path === '' || path.length > 1024) throw new Error('第 ' + (index + 1) + ' 个自定义工具路径为空或过长')
+        var key = name.toLowerCase()
+        if (seen[key] === true) return
+        seen[key] = true
+        var version = typeof item.version === 'string' ? item.version.trim().slice(0, 120) : ''
+        out.push({ name: name, path: path, ...version === '' ? {} : { version: version } })
+      })
+      if (out.length > 32) throw new Error('自定义工具最多 32 个')
+      return out
+    }
+
+    function normalizeToolchainCommands(value) {
+      if (!Array.isArray(value)) return DEFAULT_TOOLCHAIN_COMMANDS.slice()
+      var seen = Object.create(null)
+      var out = []
+      value.forEach(function (item) {
+        var name = typeof item === 'string' ? item.trim() : ''
+        if (!TOOLCHAIN_NAME_RE.test(name) || seen[name] === true) return
+        seen[name] = true
+        out.push(name)
+      })
+      return out.length === 0 ? DEFAULT_TOOLCHAIN_COMMANDS.slice() : out
+    }
     var ONBOARD_DISMISSED = 'dsh-session-cloudsync.onboarding.dismissed'
     var AGREEMENT_ACCEPTED_KEY = 'dsh-session-cloudsync.agreement.accepted'
     var ONBOARD_FORCE_KEY = 'dsh-session-cloudsync.onboarding.force'
@@ -88,6 +125,16 @@ window.__ModuleLoader__.load({
       '.dssync-field input,.dssync-field select{width:100%;height:34px;padding:0 10px;border:1px solid var(--dssync-line-strong);border-radius:8px;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.18));color:var(--dssync-text);font:inherit;font-size:13px;outline:none}',
       '.dssync-field input:focus,.dssync-field select:focus{border-color:var(--dssync-accent)}',
       '.dssync-field .hint{font-size:11.5px;color:var(--dssync-faint)}',
+      '.dssync-toolchain-list{display:flex;flex-direction:column;gap:6px}',
+      '.dssync-toolchain-item{display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid var(--dssync-line);font-size:12px}',
+      '.dssync-toolchain-item:last-child{border-bottom:0}',
+      '.dssync-toolchain-item .name{min-width:80px;font-weight:600}',
+      '.dssync-toolchain-item .path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dssync-faint);font-family:ui-monospace,Consolas,monospace;font-size:11px}',
+      '.dssync-toolchain-edit{display:grid;grid-template-columns:minmax(90px,1fr) minmax(140px,2fr) minmax(70px,.7fr) auto;gap:6px;align-items:center}',
+      '.dssync-toolchain-edit input{height:28px;padding:0 7px;border:1px solid var(--dssync-line-strong);border-radius:6px;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.18));color:inherit;font:11px/1.3 inherit;min-width:0}',
+      '.dssync-toolchain-chips{display:flex;align-items:center;gap:5px;flex-wrap:wrap}',
+      '.dssync-toolchain-chip{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid var(--dssync-line);border-radius:6px;font-size:11px;color:var(--dssync-muted)}',
+      '.dssync-toolchain-chip button{border:0;background:transparent;color:var(--dssync-faint);cursor:pointer;padding:0;font:inherit}',
       '.dssync-row{display:flex;align-items:center;gap:12px;min-height:34px}',
       '.dssync-rowtext{flex:1;min-width:0}',
       '.dssync-rowtext b{display:block;font-size:13px;font-weight:500}',
@@ -1225,6 +1272,12 @@ window.__ModuleLoader__.load({
         autoSync: source.autoSync !== undefined ? source.autoSync === true : fallback.autoSync === true,
         intervalMs: source.intervalMs !== undefined ? source.intervalMs : (fallback.intervalMs || 60000),
         includeSubagents: source.includeSubagents !== undefined ? source.includeSubagents !== false : fallback.includeSubagents !== false,
+        toolchainCommands: Array.isArray(source.toolchainCommands)
+          ? source.toolchainCommands.slice()
+          : (Array.isArray(fallback.toolchainCommands) ? fallback.toolchainCommands.slice() : DEFAULT_TOOLCHAIN_COMMANDS.slice()),
+        toolchainAuthored: Array.isArray(source.toolchainAuthored)
+          ? source.toolchainAuthored.map(function (item) { return Object.assign({}, item) })
+          : (Array.isArray(fallback.toolchainAuthored) ? fallback.toolchainAuthored.map(function (item) { return Object.assign({}, item) }) : []),
       }
     }
 
@@ -2178,6 +2231,140 @@ window.__ModuleLoader__.load({
             })))))
     }
 
+    /**
+     * 设置页「本机环境」：查看工具链探测结果，配置自动命令与自定义工具。
+     */
+    function ToolchainSection(props) {
+      var factsPair = useState({ loading: true, data: null, error: null })
+      var factsState = factsPair[0]
+      var setFacts = factsPair[1]
+      var draftPair = useState('')
+      var commandDraft = draftPair[0]
+      var setCommandDraft = draftPair[1]
+      var authored = Array.isArray(props.fields.toolchainAuthored) ? props.fields.toolchainAuthored : []
+      var commands = Array.isArray(props.fields.toolchainCommands) ? props.fields.toolchainCommands : DEFAULT_TOOLCHAIN_COMMANDS
+
+      function load(refresh) {
+        setFacts(function (previous) { return { loading: true, data: previous.data, error: null } })
+        fetchJson('/toolchain' + (refresh === true ? '?refresh=1' : '')).then(function (data) {
+          setFacts({ loading: false, data: data, error: null })
+        }, function (error) {
+          setFacts({ loading: false, data: null, error: error.message })
+        })
+      }
+
+      useEffect(function () { load(false) }, [])
+
+      function updateAuthored(index, key, value) {
+        var next = authored.map(function (item, at) {
+          return at === index ? Object.assign({}, item, { [key]: value }) : Object.assign({}, item)
+        })
+        props.set('toolchainAuthored', next)
+      }
+
+      function addAuthored() {
+        if (authored.length >= 32) return
+        props.set('toolchainAuthored', authored.concat([{ name: '', path: '', version: '' }]))
+      }
+
+      function removeAuthored(index) {
+        props.set('toolchainAuthored', authored.filter(function (item, at) { return at !== index }))
+      }
+
+      function removeCommand(name) {
+        props.set('toolchainCommands', commands.filter(function (item) { return item !== name }))
+      }
+
+      function addCommand() {
+        var name = commandDraft.trim()
+        if (!TOOLCHAIN_NAME_RE.test(name) || commands.indexOf(name) >= 0) return
+        props.set('toolchainCommands', commands.concat([name]))
+        setCommandDraft('')
+      }
+
+      function resetCommands() {
+        props.set('toolchainCommands', DEFAULT_TOOLCHAIN_COMMANDS.slice())
+      }
+
+      var data = factsState.data
+      var detected = data !== null && Array.isArray(data.toolchain) ? data.toolchain : []
+      return h('section', { className: 'dssync-sec' },
+        h(SectionHead, {
+          icon: 'gauge', title: '本机环境', sub: '工具链探测与自定义路径',
+          right: h('div', { className: 'dssync-actions' },
+            h('button', {
+              className: 'dssync-pill', type: 'button', disabled: factsState.loading,
+              onClick: function () { load(true) },
+            }, factsState.loading ? '探测中…' : '重新探测')),
+        }),
+        factsState.error !== null ? h('div', { className: 'dssync-note bad' }, factsState.error) : null,
+        data !== null && data.toolchainError !== undefined ? h('div', { className: 'dssync-note bad' }, data.toolchainError) : null,
+        h('div', { className: 'dssync-toolchain-list' },
+          detected.length === 0
+            ? h('div', { className: 'dssync-note' }, factsState.loading ? '正在探测本机工具链…' : '没有探测到工具链。')
+            : detected.map(function (tool) {
+              return h('div', { key: tool.name, className: 'dssync-toolchain-item' },
+                h('span', { className: 'name' }, tool.name),
+                h('span', { className: 'dssync-chip' }, tool.source === 'authored' ? '手动' : '自动'),
+                h('span', { className: 'path', title: tool.path || '' }, tool.version || 'unknown'),
+                h('span', { className: 'path', title: tool.path || '' }, tool.path || '—'))
+            })),
+        h('div', { className: 'dssync-field' },
+          h('label', null, '自动探测命令'),
+          h('div', { className: 'dssync-toolchain-chips' },
+            commands.map(function (name) {
+              return h('span', { key: name, className: 'dssync-toolchain-chip' },
+                name,
+                h('button', {
+                  type: 'button', title: '移除 ' + name, disabled: props.disabled,
+                  onClick: function () { removeCommand(name) },
+                }, '×'))
+            })),
+          h('div', { className: 'dssync-btnrow' },
+            h('input', {
+              value: commandDraft, placeholder: '命令名，如 cargo', disabled: props.disabled,
+              style: { width: '180px', height: '28px', padding: '0 8px', border: '1px solid var(--dssync-line-strong)', borderRadius: '6px', background: 'transparent', color: 'inherit' },
+              onChange: function (event) { setCommandDraft(event.target.value) },
+              onKeyDown: function (event) { if (event.key === 'Enter') { event.preventDefault(); addCommand() } },
+            }),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: props.disabled, onClick: addCommand }, '添加命令'),
+            h('button', { className: 'dssync-pill', type: 'button', disabled: props.disabled, onClick: resetCommands }, '恢复默认')),
+          h('div', { className: 'hint' }, '只探测命令名，不解析路径参数；删除全部后保存会恢复默认列表。')),
+
+        h('div', { className: 'dssync-field' },
+          h('label', null, '自定义工具链'),
+          h('div', { className: 'dssync-toolchain-list' },
+            authored.length === 0
+              ? h('div', { className: 'dssync-note' }, '还没有自定义工具。用于不在 PATH 里的工具；路径只展示，不执行。')
+              : authored.map(function (item, index) {
+                return h('div', { key: index, className: 'dssync-toolchain-edit' },
+                  h('input', {
+                    value: item.name || '', placeholder: '名称', disabled: props.disabled,
+                    onChange: function (event) { updateAuthored(index, 'name', event.target.value) },
+                  }),
+                  h('input', {
+                    value: item.path || '', placeholder: '可执行文件路径', disabled: props.disabled,
+                    onChange: function (event) { updateAuthored(index, 'path', event.target.value) },
+                  }),
+                  h('input', {
+                    value: item.version || '', placeholder: '版本（可选）', disabled: props.disabled,
+                    onChange: function (event) { updateAuthored(index, 'version', event.target.value) },
+                  }),
+                  h('button', {
+                    className: 'dssync-mini', type: 'button', disabled: props.disabled,
+                    onClick: function () { removeAuthored(index) },
+                  }, '删除'))
+              })),
+          h('div', { className: 'dssync-btnrow' },
+            h('button', {
+              className: 'dssync-pill', type: 'button',
+              disabled: props.disabled || authored.length >= 32,
+              onClick: addAuthored,
+            }, '添加自定义工具'),
+            h('span', { className: 'dssync-note' }, '同名会覆盖自动探测；最多 32 个。')))
+      )
+    }
+
     function SyncSettingsPage(props) {
       var model = props.model
       var state = useModel(model)
@@ -2273,6 +2460,14 @@ window.__ModuleLoader__.load({
           setMessage({ bad: true, text: errorText(error) })
           return false
         }
+        var authored
+        try {
+          authored = normalizeAuthoredToolchain(fields.toolchainAuthored)
+        } catch (error) {
+          setMessage({ bad: true, text: error.message })
+          return false
+        }
+        var commands = normalizeToolchainCommands(fields.toolchainCommands)
         var ops = [
           ...serverLocked ? [] : [{ op: 'set', path: ['serverUrl'], value: String(fields.serverUrl || '').trim() }],
 
@@ -2280,6 +2475,8 @@ window.__ModuleLoader__.load({
           { op: 'set', path: ['autoSync'], value: fields.autoSync === true },
           { op: 'set', path: ['intervalMs'], value: Math.max(5000, Number(fields.intervalMs) || 60000) },
           { op: 'set', path: ['includeSubagents'], value: fields.includeSubagents === true },
+          { op: 'set', path: ['toolchainCommands'], value: commands },
+          { op: 'set', path: ['toolchainAuthored'], value: authored },
         ]
         var accepted = await form.mutate(ops, revision)
         if (!accepted) {
@@ -2378,6 +2575,8 @@ window.__ModuleLoader__.load({
             autoSync: fields.autoSync === true,
             intervalMs: Math.max(5000, Number(fields.intervalMs) || 60000),
             includeSubagents: fields.includeSubagents === true,
+            toolchainCommands: normalizeToolchainCommands(fields.toolchainCommands),
+            toolchainAuthored: normalizeAuthoredToolchain(fields.toolchainAuthored),
           },
         }
         var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -2414,6 +2613,12 @@ window.__ModuleLoader__.load({
           var interval = Number(config.intervalMs)
           if (Number.isFinite(interval) && interval > 0) next.intervalMs = Math.min(86400000, Math.max(5000, interval))
           if (typeof config.includeSubagents === 'boolean') next.includeSubagents = config.includeSubagents
+          try {
+            if (Array.isArray(config.toolchainCommands)) next.toolchainCommands = normalizeToolchainCommands(config.toolchainCommands)
+            if (Array.isArray(config.toolchainAuthored)) next.toolchainAuthored = normalizeAuthoredToolchain(config.toolchainAuthored)
+          } catch (error) {
+            throw new Error('工具链配置不合法：' + error.message)
+          }
           setFields(next)
           setDirty(true)
           setMessage({ bad: false, text: '配置已载入，请确认后点「保存配置」' + (notes.length > 0 ? '；' + notes.join('；') : '') })
@@ -2737,6 +2942,8 @@ window.__ModuleLoader__.load({
               h('b', null, '同步子代理会话'),
               h('span', null, '随根会话一起同步全部后代；关闭后只同步根会话')),
             h(Switch, { checked: fields.includeSubagents, disabled: disabled, label: '同步子代理会话', onChange: function (value) { set('includeSubagents', value) } }))),
+
+        h(ToolchainSection, { fields: fields, set: set, disabled: disabled }),
 
         h(PerfPanel, { model: model }),
 

@@ -100,6 +100,7 @@ test('应用接线：未配置时仍注册状态/设置/手动同步路由', asy
     '/api/session-cloudsync/notes',
     '/api/session-cloudsync/sync',
     '/api/session-cloudsync/session-scope',
+    '/api/session-cloudsync/toolchain',
     '/api/session-cloudsync/attachments/status',
     '/api/session-cloudsync/attachments/repair',
     '/api/session-cloudsync/cwd',
