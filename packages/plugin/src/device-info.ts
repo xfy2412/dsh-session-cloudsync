@@ -136,7 +136,8 @@ function readManifest(path: string): { readonly name?: unknown; readonly version
 
 const IDENTITY_TTL_MS = 10 * 60 * 1000
 const TOOLCHAIN_TTL_MS = 10 * 60 * 1000
-const PROBE_TIMEOUT_MS = 1_500
+const TOOLCHAIN_TRANSIENT_RETRY_MS = 30 * 1000
+const PROBE_TIMEOUT_MS = 3_000
 const PROBE_CONCURRENCY = 2
 const SAFE_COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/u
 const MAX_AUTHORED_TOOLCHAIN = 32
@@ -324,6 +325,8 @@ export class LocalEnvironment {
     readonly value: readonly ToolchainFact[]
     readonly error?: string
     readonly authoredKey: string
+    /** 含超时失败时缩短重试窗口，避免一次抖动把工具藏 10 分钟。 */
+    readonly transient?: boolean
   }
   private readonly options: LocalEnvironmentOptions
 
@@ -371,7 +374,8 @@ export class LocalEnvironment {
     const authoredKey = JSON.stringify(authored)
     const current = this.toolchain
     if (input.refresh !== true && current !== undefined
-      && current.authoredKey === authoredKey && now - current.at < TOOLCHAIN_TTL_MS) {
+      && current.authoredKey === authoredKey && now - current.at < TOOLCHAIN_TTL_MS
+      && !(current.transient === true && now - current.at >= TOOLCHAIN_TRANSIENT_RETRY_MS)) {
       return current.error === undefined ? { value: current.value } : { value: current.value, error: current.error }
     }
     const authoredFacts: ToolchainFact[] = authored.map((entry) => ({
@@ -404,7 +408,14 @@ export class LocalEnvironment {
     const error = value.length === 0 && errors.length > 0
       ? errors.slice(0, 3).join('; ')
       : undefined
-    this.toolchain = { at: now, value, authoredKey, ...error === undefined ? {} : { error } }
+    const transient = errors.some((entry) => entry.includes('超时'))
+    this.toolchain = {
+      at: now,
+      value,
+      authoredKey,
+      ...error === undefined ? {} : { error },
+      ...transient ? { transient: true } : {},
+    }
     return error === undefined ? { value } : { value, error }
   }
 }
@@ -424,7 +435,12 @@ async function probeTool(
   workdir?: string,
   sandboxPolicy?: unknown,
 ): Promise<{ readonly fact?: ToolchainFact; readonly error?: string }> {
-  const versionProbe = await runShell(shell, `${name} --version`, signal, workdir, sandboxPolicy)
+  let versionProbe = await runShell(shell, `${name} --version`, signal, workdir, sandboxPolicy)
+  // Windows 上 npm 经 pwsh shim 启动可能超过 1.5s；单次超时会静默丢工具，
+  // 因此失败后再给一次机会（不存在的命令会稳定失败，不会拖长成功路径）。
+  if (versionProbe.output === undefined && signal?.aborted !== true) {
+    versionProbe = await runShell(shell, `${name} --version`, signal, workdir, sandboxPolicy)
+  }
   if (versionProbe.output === undefined) {
     return { error: `${name}: ${versionProbe.error ?? '没有输出'}` }
   }

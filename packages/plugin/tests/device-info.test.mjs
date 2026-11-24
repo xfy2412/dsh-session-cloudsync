@@ -216,19 +216,22 @@ test('工具链：探测失败/超时的命令被跳过，缓存 TTL 内不重�
   const shell = fakeShell((command) => {
     if (command.startsWith('node --version')) {
       nodeCalls += 1
-      return nodeCalls === 1 ? { timedOut: true } : { stdout: 'v24.20.0\n' }
+      return nodeCalls <= 2 ? { timedOut: true } : { stdout: 'v24.20.0\n' }
     }
     if (command.includes('--version')) return { stdout: 'git version 2.45.0\n' }
     return { stdout: '/usr/bin/tool\n' }
   })
-  const { options } = environmentOf({ shell: () => shell })
+  const { options, advance } = environmentOf({ shell: () => shell })
   const environment = new LocalEnvironment(options)
   const first = await environment.facts()
-  assert.deepEqual(first.toolchain.map((tool) => tool.name), ['git'], 'node 第一次超时')
+  assert.deepEqual(first.toolchain.map((tool) => tool.name), ['git'], 'node 两次超时后跳过')
   const before = shell.commands.length
   const second = await environment.facts()
   assert.deepEqual(second.toolchain.map((tool) => tool.name), ['git'], '缓存内不重试')
   assert.equal(shell.commands.length, before)
+  advance(31_000)
+  const retried = await environment.facts()
+  assert.deepEqual(retried.toolchain.map((tool) => tool.name), ['node', 'git'], '超时失败 30 秒后自动重试')
   const third = await environment.facts({ refresh: true })
   assert.deepEqual(third.toolchain.map((tool) => tool.name), ['node', 'git'], 'refresh 后 node 恢复')
 })
