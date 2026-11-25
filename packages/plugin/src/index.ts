@@ -1494,7 +1494,7 @@ export function apply(ctx: Context, config: Config): void {
       header = snapshot.header
     }
     const decision = await next() as PreStepDecisionLike
-    return withNotesNotice(payload, withDeviceChangeNotice(payload, decision))
+    return withDeviceChangeNotice(payload, await withNotesNotice(payload, decision))
   })
 
   /**
