@@ -51,7 +51,8 @@ GET /health
       "me-device-info",
       "me-counts",
       "device-rename",
-      "attachment-index"
+      "attachment-index",
+      "plugin-version-sync"
     ],
     "limits": {
       "batchBytes": 8388608,
@@ -63,9 +64,9 @@ GET /health
 }
 ```
 
-> 客户端已为未来的 `plugin-version-sync` 能力预留门控：只有服务端在
-> `capabilities` 里声明它，插件才会请求 `GET /v2/peers`（设备 token 可见的
-> 设备名/颜色/最后在线）。当前服务端尚未实现该接口，上面的能力列表也不包含它。
+> 客户端已为 `plugin-version-sync` 能力预留门控：只有服务端在 `capabilities`
+> 里声明它，插件才会请求 `GET /v2/peers`（设备 token 可见的在线设备名/颜色/最后在线）。
+> 当前服务端已实现该接口与能力。
 
 不再有 `/v1/health`，也没有 `/v2/health`。
 
@@ -80,6 +81,7 @@ GET /health
 |---|---|---|
 | POST | `/v2/devices` | setup token 签发设备 token（明文只返回一次） |
 | GET | `/v2/devices` | setup token 列出未吊销设备 |
+| GET | `/v2/peers` | 设备 token 列出其他未吊销设备（`deviceId/label/color/lastSeenAt`） |
 | DELETE | `/v2/devices/:id` | setup token 吊销设备 |
 | GET | `/v2/me` | 当前 token 的角色；设备 token 另带服务端版本/配额/远端统计 |
 | PATCH | `/v2/me` | 设备 token 给自己改名（`{label}`，1–64 字符） |

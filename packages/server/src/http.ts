@@ -462,6 +462,7 @@ const V2_APPEND_PATH = /^\/v2\/sessions\/([^/]+)\/append$/u
 const V2_DELETE_PATH = /^\/v2\/sessions\/([^/]+)\/delete$/u
 const DEVICES_PATH = /^\/v2\/devices$/u
 const DEVICE_PATH = /^\/v2\/devices\/([0-9a-f]+)$/u
+const PEERS_PATH = /^\/v2\/peers$/u
 const BLOB_PATH = /^\/v2\/blobs\/([0-9a-f]{64})$/u
 const BLOB_BATCH_PATH = /^\/v2\/blobs\/batch$/u
 const BLOB_BATCH_READ_PATH = /^\/v2\/blobs\/batch\/read$/u
@@ -820,7 +821,7 @@ export function createHttpServer(options: ServerOptions): Server {
             apiVersions: [2],
             protocols: [PROTOCOL_VERSION],
             schemaVersion: SERVER_SCHEMA_VERSION,
-            capabilities: ['session-summary', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame', 'me-device-info', 'me-counts', 'device-rename', 'attachment-index'],
+            capabilities: ['session-summary', 'conditional-get', 'idempotent-append', 'manifest-digest', 'batches', 'batch-upload', 'batch-download', 'zstd-frame', 'me-device-info', 'me-counts', 'device-rename', 'attachment-index', 'plugin-version-sync'],
             limits: {
               batchBytes: MAX_BATCH_BODY_BYTES,
               batchBlobs: MAX_BATCH_BLOBS,
@@ -960,6 +961,24 @@ export function createHttpServer(options: ServerOptions): Server {
         const auth = authenticate(db, req)
         if (auth?.role !== 'admin') return json(res, 401, errorBody('unauthorized', '需要 setup token'))
         return json(res, 200, { ok: true, value: listDevices(db) })
+      },
+    },
+    {
+      // 设备 token 可读的在线设备列表；不暴露已吊销设备和本机自己。
+      method: 'GET',
+      path: PEERS_PATH,
+      handler: async (req, res) => {
+        const auth = authenticate(db, req)
+        if (auth?.role !== 'device') return json(res, 401, errorBody('unauthorized', '需要设备 token'))
+        const peers = listDevices(db)
+          .filter((device) => device.deviceId !== auth.device.deviceId)
+          .map((device) => ({
+            deviceId: device.deviceId,
+            label: device.label,
+            ...device.color === undefined ? {} : { color: device.color },
+            ...device.lastSeenAt === undefined ? {} : { lastSeenAt: device.lastSeenAt },
+          }))
+        return json(res, 200, { ok: true, value: peers })
       },
     },
     {

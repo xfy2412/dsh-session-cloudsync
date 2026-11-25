@@ -649,10 +649,10 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 
 ### 7.5 设备颜色与能力门控（客户端已预留）
 
-- 本机颜色来自 `/v2/me` 的 `device.color`；其他设备颜色/名称来自未来的
+- 本机颜色来自 `/v2/me` 的 `device.color`；其他设备颜色/名称来自
   `GET /v2/peers`（设备 token 可见，返回 `deviceId/label/color/lastSeenAt`）；
 - 客户端只在 `/health` 的 `capabilities` 包含 `plugin-version-sync` 时才请求
-  `/v2/peers`；当前服务端尚未声明/实现该接口，因此旧服务端不会收到未知请求；
+  `/v2/peers`；旧服务端不会收到未知请求；
 - 没有颜色时 UI 按 `deviceId` 哈希从调色板回退；
 - 图标：本机已安装插件用 `pluginManager.listBundles()` 的 `meta.icon`（data URL）；
   其他设备/registry 列按 registry 的 `icon` 字段从 CDN 读取并缓存，取不到时回退首字母；

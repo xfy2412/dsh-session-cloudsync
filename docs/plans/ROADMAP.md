@@ -21,7 +21,7 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 | **附件索引补传** | 历史 `no-index` 附件的自愈与底栏附件面板 | 🟡 首版已实现，待 GUI 回归：底栏本地 seq/tail 改官方事件源、移除 2 秒轮询；附件面板按需查询；下一次真实事件帧顺带历史索引（插件侧，无服务端改动）；见 [SESSION-BAR-ATTACHMENT-BACKFILL.md](SESSION-BAR-ATTACHMENT-BACKFILL.md) |
 | **M5** | 公共多租户公益服 | ❌ 不在当前范围；独立 package/仓库，只共享插件对接协议 |
 
-> **当前优先级**：V3 可发布部分、V4 工具链与 L3 笔记首版已完成；附件索引补传与底栏重构首版已实现，等待 GUI 回归后做 0.2.0 的协议瘦身、文档收口与发布。
+> **当前优先级**：V3 可发布部分、V4 工具链与 L3 笔记首版已完成；附件索引补传与底栏重构首版已实现，等待 GUI 回归后按 [0.2.0-REQUEST-BUDGET.md](0.2.0-REQUEST-BUDGET.md) 做协议瘦身、文档收口与发布。
 >
 > **未发布的插件改动**：跨设备插件版本同步（设备快照、版本矩阵、registry 最新/图标）、本机环境工具
 > （`get_env` → `this_env` → `dscs_env`）、`authored` 工具链、设备切换提示、租约错误文案规范化、
@@ -40,6 +40,7 @@ M0 免重启 ingest → M1 shared 基础 → M2 自部署服务端 → M3 插件
 - [DESIGN.md](../architecture/DESIGN.md)：范围、数据分层、传输单位、并发、加密、兼容边界。
 - [VAULT.md](../sync/VAULT.md)：L2/L3 加密附加数据层、多工作区映射、设备台账与插件版本匹配（V0–V3 已实现；V4 工具链与笔记首版已做，保留暂缓）。
 - [SESSION-BAR-ATTACHMENT-BACKFILL.md](SESSION-BAR-ATTACHMENT-BACKFILL.md)：会话底栏事件驱动重构、附件面板、历史附件索引补传。
+- [0.2.0-REQUEST-BUDGET.md](0.2.0-REQUEST-BUDGET.md)：公开服务请求预算、changes 发现、批次分页、WAF 与限流规划。
 - [ATTACHMENT-SYNC-DESIGN.md](ATTACHMENT-SYNC-DESIGN.md)：附件同步、索引与修复设计。
 - [CWD.md](../architecture/CWD.md)：header canonical、事件 raw、接收端 cwd 修正。
 - [DECISIONS.md](DECISIONS.md)：cwd/Canonical 反复讨论后的最终决策记录。
