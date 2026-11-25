@@ -71,6 +71,7 @@ export function registerToolchainTool(
     name: NAME_CANDIDATES[0],
     description: 'Manage this machine\'s toolchain registry. Use list to inspect detected tools; '
       + 'after downloading or installing a tool, use add with its absolute path to register it locally. '
+      + 'Only use add for tools that automatic PATH detection cannot find. '
       + 'Paths are recorded only and are never executed. add updates an entry with the same name.',
     parameters: PARAMETERS_SCHEMA,
     output: {
