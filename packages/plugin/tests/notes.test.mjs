@@ -92,7 +92,8 @@ test('注入渲染：pinned 优先、每 thread 一条、hash 随内容变化', 
   const threads = visibleNoteThreads([entry(normal), entry(pinned)], 's-1', 'ws-1')
   const rendered = renderNotesContext(threads)
   assert.equal(rendered.count, 2)
-  assert.match(rendered.text, /^<notes-context version="1">/u)
+  assert.match(rendered.text, /^<notes-context version="2">/u)
+  assert.match(rendered.text, /\[scope=session storage=vault\]/u)
   assert.ok(rendered.text.indexOf(pinned.id) < rendered.text.indexOf(normal.id))
   const changed = renderNotesContext(visibleNoteThreads([
     entry(normal), entry(note({ scope: 'session', scopeKey: 's-1', pinned: true, summary: '新摘要' })),
@@ -115,7 +116,7 @@ test('笔记注入消息带 hash，不干扰设备切换提示', () => {
   const context = renderNotesContext([])
   const message = noteContextMessage(context, 'fixed')
   assert.equal(message.source.hash, context.hash)
-  assert.equal(message.content[0].text, '<notes-context version="1">\n当前没有可用笔记。\n</notes-context>')
+  assert.equal(message.content[0].text, '<notes-context version="2">\n当前没有可用笔记。\n</notes-context>')
   const events = [
     { type: 'user/message', data: { source: { kind: 'session-cloudsync', deviceId: 'dev-1' } } },
     { type: 'user/message', data: { source: { kind: 'session-cloudsync', hash: 'a'.repeat(64) } } },

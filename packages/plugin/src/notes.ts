@@ -220,7 +220,7 @@ export function renderNotesContext(threads: readonly NoteThread[], maxBytes = NO
     if (storage !== 0) return storage
     return right.notes.at(-1)!.order - left.notes.at(-1)!.order
   })
-  const header = '<notes-context version="1">'
+  const header = '<notes-context version="2">'
   const footer = '</notes-context>'
   const lines: string[] = []
   const ids: string[] = []
@@ -231,7 +231,7 @@ export function renderNotesContext(threads: readonly NoteThread[], maxBytes = NO
     const note = thread.latest
     const title = note.title === '' ? titleFromText(note.text) : note.title
     const summary = summaryOf(note)
-    const line = `[${note.scope}/${note.storage}] id=${note.id} ${title}${summary === '' ? '' : `：${summary}`}`
+    const line = `[scope=${note.scope} storage=${note.storage}] id=${note.id} ${title}${summary === '' ? '' : `：${summary}`}`
     const lineBytes = Buffer.byteLength(`${line}\n`, 'utf8')
     const remainingLines = ranked.length - index - 1
     const reserve = remainingLines > 0 ? 64 : 0
@@ -262,7 +262,7 @@ export function renderNotesContext(threads: readonly NoteThread[], maxBytes = NO
 
 /** 注入文本的稳定 hash；模板版本变化时调用方改版本前缀。 */
 export function hashNotesText(text: string): string {
-  return createHash('sha256').update(`notes-injection/v1\n${text}`, 'utf8').digest('hex')
+  return createHash('sha256').update(`notes-injection/v2\n${text}`, 'utf8').digest('hex')
 }
 
 /** 取一条笔记的注入摘要：显式 summary 优先，否则从正文提取。 */

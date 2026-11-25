@@ -43,7 +43,7 @@ export function noteContextMessage(context: NotesContext, id: string = randomUUI
     content: [{
       type: 'text',
       text: context.text === ''
-        ? '<notes-context version="1">\n当前没有可用笔记。\n</notes-context>'
+        ? '<notes-context version="2">\n当前没有可用笔记。\n</notes-context>'
         : context.text,
     }],
     source: {
