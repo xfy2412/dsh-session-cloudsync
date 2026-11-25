@@ -61,14 +61,20 @@ const PARAMETERS = {
   write: {
     type: 'object',
     properties: {
-      storage: { type: 'string', enum: ['device', 'vault'] },
-      scope: { type: 'string', enum: ['session', 'workspace', 'global'] },
-      title: { type: 'string' },
-      summary: { type: 'string' },
-      text: { type: 'string' },
-      tags: { type: 'array', items: { type: 'string' } },
-      pinned: { type: 'boolean' },
-      threadId: { type: 'string' },
+      storage: {
+        type: 'string', enum: ['device', 'vault'],
+        description: 'device = this machine only; vault = encrypted sync across devices. Default: vault.',
+      },
+      scope: {
+        type: 'string', enum: ['session', 'workspace', 'global'],
+        description: 'session = current conversation; workspace = current workspace; global = all sessions. Default: workspace.',
+      },
+      title: { type: 'string', description: 'Optional short title (max 80 characters).' },
+      summary: { type: 'string', description: 'Optional summary (max 200 characters); long notes should provide one.' },
+      text: { type: 'string', description: 'Note body in Markdown (max 8 KiB).' },
+      tags: { type: 'array', items: { type: 'string' }, description: 'Optional search tags.' },
+      pinned: { type: 'boolean', description: 'Pin the note above unpinned notes.' },
+      threadId: { type: 'string', description: 'Existing note thread to update; omit to create a new note.' },
     },
     required: ['text'],
     additionalProperties: false,
@@ -76,21 +82,50 @@ const PARAMETERS = {
   search: {
     type: 'object',
     properties: {
-      storage: { type: 'string', enum: ['device', 'vault'] },
-      scope: { type: 'string', enum: ['session', 'workspace', 'global'] },
-      query: { type: 'string' },
-      tags: { type: 'array', items: { type: 'string' } },
-      limit: { type: 'integer' },
+      storage: {
+        type: 'string', enum: ['device', 'vault'],
+        description: 'Filter by storage: device = this machine only; vault = synced across devices.',
+      },
+      scope: {
+        type: 'string', enum: ['session', 'workspace', 'global'],
+        description: 'Filter by scope: session, workspace, or global.',
+      },
+      query: { type: 'string', description: 'Optional literal text matched against title, summary, and body.' },
+      tags: { type: 'array', items: { type: 'string' }, description: 'Only return notes carrying every listed tag.' },
+      limit: { type: 'integer', description: 'Maximum number of threads to return.' },
     },
     additionalProperties: false,
   },
   read: {
     type: 'object',
-    properties: { id: { type: 'string' } },
+    properties: {
+      id: { type: 'string', description: 'Note id.' },
+      history: { type: 'boolean', description: 'Include all previous versions; default returns only the latest.' },
+    },
     required: ['id'],
     additionalProperties: false,
   },
 } as const
+
+/** 搜索结果里只给摘要，避免把整段正文带回模型上下文。 */
+function briefThread(thread: NoteThreadView): Record<string, unknown> {
+  const note = thread.latest
+  return {
+    threadId: thread.threadId,
+    scope: thread.scope,
+    storage: thread.storage,
+    versions: thread.notes.length,
+    latest: {
+      id: note.id,
+      at: note.at,
+      title: note.title,
+      summary: note.summary,
+      tags: note.tags,
+      pinned: note.pinned,
+      authorKind: note.authorKind,
+    },
+  }
+}
 
 const OUTPUT = {
   type: 'object',
@@ -150,7 +185,7 @@ export function registerNotesTools(
   }
   names.write = register('write', {
     name: 'note_write',
-    description: '写一条长期笔记（工作区约定、环境事实、agent 经验）。长笔记请提供 summary。',
+    description: 'Create a long-lived note only when the user asks to remember something, or a durable workspace convention, environment fact, or agent lesson will be reused. Do not write temporary task state or progress. Long notes should provide summary.',
     parameters: PARAMETERS.write,
     output: { schema: OUTPUT, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args, exec) => {
@@ -171,27 +206,36 @@ export function registerNotesTools(
   })
   names.search = register('search', {
     name: 'note_search',
-    description: '搜索当前会话可见的长期笔记（本会话/本工作区/全局，本机与同步）。',
+    description: 'Search long-lived notes visible to this session. Scopes: session, workspace, global. Storage: device (local only) or vault (synced). Returns note summaries without full bodies.',
     parameters: PARAMETERS.search,
     output: { schema: OUTPUT_LIST, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
-    execute: async (args, exec) => service.search({
-      sessionId: sessionIdOf(exec),
-      ...argStorage(args),
-      ...argScope(args),
-      ...argString(args, 'query'),
-      ...argTags(args),
-      ...argNumber(args, 'limit'),
-    }),
+    execute: async (args, exec) => {
+      const threads = await service.search({
+        sessionId: sessionIdOf(exec),
+        ...argStorage(args),
+        ...argScope(args),
+        ...argString(args, 'query'),
+        ...argTags(args),
+        ...argNumber(args, 'limit'),
+      })
+      return threads.map(briefThread)
+    },
   })
   names.read = register('read', {
     name: 'note_read',
-    description: '读取一条笔记的全文和同 thread 的历史。',
+    description: 'Read one long-lived note. By default returns the latest version; set history=true to include all previous versions.',
     parameters: PARAMETERS.read,
     output: { schema: OUTPUT, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args, exec) => {
-      const id = typeof (args as { readonly id?: unknown }).id === 'string' ? (args as { readonly id: string }).id : ''
+      const record = args as { readonly id?: unknown; readonly history?: unknown }
+      const id = typeof record.id === 'string' ? record.id : ''
       if (id === '') throw new Error('需要 id')
-      return service.read(sessionIdOf(exec), id)
+      const thread = await service.read(sessionIdOf(exec), id)
+      return {
+        ...thread,
+        versions: thread.notes.length,
+        notes: record.history === true ? thread.notes : [thread.latest],
+      }
     },
   })
   const writeName = names.write
