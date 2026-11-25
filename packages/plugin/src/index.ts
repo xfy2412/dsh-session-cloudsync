@@ -19,8 +19,9 @@ import { buildSessionTree, pathKeyOf } from './closure.ts'
 import { planSync, type LocalPlanSnapshot, type RemoteSessionSummary, type SyncPlanEntry, type SyncReceipt } from './sync-plan.ts'
 import { prepareReplaceScript } from './replace.ts'
 import { warmSessionProjection, projectionNeedsWarm, type ProjectionCacheLike, type ProjectionWarmInput } from './projection-warm.ts'
-import { DeviceIdentityCache, LocalEnvironment, DEFAULT_TOOLCHAIN_COMMANDS, sanitizeAuthoredToolchain, type ShellServiceLike } from './device-info.ts'
+import { DeviceIdentityCache, LocalEnvironment, DEFAULT_TOOLCHAIN_COMMANDS, sanitizeAuthoredToolchain, type EnvironmentFacts, type ShellServiceLike } from './device-info.ts'
 import { registerEnvTool, type ToolsServiceLike } from './env-tool.ts'
+import { registerToolchainTool, type ToolchainToolService } from './toolchain-tool.ts'
 import { deviceChangeMessage, prependDeviceChange, shouldInjectDeviceNotice, type SessionEventLike } from './device-notice.ts'
 import {
   correctCwd as correctSessionCwd,
@@ -1320,6 +1321,58 @@ export function apply(ctx: Context, config: Config): void {
       return undefined
     }
   }
+
+  /** 写本机工具链配置；agent 下载完工具后可登记，路径不会被我们执行。 */
+  const writeToolchainSetting = async (key: 'toolchainAuthored' | 'toolchainCommands', value: unknown): Promise<EnvironmentFacts> => {
+    const settings = settingsService()
+    if (settings === undefined || settings.writable === false) throw new Error('设置服务不可写，无法保存工具链配置')
+    const descriptor = settings.describe({ redactSecrets: true }).find((entry) => entry.ns.includes('session-cloudsync'))
+    if (descriptor === undefined) throw new Error('找不到 session-cloudsync 设置')
+    await settings.mutate(descriptor.ns, [{ op: 'set', path: [key], value }], descriptor.revision)
+    refreshConfig()
+    return await localEnvironment.facts({ refresh: true })
+  }
+
+  const toolchainService: ToolchainToolService = {
+    facts: (refresh) => localEnvironment.facts(refresh === true ? { refresh: true } : {}),
+    add: async (input) => {
+      const name = input.name.trim()
+      const path = input.path.trim()
+      const version = input.version?.trim() ?? ''
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/u.test(name)) throw new Error('工具名称不合法')
+      if (path === '' || path.length > 1024) throw new Error('工具路径为空或过长')
+      const lower = name.toLowerCase()
+      const next = toolchainAuthored.filter((entry) => entry.name.toLowerCase() !== lower)
+      next.push({ name, path, ...version === '' ? {} : { version: version.slice(0, 120) } })
+      if (next.length > 32) throw new Error('自定义工具最多 32 个')
+      return await writeToolchainSetting('toolchainAuthored', next)
+    },
+    remove: async (name) => {
+      const lower = name.trim().toLowerCase()
+      const next = toolchainAuthored.filter((entry) => entry.name.toLowerCase() !== lower)
+      if (next.length === toolchainAuthored.length) throw new Error(`没有登记名为 ${name} 的工具`)
+      return await writeToolchainSetting('toolchainAuthored', next)
+    },
+    setCommands: async (commands) => {
+      const seen = new Set<string>()
+      const next: string[] = []
+      for (const item of commands) {
+        const name = item.trim()
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/u.test(name) || seen.has(name)) continue
+        seen.add(name)
+        next.push(name)
+      }
+      return await writeToolchainSetting('toolchainCommands', next)
+    },
+  }
+
+  ctx.inject(['tools'], (toolsCtx) => {
+    const tools = toolsCtx.get('tools') as unknown as ToolsServiceLike | undefined
+    const registered = registerToolchainTool(tools, toolchainService, logger)
+    if (registered === undefined) return
+    logger.info(`dsh-session-cloudsync: 工具链管理工具已注册为 ${registered.name}`)
+    toolsCtx.effect(() => () => registered.dispose(), 'dsh-session-cloudsync: toolchain tool')
+  })
 
   /**
    * 把首次成功拉取的根会话补进上传白名单，并让设置页的勾选反映出来。

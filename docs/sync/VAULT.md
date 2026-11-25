@@ -673,6 +673,9 @@ base64url(HMAC-SHA256(vaultKey, "workspace|" + canonicalWorkspacePath)).slice(0,
 - Windows 上 workspace 包含临时目录时，ACL restricted-token runner 可能拒绝启动；
   此时只对固定白名单的版本/路径查询命令按错误提示降级为 `danger-full-access`
   重试一次，仍不执行自定义路径或安装命令。
+- Agent 工具 `toolchain_manage`（后备名 `dscs_toolchain`）：`list` 查看探测结果，
+  `add` 登记用户让它下载/安装的工具，`remove` 删除登记，`set-commands` 改自动探测命令；
+  只写本机配置，不执行 `path`，不代替 shell 安装。
 
 ## 9. UI 形态
 
